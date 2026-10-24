@@ -24,6 +24,59 @@ def main() -> int:
             return 1
         return 0
 
+    if "--smoke" in sys.argv:
+        # 打包产物自检：创建主窗口；若附带音频文件则验证可解码播放
+        import time
+
+        from PySide6.QtCore import QCoreApplication, QTimer
+        from PySide6.QtMultimedia import QMediaPlayer
+        from PySide6.QtWidgets import QApplication
+
+        from app.metadata import read_track
+        from ui.main_window import MainWindow
+
+        app = QApplication(sys.argv[:1])
+        app.setApplicationName(APP_NAME)
+        window = MainWindow()
+        window.show()
+
+        audio_file = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+        if audio_file:
+            meta = read_track(audio_file)
+            if meta is None:
+                print(f"smoke fail: 无法读取音频 {audio_file}")
+                return 1
+            track = window.store.add_or_update(meta, audio_file)
+            window.player.play_single(track.id, autoplay=True)
+            deadline = time.time() + 10
+            status = None
+            while time.time() < deadline:
+                QCoreApplication.processEvents()
+                status = window.player.media_status
+                if status in (QMediaPlayer.MediaStatus.LoadedMedia,
+                              QMediaPlayer.MediaStatus.BufferedMedia,
+                              QMediaPlayer.MediaStatus.EndOfMedia,
+                              QMediaPlayer.MediaStatus.InvalidMedia):
+                    break
+                time.sleep(0.05)
+            loaded = status in (QMediaPlayer.MediaStatus.LoadedMedia,
+                                QMediaPlayer.MediaStatus.BufferedMedia,
+                                QMediaPlayer.MediaStatus.EndOfMedia)
+            duration = window.player.duration_ms
+            print(f"smoke media: status={status.name if status else None} duration={duration}ms")
+            if not loaded or duration <= 0:
+                print("smoke fail: 音频解码异常")
+                return 1
+            QTimer.singleShot(300, app.quit)
+            app.exec()
+            print("smoke ok (含音频解码)")
+            return 0
+
+        QTimer.singleShot(600, app.quit)
+        code = app.exec()
+        print("smoke ok")
+        return code
+
     root = os.path.dirname(os.path.abspath(__file__))
     if root not in sys.path:
         sys.path.insert(0, root)

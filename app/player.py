@@ -76,6 +76,10 @@ class PlaybackController(QObject):
     def duration_ms(self) -> int:
         return self._player.duration()
 
+    @property
+    def media_status(self):
+        return self._player.mediaStatus()
+
     # ---------- 播放控制 ----------
 
     def play_tracks(self, track_ids: list[str], start_index: int = 0, autoplay: bool = True) -> None:
