@@ -1,0 +1,5 @@
+# 开发/测试/打包依赖（不随 exe 分发）
+pyinstaller>=6.10
+soundfile>=0.12    # 仅用于生成测试音频（flac/ogg/wav）
+lameenc>=1.7       # 仅用于生成测试音频（mp3）
+numpy>=2.0         # soundfile 依赖

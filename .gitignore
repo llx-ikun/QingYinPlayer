@@ -1,0 +1,17 @@
+# 虚拟环境与构建产物
+.venv/
+venv/
+build/
+dist/
+__pycache__/
+*.pyc
+
+# 测试夹具（由 tests/make_fixtures.py 生成）
+tests/fixtures/
+
+# 打包元数据
+*.spec.bak
+
+# 系统文件
+.DS_Store
+Thumbs.db
