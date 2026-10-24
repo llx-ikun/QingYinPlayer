@@ -72,6 +72,10 @@ class PlaybackController(QObject):
     def position_ms(self) -> int:
         return self._player.position()
 
+    @property
+    def duration_ms(self) -> int:
+        return self._player.duration()
+
     # ---------- 播放控制 ----------
 
     def play_tracks(self, track_ids: list[str], start_index: int = 0, autoplay: bool = True) -> None:
@@ -211,11 +215,15 @@ class PlaybackController(QObject):
         self.position_changed.emit(position_ms)
 
     def _on_media_status(self, status) -> None:
-        if status == QMediaPlayer.MediaStatus.LoadedMedia and self._pending_seek_ms is not None:
-            seek = self._pending_seek_ms
-            self._pending_seek_ms = None
-            if seek > 0:
-                self._player.setPosition(seek)
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            duration = self._player.duration()
+            if duration > 0:
+                self.duration_changed.emit(duration)
+            if self._pending_seek_ms is not None:
+                seek = self._pending_seek_ms
+                self._pending_seek_ms = None
+                if seek > 0:
+                    self._player.setPosition(seek)
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
             self._handle_finished()
 

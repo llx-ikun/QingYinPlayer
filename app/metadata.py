@@ -21,6 +21,7 @@ from mutagen.wave import WAVE
 
 @dataclass
 class TrackMeta:
+    path: str = ""
     title: str = ""
     artist: str = ""
     album: str = ""
@@ -116,7 +117,7 @@ def read_track(path: str) -> TrackMeta | None:
     if not path or not os.path.isfile(path):
         return None
 
-    meta = TrackMeta(fmt=format_from_path(path))
+    meta = TrackMeta(path=path, fmt=format_from_path(path))
     fallback_title = os.path.splitext(os.path.basename(path))[0]
 
     try:
