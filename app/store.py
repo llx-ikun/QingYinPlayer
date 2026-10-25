@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -46,10 +47,8 @@ class LibraryStore:
         except FileNotFoundError:
             return
         except Exception:  # noqa: BLE001  数据损坏：备份后重建
-            try:
+            with contextlib.suppress(Exception):
                 shutil.copyfile(self._path, self._path + ".bak")
-            except Exception:  # noqa: BLE001
-                pass
             return
         try:
             for tid, td in (data.get("tracks") or {}).items():

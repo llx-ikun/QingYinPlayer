@@ -99,12 +99,12 @@ QMainWindow, QDialog {{ background: {t.BG}; }}
 
 /* ---------- 无边框窗口根容器（圆角由 mask 硬裁剪） ---------- */
 QWidget#WindowRoot {{ background: {t.BG}; border: 1px solid {t.BORDER}; border-radius: 10px; }}
-QWidget#WindowRoot[maximized="true"] {{ border-radius: 0px; border: none; }}
+QWidget#WindowRoot[is_maximized="true"] {{ border-radius: 0px; border: none; }}
 
 /* ---------- 标题栏（通栏） ---------- */
 QWidget#TitleBar {{ background: {t.SURFACE}; border-bottom: 1px solid {t.BORDER};
     border-top-left-radius: 10px; border-top-right-radius: 10px; }}
-QWidget#WindowRoot[maximized="true"] QWidget#TitleBar {{ border-radius: 0px; }}
+QWidget#WindowRoot[is_maximized="true"] QWidget#TitleBar {{ border-radius: 0px; }}
 QPushButton#TitleBtn {{
     background: transparent; border: none; border-radius: 6px;
     min-width: 34px; max-width: 34px; min-height: 28px; max-height: 28px; color: {t.TEXT_DIM};
@@ -125,7 +125,7 @@ QWidget#Sidebar {{ background: {t.SURFACE}; border-right: 1px solid {t.BORDER}; 
 QWidget#Panel, QWidget#PlayerBar {{ background: {t.SURFACE}; }}
 QWidget#PlayerBar {{ border-top: 1px solid {t.BORDER};
     border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
-QWidget#WindowRoot[maximized="true"] QWidget#PlayerBar {{ border-radius: 0px; }}
+QWidget#WindowRoot[is_maximized="true"] QWidget#PlayerBar {{ border-radius: 0px; }}
 QWidget#HeaderBar {{ background: {t.BG}; }}
 
 /* ---------- 标签 ---------- */
@@ -348,7 +348,8 @@ QMessageBox {{ background: {t.SURFACE}; }}
 
 /* ---------- 对话框专用 ---------- */
 QDialog {{ background: {t.SURFACE}; }}
-QWidget#QueuePanel {{
+QDialog#QueuePanel {{
     background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 10px;
 }}
+QDialog#SettingsDialog QLabel {{ background: transparent; }}
 """

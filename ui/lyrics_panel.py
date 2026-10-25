@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
 from app.lyrics import LyricLine, lyric_index_at
-from ui.theme import ACCENT, TEXT, TEXT_DIM
+from ui.theme import ACCENT, TEXT_DIM
 
 
 class LyricsPanel(QWidget):

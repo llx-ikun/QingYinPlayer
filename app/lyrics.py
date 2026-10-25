@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 
@@ -46,10 +47,8 @@ def parse_lrc(text: str) -> list[LyricLine]:
         if meta and not _TIME_TAG.match(line):
             key = meta.group(1).lower()
             if key == "offset":
-                try:
+                with contextlib.suppress(ValueError):
                     offset_ms = int(float(meta.group(2)))
-                except ValueError:
-                    pass
             continue
         times: list[int] = []
         rest = line
@@ -66,7 +65,7 @@ def parse_lrc(text: str) -> list[LyricLine]:
             continue
         for t in times:
             lines.append(LyricLine(t + offset_ms, content))
-    lines.sort(key=lambda l: l.time_ms)
+    lines.sort(key=lambda line: line.time_ms)
     return lines
 
 

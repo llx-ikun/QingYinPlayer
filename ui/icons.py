@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import weakref
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 
@@ -253,10 +255,19 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
 
 # ---------- 主题化图标绑定（v2.0） ----------
 
-# [(target, kind, size, role)]；target 为任何有 setIcon 的对象（按钮/QAction）
+# [(weakref(target), kind, size, role)]；用弱引用持有 target，控件销毁后自动
+# 从注册表失效，避免跨窗口/跨测试累积的强引用在 refresh_icons 时对已销毁的
+# Shiboken 对象调 setIcon（曾导致 C++ 层偶发 hang）。
 _bindings: list = []
 
 _ROLE_MAP = ("text", "dim", "accent", "on_accent", "heart", "danger")
+
+
+def _deref(ref):
+    try:
+        return ref()
+    except TypeError:  # 兼容旧格式（直接对象）的遗留绑定
+        return ref
 
 
 def _role_color(role: str) -> str:
@@ -270,7 +281,7 @@ def _role_color(role: str) -> str:
 
 def _unbind(target) -> None:
     for i, b in enumerate(_bindings):
-        if b[0] is target:
+        if _deref(b[0]) is target:
             del _bindings[i]
             return
 
@@ -279,27 +290,28 @@ def bind_icon(target, kind: str, size: int = 16, role: str = "dim") -> None:
     """把 target 的图标绑定到主题角色；重复绑定同一 target 以新参数覆盖。"""
     _unbind(target)
     target.setIcon(make_icon(kind, _role_color(role), size))
-    _bindings.append((target, kind, size, role))
+    _bindings.append((weakref.ref(target), kind, size, role))
 
 
 def set_icon_kind(target, kind: str) -> None:
     """状态切换用：保持颜色角色不变，仅更换图标形状（如 play↔pause）。"""
-    for i, (t_, k, s, r) in enumerate(_bindings):
+    for i, (ref, _k, s, r) in enumerate(_bindings):
+        t_ = _deref(ref)
         if t_ is target:
             t_.setIcon(make_icon(kind, _role_color(r), s))
-            _bindings[i] = (t_, kind, s, r)
+            _bindings[i] = (ref, kind, s, r)
             return
 
 
 def refresh_icons() -> None:
-    """主题切换后重绘全部绑定图标；已销毁的绑定自动清除。"""
+    """主题切换后重绘全部存活绑定；已销毁的控件经弱引用自动失效。"""
     alive = []
-    for target, kind, size, role in _bindings:
-        try:
-            target.setIcon(make_icon(kind, _role_color(role), size))
-        except RuntimeError:  # 控件已销毁
-            continue
-        alive.append((target, kind, size, role))
+    for ref, kind, size, role in _bindings:
+        target = _deref(ref)
+        if target is None:
+            continue  # 控件已销毁
+        target.setIcon(make_icon(kind, _role_color(role), size))
+        alive.append((ref, kind, size, role))
     _bindings[:] = alive
 
 

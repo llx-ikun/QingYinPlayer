@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 
-from app.models import MODE_LOOP, MODE_SEQUENTIAL, MODE_SINGLE, MODE_SHUFFLE
+from app.models import MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE
 
 
 class PlayQueue:
@@ -30,7 +30,7 @@ class PlayQueue:
         if 0 <= start_pos < len(self._ids):
             rest = self._ids[:start_pos] + self._ids[start_pos + 1:]
             random.shuffle(rest)
-            return [self._ids[start_pos]] + rest
+            return [self._ids[start_pos], *rest]
         rest = list(self._ids)
         random.shuffle(rest)
         return rest
