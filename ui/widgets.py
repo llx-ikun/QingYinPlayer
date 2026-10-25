@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import weakref
 
 from PySide6.QtCore import QRect, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
@@ -47,6 +48,7 @@ class EqualizerBars(QWidget):
     """播放中的音量条动效（3 根柱子的正弦起伏）。单实例使用，开销可忽略。"""
 
     _PHASE = {"t": time.time()}
+    _instances: "weakref.WeakSet[EqualizerBars]" = weakref.WeakSet()
 
     def __init__(self, parent=None, color: str = "#6c8cff", bar_count: int = 3):
         super().__init__(parent)
@@ -56,6 +58,7 @@ class EqualizerBars(QWidget):
         self._timer.setInterval(140)
         self._timer.timeout.connect(self.update)
         self.setFixedSize(18, 16)
+        EqualizerBars._instances.add(self)
 
     def start(self) -> None:
         if not self._timer.isActive():
@@ -84,3 +87,13 @@ class EqualizerBars(QWidget):
             y = (h - bar_h) // 2
             p.drawRoundedRect(QRect(x, y, bar_w, bar_h), 1, 1)
         p.end()
+
+
+def refresh_equalizers(color: str) -> None:
+    """主题切换：更新全部存活均衡器条的颜色。"""
+    for bars in list(EqualizerBars._instances):
+        try:
+            bars._color = QColor(color)
+            bars.update()
+        except RuntimeError:  # 已销毁
+            pass
