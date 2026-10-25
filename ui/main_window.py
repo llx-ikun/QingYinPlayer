@@ -326,8 +326,8 @@ class MainWindow(QMainWindow):
                 self.set_view(PLAYLIST_LIBRARY)
         self.store.save()
         self.sidebar.refresh_playlists(self.store.user_playlists())
-        if self._view_id != pid:
-            self.refresh_list()
+        # 无条件刷新：重命名当前视图的歌单时，头部标题同样需要更新
+        self.refresh_list()
 
     def _on_reordered(self, tid: str, new_index: int) -> None:
         if not self._is_playlist_view(self._view_id):

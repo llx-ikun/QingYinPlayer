@@ -46,6 +46,8 @@ class TestPlayQueue(unittest.TestCase):
         self.assertEqual(seen, set(IDS))                  # 一轮内不重复
         nxt = q.next()                                    # 播完重新洗牌
         self.assertIn(nxt, IDS)
+        # 回归：重排后必须仍是排列（_shuffled_from(-1) 曾产出含重复的 7 项顺序）
+        self.assertEqual(sorted(q.ids), sorted(IDS))
 
     def test_jump_to(self):
         q = PlayQueue(IDS, 0, MODE_SEQUENTIAL)

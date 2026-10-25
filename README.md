@@ -54,8 +54,9 @@ python -m venv .venv
 # 2. 运行（开发模式）
 .venv/Scripts/python.exe main.py
 
-# 3. 运行测试（67 项：单测 + offscreen E2E）
+# 3. 运行测试（91 项：单测 + offscreen E2E）
 .venv/Scripts/python.exe -m unittest discover -s tests -t . -v
+# 无显示器的 headless 环境（如 CI）加：QT_QPA_PLATFORM=offscreen
 
 # 4. 打包（生成图标 + 单文件版 + 目录版 + 冒烟测试）
 .venv/Scripts/python.exe build.py
@@ -97,4 +98,5 @@ music-player/
 ## 设计文档
 
 - `DESIGN.md`：需求确认、技术选型（含备选方案对比与否决理由）、数据模型、风险预演、验收标准；
-- `TASK.md`：勾选式任务拆解与依赖关系。
+- `TASK.md`：勾选式任务拆解与依赖关系；
+- `ACCEPTANCE.md`：9 条验收标准逐条对照测试证据（含需本机验证项标注）。

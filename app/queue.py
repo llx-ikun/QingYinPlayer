@@ -26,11 +26,12 @@ class PlayQueue:
     # ---------- 内部 ----------
 
     def _shuffled_from(self, start_pos: int) -> list[str]:
-        """以 start_pos 为首，其余随机排列。"""
-        rest = self._ids[:start_pos] + self._ids[start_pos + 1:]
-        random.shuffle(rest)
+        """以 start_pos 为首，其余随机排列；start_pos 越界时整体随机。"""
         if 0 <= start_pos < len(self._ids):
+            rest = self._ids[:start_pos] + self._ids[start_pos + 1:]
+            random.shuffle(rest)
             return [self._ids[start_pos]] + rest
+        rest = list(self._ids)
         random.shuffle(rest)
         return rest
 

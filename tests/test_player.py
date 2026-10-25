@@ -158,6 +158,129 @@ class TestPlaybackController(unittest.TestCase):
         self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
         self.assertGreaterEqual(self.controller.position_ms, 0)
 
+    # ---------- 自动续播（EndOfMedia 调度） ----------
+
+    def _finish_current(self):
+        """模拟当前曲播完：直接驱动真实信号槽（沙箱无音频渲染，EndOfMedia 不会自然到来）。"""
+        from PySide6.QtMultimedia import QMediaPlayer
+        self.controller._on_media_status(QMediaPlayer.MediaStatus.EndOfMedia)
+
+    def test_autoplay_next_sequential(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.play_tracks(ids, 0)
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self._finish_current()
+        self.assertEqual(self.controller.current_track.id, ids[1])
+
+    def test_autoplay_stops_at_end_sequential(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.play_tracks(ids, len(ids) - 1)
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self._finish_current()
+        # 顺序播放到末尾：停止，不循环
+        self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
+
+    def test_autoplay_loop_wraps_to_first(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.set_mode("loop")
+        self.controller.play_tracks(ids, len(ids) - 1)
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self._finish_current()
+        self.assertEqual(self.controller.current_track.id, ids[0])
+
+    def test_autoplay_single_replays_same_track(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.set_mode("single")
+        self.controller.play_tracks(ids, 1)
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self._finish_current()
+        # 单曲循环：不切歌，回到开头继续播
+        self.assertEqual(self.controller.current_track.id, ids[1])
+        self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.PlayingState)
+        self.assertEqual(self.controller.position_ms, 0)
+
+    def test_autoplay_shuffle_reshuffles_and_continues(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.set_mode("shuffle")
+        self.controller.play_tracks(ids, len(ids) - 1)
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self._finish_current()
+        # 随机播放播完一轮：重新洗牌后继续，不停不空（play 状态切换是异步的，需等待）
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertIsNotNone(self.controller.current_track)
+        self.assertIn(self.controller.current_track.id, ids)
+        # 回归：重排后的队列仍是合法排列，不会出现重复曲目
+        self.assertEqual(sorted(self.controller._queue.ids), sorted(ids))
+
+    def test_manual_next_at_end_stops(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.play_tracks(ids, len(ids) - 1)
+        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.controller.next()
+        self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
+
+    # ---------- 上一首阈值与断点跳过 ----------
+
+    def _make_long_track(self, seconds: float = 6.0) -> str:
+        """在临时目录合成一根超过「上一首」阈值(3s)的 WAV，返回曲目 id。
+
+        共享夹具全是 2 秒短样本，seek 超过时长会被 QMediaPlayer 钳制，
+        阈值分支必须用更长的样本验证。
+        """
+        import numpy as np
+        import soundfile as sf
+        from app.metadata import read_track
+        path = os.path.join(self.tmp, "长音频.wav")
+        rate = 44100
+        t = np.linspace(0, seconds, int(seconds * rate), endpoint=False)
+        pcm = (0.3 * 32767 * np.sin(2 * np.pi * 440 * t)).astype(np.int16)
+        sf.write(path, pcm, rate, format="WAV")
+        return self.store.add_or_update(read_track(path), path).id
+
+    def test_previous_restarts_track_after_threshold(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        long_id = self._make_long_track(6.0)
+        other_id = self.paths["晴天 - 周杰伦.mp3"]
+        self.controller.play_tracks([long_id, other_id], 0)
+        self.assertTrue(_spin(lambda: self.controller._player.mediaStatus() in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        )))
+        self.controller.seek(3500)  # 超过 3s 阈值且未超时长
+        self.assertEqual(self.controller.position_ms, 3500)
+        self.controller.previous()
+        # 只回本曲开头，不切歌
+        self.assertEqual(self.controller.current_track.id, long_id)
+        self.assertEqual(self.controller.position_ms, 0)
+
+    def test_play_single_pending_seek_applied_on_load(self):
+        """恢复上次播放位置：LoadedMedia 后应真正落到 seek 位置。"""
+        self.controller.play_single(self.paths["晨间轻音乐.wav"], autoplay=False, seek_ms=800)
+        self.assertTrue(_spin(lambda: self.controller.position_ms == 800, timeout_ms=5000))
+
+    def test_consecutive_broken_files_are_skipped(self):
+        from app.models import Track
+        errors = []
+        self.controller.error.connect(errors.append)
+        for i in (1, 2):
+            ghost_path = os.path.join(self.tmp, f"幽灵歌曲{i}.mp3")
+            self.store.tracks[f"ghost{i}"] = Track(id=f"ghost{i}", path=ghost_path, title=f"幽灵歌曲{i}")
+        self.controller.play_tracks(["ghost1", "ghost2", self.paths["夜曲.flac"]], 0)
+        good = self.paths["夜曲.flac"]
+        self.assertTrue(_spin(lambda: self.controller.current_track is not None
+                              and self.controller.current_track.id == good, timeout_ms=10000))
+        # 两个坏文件各报一次错，均标记 broken，最终落在好歌上
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all("文件不存在" in e for e in errors))
+        self.assertTrue(self.store.get_track("ghost1").broken)
+        self.assertTrue(self.store.get_track("ghost2").broken)
+
 
 if __name__ == "__main__":
     unittest.main()
