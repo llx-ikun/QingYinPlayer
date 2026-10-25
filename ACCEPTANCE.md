@@ -127,6 +127,39 @@ QT_QPA_PLATFORM=offscreen env -u PYTHONPATH .venv/Scripts/python.exe -m unittest
 
 新增测试 24 项：E2E +9、播放器 +9、扫描器/封面 +6（另强化 2 项既有断言）。
 
+## v2.0 UI 改版增量验收
+
+对照 `DESIGN.md` §12，v2.0 新增/变更项逐条给证据（全量 **122 项** 全绿，命令见下）：
+
+```bash
+cd music-player
+env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py   # 逐模块/逐类独立进程，122 项 OK
+env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
+```
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 双主题（默认深色，浅色 QQ 绿 `#31c27c`） | ✅ | `TestE2EV2::test_theme_switch_applies_and_persists`（QSS 含强调色 + 重启保持）、`test_float_bar_theme_toggle` |
+| 无边框圆角窗口 + 自定义标题栏 | ✅（🟡 真实拖拽手感） | `test_titlebar_close_button`、`test_titlebar_maximize_toggle`（is_maximized 属性）；真实贴边/缩放需本机确认 |
+| 标题栏导航（前进/后退） | ✅ | `test_view_history_back_forward`、`test_nav_buttons_disabled_without_history` |
+| 全局搜索（标题栏搜索框） | ✅ | `test_search_from_title_bar`、`test_search_filters` |
+| 「我喜欢」收藏（行内心 + 播放栏心） | ✅ | `test_row_heart_toggles_favorite`、`test_favorites_view_and_player_bar_heart`、`test_favorites_survive_restart` + `test_store` 收藏 5 项 |
+| 队列浮层跳转 | ✅ | `test_queue_panel_jump` |
+| 昵称修改 | ✅ | `test_nickname_change` |
+| toast 提示 | ✅ | `test_toast` |
+| 设置框（昵称/主题/统计） | ✅ | `test_settings_dialog_signals` |
+| 浮动工具条（主题/正在播放/数据目录/设置） | ✅ | `test_float_bar_inside_window`、`test_float_bar_theme_toggle` |
+| 视图历史初始项可后退 | ✅ | `test_view_history_back_forward`（初始视图入栈修复） |
+| 文本省略（ElidedLabel） | ✅ | `tests/test_widgets.py` 7 项（延后省略 + full_text + 销毁安全） |
+| 视觉自审（双主题 × 7 状态） | ✅（🟡 真机） | `tools/shot.py` 真实平台截图：深/浅 × {曲库/播放中/歌词/队列/设置/最大化/空库}，中文渲染/布局/激活态/收藏心均正常 |
+
+## v2.0 修复的缺陷
+
+1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。
+2. **视图历史初始项缺失**：`_history` 初值 `[]`，初始视图经 `set_view` 同视图跳过而不入栈，用户从初始视图导航后「后退」回不到起点。改为 `_history = [初始视图]`。
+3. **图标绑定强引用累积**：`_bindings` 用强引用持有已销毁 widget，跨窗口累积后 `refresh_icons` 对半销毁 Shiboken 对象 `setIcon` 在 C++ 层偶发 hang。改 weakref 持有，销毁自动失效。
+4. **QMediaPlayer offscreen 累积死锁**（测试环境）：同进程内实例累积 ~15-20 个后 Qt 多媒体后端 C++ 层死锁。以 `run_tests.py` 逐模块/逐类独立进程规避，非业务代码缺陷。
+
 ## 已知限制
 
 - **m4a/aac 无真实样本验证**：mutagen MP4 分支有代码实现但无测试夹具，交付标注 🟡。

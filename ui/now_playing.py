@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from app.lyrics import format_time
 from app.models import Track
 from ui.lyrics_panel import LyricsPanel
-from ui.theme import BORDER, TEXT_DIM
 from ui.widgets import ClickableCover
 
 

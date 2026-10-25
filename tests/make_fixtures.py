@@ -24,13 +24,14 @@ def _tone_bytes(freq=440.0, seconds=2.0, rate=44100):
 
 
 def _cover_png(size=64):
-    """用 QImage 画一张封面图（渐变 + ♫），无需 PIL。
+    """用 QImage 画一张封面图（渐变 + 手绘音符），无需 PIL。
 
     注意：Qt 的 QFont/QPainter 在没有 QGuiApplication 实例时会直接崩溃
     （进程退出码 127 且无 traceback），因此这里先确保应用实例存在。
+    音符用路径绘制而非字符：♫ 在部分字体回退下会渲染成豆腐块。
     """
-    from PySide6.QtGui import QGuiApplication, QImage, QPainter, QLinearGradient, QColor, QFont
-    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter
 
     if QGuiApplication.instance() is None:
         QGuiApplication(sys.argv[:1])
@@ -41,11 +42,12 @@ def _cover_png(size=64):
     p = QPainter(img)
     p.fillRect(0, 0, size, size, grad)
     p.setPen(QColor("#ffffff"))
-    f = QFont()
-    f.setPixelSize(int(size * 0.6))
-    f.setBold(True)
-    p.setFont(f)
-    p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "♫")
+    p.setBrush(QColor("#ffffff"))
+    u = float(size)
+    p.drawEllipse(QRectF(u * 0.30, u * 0.58, u * 0.22, u * 0.16))
+    p.drawLine(QPointF(u * 0.52, u * 0.64), QPointF(u * 0.52, u * 0.22))
+    p.drawLine(QPointF(u * 0.52, u * 0.22), QPointF(u * 0.74, u * 0.32))
+    p.drawLine(QPointF(u * 0.52, u * 0.36), QPointF(u * 0.74, u * 0.46))
     p.end()
     path = os.path.join(FIXTURES, "_cover.png")
     img.save(path, "PNG")
@@ -138,12 +140,24 @@ def _tag_ogg(path):
 
 
 def ensure_fixtures() -> str:
-    """确保夹具存在（幂等）；返回音乐目录路径。"""
-    marker = os.path.join(FIXTURES, ".done")
-    if os.path.isdir(MUSIC_DIR) and os.path.exists(marker):
+    """确保夹具存在（幂等）；返回音乐目录路径。
+
+    逐文件校验而非只查 .done 标记：标记可能在文件被外部清理后仍然存在
+    （曾因只剩标记导致 read_track 返回 None、测试 setUp 批量报错）。
+    """
+    expected = [
+        "晴天 - 周杰伦.mp3",
+        "晴天 - 周杰伦.lrc",
+        "夜曲.flac",
+        "晨间轻音乐.wav",
+        "海浪的声音.ogg",
+        "无标签音频.mp3",
+    ]
+    if all(os.path.isfile(os.path.join(MUSIC_DIR, name)) for name in expected):
         return MUSIC_DIR
 
     os.makedirs(MUSIC_DIR, exist_ok=True)
+    marker = os.path.join(FIXTURES, ".done")
     cover = _cover_png()
 
     # 1. 带 ID3 标签 + 封面 + 内嵌歌词的 MP3 + 同名 LRC
@@ -176,7 +190,6 @@ def ensure_fixtures() -> str:
         f.write("ok")
     print(f"夹具已生成: {MUSIC_DIR}")
     return MUSIC_DIR
-
 
 if __name__ == "__main__":
     ensure_fixtures()

@@ -1,78 +1,93 @@
 # 「轻音播放器」任务清单（TASK.md）
 
-> 版本：v1.0 · 2026-10-24 · 状态：**待用户评审**
-> 规则：按依赖顺序执行；每项完成即勾选并跑该项验证；修复循环 ≤3 轮。
+> 版本：v2.0 UI 改版 · 2026-10-25 · 状态：**待用户评审**
+> 规则：按依赖顺序执行；每项完成即勾选并跑该项验证；修复循环 ≤3 轮，超限输出待人工确认项。
+> 基线：`main @ 39d9251`（v1.1，91 项测试全绿，dist 双产物在手）。
+> 迭代分支：`feat/ui-v2`。
 
-## 阶段 0：脚手架（依赖：无）
+## A. 后端（app/，无 UI 依赖，先行）
 
-- [x] **T0.1** 初始化项目结构（`main.py`、`app/`、`ui/`、`tests/`、`assets/`）+ `.gitignore`（.venv/dist/build/__pycache__/测试夹具）
-  - 验收：`python main.py --check` 能打印版本信息并不报错
-- [x] **T0.2** `requirements.txt`（PySide6、mutagen）+ `requirements-dev.txt`（pyinstaller、soundfile、lameenc、numpy）+ README 记录阿里云镜像与 `env -u PYTHONPATH` 注意事项
-  - 验收：venv 内 `pip install -r requirements.txt` 成功
+- [ ] **A1** `app/models.py`：新增 `PLAYLIST_FAVORITES = "__favorites__"`；`Settings` 增加 `theme: str = "dark"`、`nickname: str = "音乐爱好者"`（含 `to_dict/from_dict`，旧数据无损升级）
+  - 验收：旧 JSON（无新字段）`from_dict` 不抛错且取默认值
+- [ ] **A2** `app/store.py`：`load()` 改为保留 system 歌单（原逻辑丢弃）；懒创建 favorites 系统歌单；新增 `toggle_favorite/is_favorite/favorite_tracks/favorite_count`；`view_tracks/view_name` 支持 favorites
+  - 验收：单测覆盖增删切、round-trip、重复收藏幂等、`remove_track` 联动清理
+- [ ] **A3** `app/player.py`：暴露 `queue_ids` / `queue_index` / `play_from_queue(tid)`
+  - 验收：单测覆盖（shuffle 顺序即播放顺序、跳转后 current 正确）
+- [ ] **A4** 单测：`tests/test_store.py` + `tests/test_player.py` 增量；全量回归
+  - 验收：`python -m unittest discover -s tests` 全绿（≥91）
 
-## 阶段 1：后端核心（依赖：T0）
+## B. 主题与图标（依赖 A1）
 
-- [x] **T1.1** `app/models.py`：Track/Playlist/Settings dataclass + `app/paths.py`（AppData 路径解析）
-  - 验收：字段与 DESIGN §5 一致
-- [x] **T1.2** `app/lyrics.py`：LRC 解析 + 索引 + 时间格式化（纯逻辑）
-  - 验收：单测覆盖多时间标签/offset/元数据/畸形行/索引边界
-- [x] **T1.3** `app/metadata.py`：mutagen 封装（元数据/封面/歌词提取，含中文标签容错）
-  - 验收：对 mp3/flac/wav 夹具读取 title/artist/album/duration/封面/内嵌歌词
-- [x] **T1.4** `app/store.py`：JSON 持久化 + 库/歌单 CRUD + 设置 + 最近播放
-  - 验收：单测覆盖 CRUD/去重/round-trip（临时目录）
-- [x] **T1.5** `app/covers.py`：封面懒提取 + 磁盘缓存 + 渐变占位图
-  - 验收：有封面曲目出 QPixmap；无封面出占位图；二次读取命中缓存
-- [x] **T1.6** `app/scanner.py`：QThread 递归扫描 + 进度信号 + 取消
-  - 验收：扫描含中文名/多格式目录，信号进度正确，取消即停
+- [ ] **B1** `ui/theme.py`：`Theme` dataclass + 深/浅两套调色板（浅色 QQ 绿 `#31c27c`、深色沿用蓝紫）+ `build_stylesheet(theme)` + `current_theme()/set_theme()` + 主题应用器（stylesheet + 图标重绘 + EqualizerBars 换色）
+  - 验收：两套 QSS 均可生成；切换后 `app.styleSheet()` 变化
+- [ ] **B2** `ui/icons.py`：新增 `back/forward/refresh/minimize/maximize/restore/heart/heart_filled/more/queue/settings/sun/moon/home` 绘制；`bind_icon(button, kind, size, role)` 注册表 + `refresh_icons(theme)`
+  - 验收：全 kind 渲染不抛错；`refresh_icons` 后图标缓存键随颜色变化
+- [ ] **B3** 冒烟：脚本渲染两主题全部图标 + 生成 QSS 文本 diff 检查无空色值
 
-## 阶段 2：播放核心（依赖：T1.1/T1.2）
+## C. 窗口外壳（依赖 B）
 
-- [x] **T2.1** `app/player.py`：PlaybackController（QMediaPlayer 封装：播放/暂停/切歌/seek/音量/静音 + 信号）
-  - 验收：offscreen 下 setSource→LoadedMedia、seek 生效、音量生效、状态信号正确（沙箱无音频渲染，position 推进不验证）
-- [x] **T2.2** 队列与播放模式（sequential/loop/single/shuffle + previous 语义 + 结束自动续播）
-  - 验收：单测覆盖四种模式 next/previous/播完行为
-- [x] **T2.3** 错误处理：文件丢失/不可播 → broken 标记 + 信号通知 UI + 自动跳过
-  - 验收：删除文件后播放触发 error 信号，不崩溃
+- [ ] **C1** `ui/title_bar.py`：通栏标题栏（logo/前进/后退/刷新/搜索 pill/最小化/最大化/关闭）；空白区 `startSystemMove` 拖拽 + 双击最大化
+  - 验收：真实平台窗口可拖拽、双击、三键行为正确（截图+手动）
+- [ ] **C2** `ui/main_window.py`：`FramelessWindowHint + WA_TranslucentBackground` + 圆角 + `setMask`；四边四角 6px 缩放热区；视图历史栈（back/fwd）；标题栏搜索接入 `_on_search_changed`；toast 替换 statusBar（保留 `_toast(msg, ms)` API）
+  - 验收：最大化/还原/最小化/关闭正常；边缘缩放跟手；back/fwd 正确；搜索过滤与旧行为一致
+- [ ] **C3** 视觉冒烟：真实平台截图验证圆角/半透明/缩放光标（见 §12.9 方法）；异常则回退方角方案
 
-## 阶段 3：UI（依赖：T1/T2）
+## D. 侧边栏（依赖 C2）
 
-- [x] **T3.1** `ui/theme.py`：深色 QSS + 调色板 + 应用图标（Qt 生成 app.ico）
-- [x] **T3.2** `ui/main_window.py` + `ui/sidebar.py`：主窗口骨架、侧边栏导航（资料库/最近播放/歌单列表/新建/导入按钮）
-- [x] **T3.3** `ui/track_list.py`：曲目列表（封面+标题/艺人+时长）、右键菜单、拖拽排序、搜索过滤、排序
-- [x] **T3.4** `ui/player_bar.py`：底部播放栏（封面/信息/控制/进度拖动/音量/模式/歌词开关）
-- [x] **T3.5** `ui/lyrics_panel.py`：歌词面板（同步高亮/自动滚动/点击跳转/占位）
-- [x] **T3.6** `ui/now_playing.py`：正在播放视图（大封面+信息+歌词）
-- [x] **T3.7** 对话框：新建/重命名歌单、添加到歌单、绑定歌词、导入进度
-- [x] **T3.8** 持久化恢复（音量/模式/上次曲目与位置/视图）+ 快捷键 + 空状态 + 状态栏提示
+- [ ] **D1** `ui/sidebar.py` 重写：用户卡片（首字母头像+昵称+「本地模式」徽标，点击请求改昵称）/ ♥我喜欢·⌂资料库图标导航 / 最近播放·N / 自建歌单+封面列表 / 导入 / 版本号
+  - 验收：导航高亮、歌单封面与数量、右键菜单沿用；宽度 248
+- [ ] **D2** MainWindow 接线：`refresh_playlists(playlists, cover_getter)`、favorite/recent 计数、昵称修改对话框（patch `QInputDialog` 可测）
 
-## 阶段 4：测试与修复（依赖：T3）
+## E. 歌曲列表（依赖 D2）
 
-- [x] **T4.1** `tests/make_fixtures.py`：生成多格式合成音频（含中文文件名/ID3 标签/同名 LRC/内嵌歌词）
-- [x] **T4.2** 单测全套绿（lyrics/store/player 队列）
-- [x] **T4.3** E2E（offscreen）：导入→播放→seek/音量→切歌→歌单操作→歌词联动→重启恢复
-- [x] **T4.4** 缺陷修复循环（≤3 轮，超限输出待人工确认项）
+- [ ] **E1** `ui/track_list.py` 重写：列表头（歌曲/艺人/专辑/格式/时长/操作）+ 行（序号或动效条/封面36/当前行高亮/格式徽标/爱心/⋯菜单）；保留拖拽排序、双击播放、空态；`set_tracks` 保持滚动位置
+  - 验收：列对齐、徽标文案（flac→无损/mp3→MP3/其他大写）、爱心切换、拖拽排序回归
+- [ ] **E2** 爱心接线：`favorite_toggled` → store → 刷新（滚动保持）→ 侧边栏计数同步
 
-## 阶段 5：打包交付（依赖：T4）
+## F. 播放栏与队列（依赖 E2）
 
-- [x] **T5.1** `build.py`：PyInstaller onefile + onedir 双产物（中文名 exe、app.ico、windowed）
-- [x] **T5.2** 打包 smoke test：offscreen 启动产物、加载库、正常退出
-- [x] **T5.3** README（使用说明/快捷键/已知事项：m4a 🟡、声音需本机验证、杀软误报说明）
-- [x] **T5.4** git 提交（Conventional Commits）+ 交付报告（变更摘要 + 验收对照 + 遗留项）
+- [ ] **F1** `ui/player_bar.py` 重写：左=封面+标题/艺人+♥+⋯；中=上一首/绿色圆播放(40px)/下一首 + 进度双行（0:00 ──●── 1:47）；右=音量+当前格式徽标+词+队列
+  - 验收：全部既有控件语义保留（time_cur/volume_slider/mode_btn 等测试锚点兼容或更新）
+- [ ] **F2** `ui/queue_panel.py`：`Qt.Popup` 队列浮层（当前队列/当前曲高亮/点击跳转）+ MainWindow 接线
+  - 验收：打开即刷新、跳转后 current 正确、点击外部自动关闭
 
----
+## G. 浮动工具条与设置（依赖 F）
+
+- [ ] **G1** `ui/float_bar.py`：4 键（主题/正在播放/数据目录/设置），定位于播放栏左上角，`raise_()` 置顶
+- [ ] **G2** `ui/settings_dialog.py`：昵称 / 主题（深/浅 radio）/ 关于（版本+本地统计：曲目数/歌单数/总时长）
+  - 验收：改昵称/主题即时生效并落盘
+
+## H. 测试与回归（依赖 D–G）
+
+- [x] **H1** `tests/test_e2e.py` 更新+新增：主题切换与持久化、行内心/播放栏心、标题栏三键（close 走 closeEvent）、视图历史、全局搜索、队列浮层跳转、昵称、toast
+  - 验收：新增用例全部通过；旧用例按新结构更新后通过
+- [x] **H2** 全量回归：`run_tests.py` 全绿（122 项）+ `ruff check .` 干净
+  - 注意：QMediaPlayer 在 offscreen 下同进程内实例累积 ~15-20 个会触发 C++ 层死锁（stop/setStyleSheet 随机 hang），故全量回归必须**逐模块/逐类独立进程**跑，见 `run_tests.py`
+
+## I. 视觉自审与修复（依赖 H2）
+
+- [x] **I1** `tools/shot.py`（开发工具，不进产物）：APPDATA 隔离 + 夹具注入 + 真实平台 `grab()` 截图
+- [x] **I2** 截图矩阵逐项自审并修复：{深,浅} × {空库, 曲库, 播放中, 歌词页, 队列浮层, 设置框, 最大化}；修复循环 ≤3 轮
+
+## J. 文档与交付（依赖 I）
+
+- [ ] **J1** 文档：`README.md`（新功能/快捷键）、`DESIGN.md §12` 勾选完成态、`ACCEPTANCE.md` v2.0 增量对照、`交付报告.md` 追加章节
+- [ ] **J2** `env -u PYTHONPATH .venv/Scripts/python.exe build.py` 重建双产物（smoke + 真实平台检查）
+- [ ] **J3** git：`feat/ui-v2` 合并 `main`（Conventional Commits: `feat(ui): ...`）+ 更新工作区记忆
 
 ## 依赖关系
 
 ```
-T0 → T1.1 → T1.2 → T2.1 → T2.2 → T3.x → T4.x → T5.x
-        ↘ T1.3/T1.4/T1.5/T1.6（可与 T1.2 并行）
-T2.3 依赖 T2.1；T3.5 依赖 T1.2；T3.6 依赖 T3.4/T3.5；T3.8 依赖 T3.2-T3.7
+A1 → A2/A3 → B1 → B2 → C1 → C2 → D1 → D2 → E1 → E2 → F1 → F2 → G1 → G2 → H1 → H2 → I1 → I2 → J1 → J2 → J3
+A4 紧随 A2/A3；I2 不通过则回到对应组件任务（≤3 轮）
 ```
 
 ## 验证命令速查
 
 ```bash
 cd music-player
-env -u PYTHONPATH .venv/Scripts/python.exe -m unittest discover -s tests -v   # 单测+E2E
-env -u PYTHONPATH QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe main.py  # offscreen 启动
+env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py                       # 全量回归（逐模块独立进程）
+env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .                     # 静态检查
+env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out /tmp/shots      # 视觉自审截图
+env -u PYTHONPATH .venv/Scripts/python.exe build.py                            # 双产物重建
 ```

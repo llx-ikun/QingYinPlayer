@@ -6,7 +6,7 @@ import os
 
 from PySide6.QtCore import QThread, Signal
 
-from app.metadata import TrackMeta, read_track
+from app.metadata import read_track
 from app.models import AUDIO_EXTENSIONS
 
 # 扫描时跳过的目录名
@@ -47,8 +47,7 @@ class ScannerWorker(QThread):
     def run(self) -> None:
         files = collect_audio_files(self._paths)
         total = len(files)
-        done = 0
-        for path in files:
+        for done, path in enumerate(files, 1):
             if self.isInterruptionRequested():
                 self.cancelled.emit()
                 return
@@ -56,7 +55,6 @@ class ScannerWorker(QThread):
             meta = read_track(path)
             if meta is not None:
                 self.track_ready.emit(meta)
-            done += 1
             self.progress.emit(done, total)
         self.finished_ok.emit(total)
 

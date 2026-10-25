@@ -80,6 +80,31 @@ class PlaybackController(QObject):
     def media_status(self):
         return self._player.mediaStatus()
 
+    # ---------- 队列查询（v2.0 队列浮层用） ----------
+
+    @property
+    def queue_ids(self) -> list[str]:
+        """当前播放队列（shuffle 模式下为实际播放顺序）。"""
+        return self._queue.ids
+
+    @property
+    def queue_index(self) -> int:
+        """当前曲在 queue_ids 中的位置；无队列返回 -1。"""
+        cur = self._queue.current
+        if cur is None:
+            return -1
+        ids = self._queue.ids
+        return ids.index(cur) if cur in ids else -1
+
+    def play_from_queue(self, tid: str) -> bool:
+        """队列浮层点击跳转：tid 必须在当前队列中。"""
+        if tid not in self._queue.ids:
+            return False
+        if self._queue.jump_to(tid):
+            self._load_current(autoplay=True)
+            return True
+        return False
+
     # ---------- 播放控制 ----------
 
     def play_tracks(self, track_ids: list[str], start_index: int = 0, autoplay: bool = True) -> None:

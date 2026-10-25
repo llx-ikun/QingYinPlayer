@@ -12,10 +12,8 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
-from ui.theme import TEXT_DIM
 
 
 class ImportProgressDialog(QDialog):

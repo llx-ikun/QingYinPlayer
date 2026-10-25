@@ -159,13 +159,12 @@ def read_track(path: str) -> TrackMeta | None:
                     if covr:
                         meta.picture = bytes(covr[0])
                     meta.lyrics_text = _vorbis_first(tags, "\xa9lyr") or None
-            elif isinstance(mf, OggVorbis):
-                if tags is not None:
-                    meta.title = _vorbis_first(tags, "title")
-                    meta.artist = _vorbis_first(tags, "artist")
-                    meta.album = _vorbis_first(tags, "album")
-                    meta.picture = _ogg_picture(mf)
-                    meta.lyrics_text = _vorbis_first(tags, "lyrics") or _vorbis_first(tags, "unsyncedlyrics") or None
+            elif isinstance(mf, OggVorbis) and tags is not None:
+                meta.title = _vorbis_first(tags, "title")
+                meta.artist = _vorbis_first(tags, "artist")
+                meta.album = _vorbis_first(tags, "album")
+                meta.picture = _ogg_picture(mf)
+                meta.lyrics_text = _vorbis_first(tags, "lyrics") or _vorbis_first(tags, "unsyncedlyrics") or None
         except Exception:  # noqa: BLE001
             pass  # 单段失败不影响其他字段
 
