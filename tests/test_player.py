@@ -281,6 +281,35 @@ class TestPlaybackController(unittest.TestCase):
         self.assertTrue(self.store.get_track("ghost1").broken)
         self.assertTrue(self.store.get_track("ghost2").broken)
 
+    # ---------- v2.0：队列查询与跳转 ----------
+
+    def test_queue_ids_and_index(self):
+        ids = list(self.paths.values())
+        self.controller.play_tracks(ids, 1)
+        self.assertEqual(self.controller.queue_ids, ids)
+        self.assertEqual(self.controller.queue_index, 1)
+        self.controller.next()
+        self.assertEqual(self.controller.queue_index, 2)
+
+    def test_play_from_queue(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        ids = list(self.paths.values())
+        self.controller.play_tracks(ids, 0)
+        target = self.paths["晨间轻音乐.wav"]
+        self.assertTrue(self.controller.play_from_queue(target))
+        self.assertTrue(_spin(lambda: self.controller.current_track is not None
+                              and self.controller.current_track.id == target))
+        self.assertEqual(self.controller.queue_ids[self.controller.queue_index], target)
+        # 不在队列中的 id 拒绝跳转
+        from app.models import Track
+        self.store.tracks["outsider"] = Track(id="outsider", path=os.path.join(self.tmp, "队外之歌.mp3"))
+        self.assertFalse(self.controller.play_from_queue("outsider"))
+
+    def test_queue_ids_empty_before_play(self):
+        self.assertEqual(self.controller.queue_ids, [])
+        self.assertEqual(self.controller.queue_index, -1)
+        self.assertFalse(self.controller.play_from_queue("随便"))
+
 
 if __name__ == "__main__":
     unittest.main()

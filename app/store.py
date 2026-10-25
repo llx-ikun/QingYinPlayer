@@ -14,6 +14,7 @@ import shutil
 
 from app.metadata import TrackMeta
 from app.models import (
+    PLAYLIST_FAVORITES,
     PLAYLIST_LIBRARY,
     PLAYLIST_RECENT,
     Playlist,
@@ -56,8 +57,11 @@ class LibraryStore:
                 self.tracks[t.id or tid] = t
             for pd in data.get("playlists") or []:
                 pl = Playlist.from_dict(pd)
-                if not pl.system:
-                    self.playlists.append(pl)
+                # v2.0：保留 system 歌单（「我喜欢」需要持久化）；
+                # 历史数据中的虚拟 id（library/recent）本就不落盘，出现则跳过
+                if pl.id in (PLAYLIST_LIBRARY, PLAYLIST_RECENT):
+                    continue
+                self.playlists.append(pl)
             self.settings = Settings.from_dict(data.get("settings") or {})
         except Exception:  # noqa: BLE001
             pass
@@ -201,6 +205,38 @@ class LibraryStore:
             return []
         return [self.tracks[tid] for tid in pl.track_ids if tid in self.tracks]
 
+    # ---------- 我喜欢（v2.0） ----------
+
+    def _ensure_favorites(self) -> Playlist:
+        """favorites 系统歌单懒创建：首次收藏时落盘。"""
+        pl = self.get_playlist(PLAYLIST_FAVORITES)
+        if pl is None:
+            pl = Playlist(id=PLAYLIST_FAVORITES, name="我喜欢", created_at=now_ts(), system=True)
+            self.playlists.append(pl)
+        return pl
+
+    def is_favorite(self, tid: str) -> bool:
+        pl = self.get_playlist(PLAYLIST_FAVORITES)
+        return pl is not None and tid in pl.track_ids
+
+    def toggle_favorite(self, tid: str) -> bool:
+        """切换收藏状态；返回 True=已收藏，False=已取消。tid 不存在时返回当前状态（取消语义为 False）。"""
+        pl = self._ensure_favorites()
+        if tid in pl.track_ids:
+            pl.track_ids = [x for x in pl.track_ids if x != tid]
+            return False
+        if tid in self.tracks:
+            pl.track_ids.append(tid)
+            return True
+        return False
+
+    def favorite_tracks(self) -> list[Track]:
+        return self.playlist_tracks(PLAYLIST_FAVORITES)
+
+    def favorite_count(self) -> int:
+        pl = self.get_playlist(PLAYLIST_FAVORITES)
+        return len(pl.track_ids) if pl is not None else 0
+
     # ---------- 设置 ----------
 
     def set_setting(self, key: str, value) -> None:
@@ -210,11 +246,13 @@ class LibraryStore:
     # ---------- 视图辅助 ----------
 
     def view_tracks(self, view_id: str) -> list[Track]:
-        """视图 id -> 曲目列表。library/recent 为虚拟视图。"""
+        """视图 id -> 曲目列表。library/recent/favorites 为虚拟视图。"""
         if view_id == PLAYLIST_LIBRARY:
             return self.all_tracks()
         if view_id == PLAYLIST_RECENT:
             return self.recent_tracks()
+        if view_id == PLAYLIST_FAVORITES:
+            return self.favorite_tracks()
         return self.playlist_tracks(view_id)
 
     def view_name(self, view_id: str) -> str:
@@ -222,5 +260,7 @@ class LibraryStore:
             return "资料库"
         if view_id == PLAYLIST_RECENT:
             return "最近播放"
+        if view_id == PLAYLIST_FAVORITES:
+            return "我喜欢"
         pl = self.get_playlist(view_id)
         return pl.name if pl else "未知视图"

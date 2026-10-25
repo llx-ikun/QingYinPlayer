@@ -27,6 +27,7 @@ PLAY_MODES = (MODE_SEQUENTIAL, MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE)
 # 虚拟歌单标识
 PLAYLIST_LIBRARY = "__library__"   # 资料库
 PLAYLIST_RECENT = "__recent__"     # 最近播放
+PLAYLIST_FAVORITES = "__favorites__"  # 我喜欢（v2.0：落盘为 system 歌单，见 store）
 
 
 def make_track_id(path: str) -> str:
@@ -140,6 +141,8 @@ class Settings:
     last_track_id: str | None = None
     last_position_ms: int = 0
     last_view: str = PLAYLIST_LIBRARY   # 上次所在视图（library / playlist id）
+    theme: str = "dark"                 # v2.0：主题（dark / light）
+    nickname: str = "音乐爱好者"         # v2.0：侧边栏用户卡片昵称
 
     def to_dict(self) -> dict:
         return {
@@ -149,6 +152,8 @@ class Settings:
             "last_track_id": self.last_track_id,
             "last_position_ms": self.last_position_ms,
             "last_view": self.last_view,
+            "theme": self.theme,
+            "nickname": self.nickname,
         }
 
     @classmethod
@@ -160,4 +165,6 @@ class Settings:
         s.last_track_id = d.get("last_track_id")
         s.last_position_ms = int(d.get("last_position_ms", 0))
         s.last_view = d.get("last_view", PLAYLIST_LIBRARY)
+        s.theme = d.get("theme") or "dark"
+        s.nickname = d.get("nickname") or "音乐爱好者"
         return s

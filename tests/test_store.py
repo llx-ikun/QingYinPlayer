@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.metadata import TrackMeta
-from app.models import PLAYLIST_LIBRARY, PLAYLIST_RECENT, make_track_id
+from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, make_track_id
 from app.store import LibraryStore
 
 
@@ -110,6 +110,66 @@ class TestStore(unittest.TestCase):
         s = self._store()
         s.set_setting("不存在的字段", 123)  # 不抛异常即可
         self.assertFalse(hasattr(s.settings, "不存在的字段"))
+
+    # ---------- v2.0：我喜欢 ----------
+
+    def test_favorites_toggle_and_count(self):
+        s = self._store()
+        tids = [t.id for t in s.all_tracks()]
+        # 未收藏时不落盘 favorites 歌单
+        self.assertFalse(s.is_favorite(tids[0]))
+        self.assertEqual(s.favorite_count(), 0)
+        self.assertTrue(s.toggle_favorite(tids[0]))
+        self.assertTrue(s.is_favorite(tids[0]))
+        self.assertEqual(s.favorite_count(), 1)
+        self.assertTrue(s.toggle_favorite(tids[2]))
+        self.assertEqual(s.favorite_count(), 2)
+        # 再点一次 = 取消
+        self.assertFalse(s.toggle_favorite(tids[0]))
+        self.assertFalse(s.is_favorite(tids[0]))
+        self.assertEqual(s.favorite_count(), 1)
+        # 收藏不存在的 tid：不入库
+        self.assertFalse(s.toggle_favorite("不存在的id"))
+        self.assertEqual(s.favorite_count(), 1)
+
+    def test_favorites_persistence_and_view(self):
+        s = self._store()
+        tid = s.all_tracks()[0].id
+        s.toggle_favorite(tid)
+        s.save()
+        s2 = LibraryStore(self.db)
+        self.assertTrue(s2.is_favorite(tid))
+        self.assertEqual(len(s2.favorite_tracks()), 1)
+        self.assertEqual(s2.view_name(PLAYLIST_FAVORITES), "我喜欢")
+        self.assertEqual([t.id for t in s2.view_tracks(PLAYLIST_FAVORITES)], [tid])
+        # favorites 是系统歌单：不出现在用户歌单里，不可删改名
+        self.assertEqual(s2.user_playlists(), [])
+        self.assertFalse(s2.rename_playlist(PLAYLIST_FAVORITES, "x"))
+        self.assertFalse(s2.delete_playlist(PLAYLIST_FAVORITES))
+
+    def test_remove_track_cleans_favorites(self):
+        s = self._store()
+        tids = [t.id for t in s.all_tracks()]
+        s.toggle_favorite(tids[0])
+        s.toggle_favorite(tids[1])
+        s.remove_track(tids[0])
+        self.assertEqual([t.id for t in s.favorite_tracks()], [tids[1]])
+
+    def test_settings_theme_nickname_roundtrip(self):
+        s = self._store()
+        s.set_setting("theme", "light")
+        s.set_setting("nickname", "原神启动")
+        s.save()
+        s2 = LibraryStore(self.db)
+        self.assertEqual(s2.settings.theme, "light")
+        self.assertEqual(s2.settings.nickname, "原神启动")
+
+    def test_legacy_data_without_new_settings(self):
+        """旧 data.json 无 theme/nickname/favorites：无损升级。"""
+        self._store()
+        s2 = LibraryStore(self.db)
+        self.assertEqual(s2.settings.theme, "dark")
+        self.assertEqual(s2.settings.nickname, "音乐爱好者")
 
 
 if __name__ == "__main__":

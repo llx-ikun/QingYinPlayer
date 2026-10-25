@@ -138,12 +138,24 @@ def _tag_ogg(path):
 
 
 def ensure_fixtures() -> str:
-    """确保夹具存在（幂等）；返回音乐目录路径。"""
-    marker = os.path.join(FIXTURES, ".done")
-    if os.path.isdir(MUSIC_DIR) and os.path.exists(marker):
+    """确保夹具存在（幂等）；返回音乐目录路径。
+
+    逐文件校验而非只查 .done 标记：标记可能在文件被外部清理后仍然存在
+    （曾因只剩标记导致 read_track 返回 None、测试 setUp 批量报错）。
+    """
+    expected = [
+        "晴天 - 周杰伦.mp3",
+        "晴天 - 周杰伦.lrc",
+        "夜曲.flac",
+        "晨间轻音乐.wav",
+        "海浪的声音.ogg",
+        "无标签音频.mp3",
+    ]
+    if all(os.path.isfile(os.path.join(MUSIC_DIR, name)) for name in expected):
         return MUSIC_DIR
 
     os.makedirs(MUSIC_DIR, exist_ok=True)
+    marker = os.path.join(FIXTURES, ".done")
     cover = _cover_png()
 
     # 1. 带 ID3 标签 + 封面 + 内嵌歌词的 MP3 + 同名 LRC
@@ -176,7 +188,6 @@ def ensure_fixtures() -> str:
         f.write("ok")
     print(f"夹具已生成: {MUSIC_DIR}")
     return MUSIC_DIR
-
 
 if __name__ == "__main__":
     ensure_fixtures()
