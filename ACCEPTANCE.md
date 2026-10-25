@@ -31,7 +31,7 @@ QT_QPA_PLATFORM=offscreen env -u PYTHONPATH .venv/Scripts/python.exe -m unittest
 
 ### 1. 双击 EXE 启动，深色中文界面正常渲染
 
-- 自动化：`build.py` 的 smoke 步骤验证 EXE 可启动、可解码附带音频（`轻音播放器.exe --smoke <音频文件>`）；E2E 每次构造真实 `MainWindow`（应用 QSS 深色主题、装配全部控件）。
+- 自动化：`build.py` 的 smoke 步骤验证 EXE 可启动、可解码附带音频（`QingYinPlayer.exe --smoke <音频文件>`），并新增真实平台存活检查；E2E 每次构造真实 `MainWindow`（应用 QSS 深色主题、装配全部控件）。
 - 🟡 沙箱为 offscreen 虚拟平台且字体库为空，中文截图全为方块——**真实显示效果必须在本机验证**。
 
 ### 2. 导入文件夹/文件后，列表显示标题/艺人/专辑/时长/封面
@@ -115,8 +115,8 @@ QT_QPA_PLATFORM=offscreen env -u PYTHONPATH .venv/Scripts/python.exe -m unittest
 ### 9. 单测 + E2E 全绿；交付 EXE
 
 - 全量回归：**91 项 OK**（单测 74 + E2E 17），命令见文首。
-- 产物：`dist/轻音播放器.exe`（onefile）+ `dist/轻音播放器-便携版/`（onedir，免安装）。
-- 冒烟：`轻音播放器.exe --smoke <音频文件>` 验证启动 + FFmpeg 解码。
+- 产物：`dist/QingYinPlayer.exe`（onefile）+ `dist/QingYinPlayer-Portable/`（onedir，免安装）。
+- 冒烟：`QingYinPlayer.exe --smoke <音频文件>` 验证启动 + FFmpeg 解码；真实平台（非 offscreen）存活检查确认窗口创建链路无崩溃。
 
 ## 本轮（v1.1）修复的缺陷
 
