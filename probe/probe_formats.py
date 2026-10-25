@@ -166,7 +166,7 @@ def main():
             print(f"[生成] {ext}: FAIL -> {e}")
 
     from PySide6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
+    _app = QApplication(sys.argv)  # noqa: F841  —— 保持实例存活
 
     print("\n== QMediaPlayer (WMF) 加载探测 ==")
     qt_results = {}

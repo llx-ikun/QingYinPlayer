@@ -75,7 +75,8 @@ class TestPlaybackController(unittest.TestCase):
         from PySide6.QtMultimedia import QMediaPlayer
         ids = list(self.paths.values())
         self.controller.play_tracks(ids, 0)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self.controller.pause()
         self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.PausedState)
         self.controller.resume()
@@ -134,8 +135,7 @@ class TestPlaybackController(unittest.TestCase):
     # ---------- 错误处理 ----------
 
     def test_missing_file_errors_and_skips(self):
-        from app.metadata import TrackMeta
-        from app.models import Track, make_track_id
+        from app.models import Track
         errors = []
         self.controller.error.connect(errors.append)
         ghost = os.path.join(self.tmp, "幽灵歌曲.mp3")
@@ -169,7 +169,8 @@ class TestPlaybackController(unittest.TestCase):
         from PySide6.QtMultimedia import QMediaPlayer
         ids = list(self.paths.values())
         self.controller.play_tracks(ids, 0)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self._finish_current()
         self.assertEqual(self.controller.current_track.id, ids[1])
 
@@ -177,7 +178,8 @@ class TestPlaybackController(unittest.TestCase):
         from PySide6.QtMultimedia import QMediaPlayer
         ids = list(self.paths.values())
         self.controller.play_tracks(ids, len(ids) - 1)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self._finish_current()
         # 顺序播放到末尾：停止，不循环
         self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
@@ -187,7 +189,8 @@ class TestPlaybackController(unittest.TestCase):
         ids = list(self.paths.values())
         self.controller.set_mode("loop")
         self.controller.play_tracks(ids, len(ids) - 1)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self._finish_current()
         self.assertEqual(self.controller.current_track.id, ids[0])
 
@@ -196,7 +199,8 @@ class TestPlaybackController(unittest.TestCase):
         ids = list(self.paths.values())
         self.controller.set_mode("single")
         self.controller.play_tracks(ids, 1)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self._finish_current()
         # 单曲循环：不切歌，回到开头继续播
         self.assertEqual(self.controller.current_track.id, ids[1])
@@ -208,10 +212,12 @@ class TestPlaybackController(unittest.TestCase):
         ids = list(self.paths.values())
         self.controller.set_mode("shuffle")
         self.controller.play_tracks(ids, len(ids) - 1)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self._finish_current()
         # 随机播放播完一轮：重新洗牌后继续，不停不空（play 状态切换是异步的，需等待）
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self.assertIsNotNone(self.controller.current_track)
         self.assertIn(self.controller.current_track.id, ids)
         # 回归：重排后的队列仍是合法排列，不会出现重复曲目
@@ -221,7 +227,8 @@ class TestPlaybackController(unittest.TestCase):
         from PySide6.QtMultimedia import QMediaPlayer
         ids = list(self.paths.values())
         self.controller.play_tracks(ids, len(ids) - 1)
-        self.assertTrue(_spin(lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
+        self.assertTrue(_spin(
+            lambda: self.controller._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState))
         self.controller.next()
         self.assertEqual(self.controller._player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
 
@@ -292,7 +299,6 @@ class TestPlaybackController(unittest.TestCase):
         self.assertEqual(self.controller.queue_index, 2)
 
     def test_play_from_queue(self):
-        from PySide6.QtMultimedia import QMediaPlayer
         ids = list(self.paths.values())
         self.controller.play_tracks(ids, 0)
         target = self.paths["晨间轻音乐.wav"]

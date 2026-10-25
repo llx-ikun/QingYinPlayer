@@ -12,14 +12,14 @@ from app.lyrics import LyricLine, format_time, lyric_index_at, parse_lrc, parse_
 class TestParseLrc(unittest.TestCase):
     def test_basic(self):
         lines = parse_lrc("[00:01.00]第一行\n[00:02.50]第二行")
-        self.assertEqual([l.time_ms for l in lines], [1000, 2500])
-        self.assertEqual([l.text for l in lines], ["第一行", "第二行"])
+        self.assertEqual([ln.time_ms for ln in lines], [1000, 2500])
+        self.assertEqual([ln.text for ln in lines], ["第一行", "第二行"])
 
     def test_multiple_time_tags_one_line(self):
         lines = parse_lrc("[00:10.00][00:20.00]副歌")
         self.assertEqual(len(lines), 2)
-        self.assertEqual([l.time_ms for l in lines], [10000, 20000])
-        self.assertTrue(all(l.text == "副歌" for l in lines))
+        self.assertEqual([ln.time_ms for ln in lines], [10000, 20000])
+        self.assertTrue(all(ln.text == "副歌" for ln in lines))
 
     def test_metadata_lines_skipped(self):
         lines = parse_lrc("[ti:标题]\n[ar:艺人]\n[00:01.00]歌词")
@@ -46,12 +46,12 @@ class TestParseLrc(unittest.TestCase):
 
     def test_unsorted_input_gets_sorted(self):
         lines = parse_lrc("[00:05.00]后\n[00:01.00]先")
-        self.assertEqual([l.time_ms for l in lines], [1000, 5000])
+        self.assertEqual([ln.time_ms for ln in lines], [1000, 5000])
 
     def test_malformed_lines_ignored(self):
         text = "[00:01.00]正常\n没有时间标签\n[abc]垃圾\n[00:02.00]\n   \n[00:03.00]结尾"
         lines = parse_lrc(text)
-        self.assertEqual([l.text for l in lines], ["正常", "结尾"])
+        self.assertEqual([ln.text for ln in lines], ["正常", "结尾"])
 
     def test_empty_and_none(self):
         self.assertEqual(parse_lrc(""), [])
@@ -59,7 +59,7 @@ class TestParseLrc(unittest.TestCase):
 
     def test_crlf_and_bom(self):
         lines = parse_lrc("\ufeff[00:01.00]带BOM\r\n[00:02.00]CRLF")
-        self.assertEqual([l.text for l in lines], ["带BOM", "CRLF"])
+        self.assertEqual([ln.text for ln in lines], ["带BOM", "CRLF"])
 
     def test_colon_in_text_kept(self):
         lines = parse_lrc("[00:01.00]时间: 12:30 的钟声")

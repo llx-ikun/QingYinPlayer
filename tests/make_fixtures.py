@@ -24,13 +24,14 @@ def _tone_bytes(freq=440.0, seconds=2.0, rate=44100):
 
 
 def _cover_png(size=64):
-    """用 QImage 画一张封面图（渐变 + ♫），无需 PIL。
+    """用 QImage 画一张封面图（渐变 + 手绘音符），无需 PIL。
 
     注意：Qt 的 QFont/QPainter 在没有 QGuiApplication 实例时会直接崩溃
     （进程退出码 127 且无 traceback），因此这里先确保应用实例存在。
+    音符用路径绘制而非字符：♫ 在部分字体回退下会渲染成豆腐块。
     """
-    from PySide6.QtGui import QGuiApplication, QImage, QPainter, QLinearGradient, QColor, QFont
-    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter
 
     if QGuiApplication.instance() is None:
         QGuiApplication(sys.argv[:1])
@@ -41,11 +42,12 @@ def _cover_png(size=64):
     p = QPainter(img)
     p.fillRect(0, 0, size, size, grad)
     p.setPen(QColor("#ffffff"))
-    f = QFont()
-    f.setPixelSize(int(size * 0.6))
-    f.setBold(True)
-    p.setFont(f)
-    p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "♫")
+    p.setBrush(QColor("#ffffff"))
+    u = float(size)
+    p.drawEllipse(QRectF(u * 0.30, u * 0.58, u * 0.22, u * 0.16))
+    p.drawLine(QPointF(u * 0.52, u * 0.64), QPointF(u * 0.52, u * 0.22))
+    p.drawLine(QPointF(u * 0.52, u * 0.22), QPointF(u * 0.74, u * 0.32))
+    p.drawLine(QPointF(u * 0.52, u * 0.36), QPointF(u * 0.74, u * 0.46))
     p.end()
     path = os.path.join(FIXTURES, "_cover.png")
     img.save(path, "PNG")

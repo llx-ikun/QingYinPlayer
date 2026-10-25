@@ -59,14 +59,15 @@
 
 ## H. 测试与回归（依赖 D–G）
 
-- [ ] **H1** `tests/test_e2e.py` 更新+新增：主题切换与持久化、行内心/播放栏心、标题栏三键（close 走 closeEvent）、视图历史、全局搜索、队列浮层跳转、昵称、toast
+- [x] **H1** `tests/test_e2e.py` 更新+新增：主题切换与持久化、行内心/播放栏心、标题栏三键（close 走 closeEvent）、视图历史、全局搜索、队列浮层跳转、昵称、toast
   - 验收：新增用例全部通过；旧用例按新结构更新后通过
-- [ ] **H2** 全量：`python -m unittest discover -s tests` 全绿 + `ruff check .` 干净
+- [x] **H2** 全量回归：`run_tests.py` 全绿（122 项）+ `ruff check .` 干净
+  - 注意：QMediaPlayer 在 offscreen 下同进程内实例累积 ~15-20 个会触发 C++ 层死锁（stop/setStyleSheet 随机 hang），故全量回归必须**逐模块/逐类独立进程**跑，见 `run_tests.py`
 
 ## I. 视觉自审与修复（依赖 H2）
 
-- [ ] **I1** `tools/shot.py`（开发工具，不进产物）：APPDATA 隔离 + 夹具注入 + 真实平台 `grab()` 截图
-- [ ] **I2** 截图矩阵逐项自审并修复：{深,浅} × {空库, 曲库, 播放中, 歌词页, 队列浮层, 设置框, 最大化}；修复循环 ≤3 轮
+- [x] **I1** `tools/shot.py`（开发工具，不进产物）：APPDATA 隔离 + 夹具注入 + 真实平台 `grab()` 截图
+- [x] **I2** 截图矩阵逐项自审并修复：{深,浅} × {空库, 曲库, 播放中, 歌词页, 队列浮层, 设置框, 最大化}；修复循环 ≤3 轮
 
 ## J. 文档与交付（依赖 I）
 
@@ -85,7 +86,7 @@ A4 紧随 A2/A3；I2 不通过则回到对应组件任务（≤3 轮）
 
 ```bash
 cd music-player
-env -u PYTHONPATH .venv/Scripts/python.exe -m unittest discover -s tests -v   # 单测+E2E
+env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py                       # 全量回归（逐模块独立进程）
 env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .                     # 静态检查
 env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out /tmp/shots      # 视觉自审截图
 env -u PYTHONPATH .venv/Scripts/python.exe build.py                            # 双产物重建

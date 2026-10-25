@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import struct
@@ -93,7 +94,7 @@ def generate_icon() -> str:
     offset = 6 + 16 * len(images)
     entries = b""
     blob = b""
-    for size, data in zip(sizes, images):
+    for size, data in zip(sizes, images, strict=True):
         dim = 0 if size >= 256 else size
         entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(data), offset)
         blob += data
@@ -189,10 +190,8 @@ def _real_platform_check(exe: str, timeout_s: int = 8) -> None:
             except subprocess.TimeoutExpired:
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
                                capture_output=True)
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    pass
                 print(f"真实平台检查通过: {os.path.basename(exe)} 持续运行 {timeout_s}s 未崩溃")
                 return
         out = ""

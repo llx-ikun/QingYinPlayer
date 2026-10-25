@@ -36,7 +36,7 @@ class TestMetadata(unittest.TestCase):
         self.assertEqual(meta.artist, "周杰伦")
         self.assertEqual(meta.fmt, "flac")
         self.assertIsNotNone(meta.picture)
-        synced, plain = lyrics_from_text(meta.lyrics_text)
+        synced, _plain = lyrics_from_text(meta.lyrics_text)
         self.assertEqual(len(synced), 2)  # FLAC 内嵌的是带时间戳的歌词
         self.assertEqual(synced[0].text, "FLAC 内嵌歌词第一行")
 

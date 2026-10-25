@@ -12,10 +12,10 @@ os.environ["APPDATA"] = tempfile.mkdtemp(prefix="qy_shot_")
 # 真实 Windows 平台渲染（离屏模式字体库为空，中文会变方块，仅用于布局检查）
 os.environ.pop("QT_QPA_PLATFORM", None)
 
-from PySide6.QtCore import QCoreApplication
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from tests.make_fixtures import ensure_fixtures
+from tests.make_fixtures import ensure_fixtures  # noqa: E402
 
 MUSIC_DIR = ensure_fixtures()
 OUT = os.path.join(HERE, "shots")
