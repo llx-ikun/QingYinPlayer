@@ -120,6 +120,23 @@ def smoke_test(exe: str, audio_file: str | None = None) -> None:
     print("smoke test 通过:", tail)
 
 
+def _cleanup_intermediate_exes() -> None:
+    """删除 PyInstaller 工作目录(build/pyinstaller)里遗留的中间 exe。
+
+    这些 exe 是 COLLECT 前的半成品，旁边没有 _internal 依赖目录，双击必然报
+    "Failed to load Python DLL"。留在 build/ 里极易被误点，构建成功后统一清掉。
+    """
+    import glob
+    strays = glob.glob(os.path.join(HERE, "build", "pyinstaller", "**", "*.exe"),
+                       recursive=True)
+    for stray in strays:
+        try:
+            os.remove(stray)
+            print(f"已清理中间产物 exe: {os.path.relpath(stray, HERE)}")
+        except OSError:
+            pass
+
+
 def main() -> None:
     from tests.make_fixtures import ensure_fixtures
     ensure_fixtures()
@@ -134,9 +151,11 @@ def main() -> None:
     smoke_test(exe_onefile, fixture_audio)
     exe_ondir = _pyinstaller(onefile=False)
     smoke_test(exe_ondir)
-    print("\n全部构建完成：")
+    _cleanup_intermediate_exes()
+    print("\n全部构建完成，可直接运行的是：")
     print("  单文件便携版:", exe_onefile)
     print("  目录版      :", exe_ondir)
+    print("（build/ 目录只是构建过程文件，里面的 exe 已被清理，不可运行）")
 
 
 if __name__ == "__main__":
