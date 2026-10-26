@@ -189,6 +189,23 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 
 **修复的根因**：`build.py:generate_icon` 写 ICO 目录项时用了 `planes=1, bitcount=32`（BMP 字段值），违反 ICO 规范——PNG 压缩图像这两项必须为 0。资源管理器常容忍，但 Windows 任务栏/标题栏图标加载器更严格会拒绝，叠加 `main.py` 未曾 `setWindowIcon`，窗口图标退化为占位符。已改为 0/0，并对打包产物 `--add-data` 带上图标，运行时显式设置。
 
+### v2.1.2 导入弹窗关闭修复 + 浮动工具条改版（2026-10-26）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 导入完成后点「关闭」可关闭弹窗 | ✅ | `tests/test_dialogs.py::test_close_after_finish_closes_dialog`（`result()==Accepted`） |
+| 扫描中点「取消」仍触发取消导入（未误关） | ✅ | `test_cancel_before_finish_emits_cancelled`（emit cancelled） |
+| finish 后状态正确（文案/明细/`_finished`） | ✅ | `test_finish_sets_state` |
+| 浮动条主题为开关式切换按钮，状态随主题联动 | ✅ | `test_e2e.TestE2EV2.test_float_bar_theme_toggle`（checkable + `isChecked()` 随深/浅切换） |
+| 浮动条其余为图标+文字（正在播放/数据目录/设置） | ✅ | 同上（三按钮 `text()` 断言） |
+| 浮动条加宽后不压封面 | ✅ | 实测条宽 ~294px，`player_bar` 左缩进 330，结束于 x≈310 |
+| 全量回归 / 静态检查 | ✅ | 13 进程 **163 项全绿**（160 + 新 3）；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过（单文件 54.9MB / 目录版 2.2MB） |
+
+**修复的根因**：
+① **关闭失效**：`ImportProgressDialog` 完成后 worker 已结束，底部按钮仍连接 `cancelled → worker.cancel()`；`ScannerWorker.cancel()` 仅 `requestInterruption()`（no-op），`on_cancelled(dialog.reject)` 永不触发，弹窗关不掉。改为 dialog 内 `_finished` 标志 + `_on_button()`：完成后直接 `accept()` 关闭。
+② **浮动条改版**：主题由纯图标按钮改为开关式 `#ThemeToggle`（checkable），其余改为图标+文字 `#FloatTextBtn`；文字按钮使条宽增至 ~294px，故 `player_bar` 左缩进由 190 扩到 330。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

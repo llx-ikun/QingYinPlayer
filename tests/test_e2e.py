@@ -472,11 +472,13 @@ class TestE2EV2(unittest.TestCase):
         # 浮动条改造：主题为开关式切换按钮，其余为图标+文字
         fb = self.window.float_bar
         self.assertTrue(fb.theme_toggle.isCheckable())
+        self.assertTrue(fb.theme_toggle.isChecked())  # 浅色主题 = 开关打开
         self.assertEqual(fb.np_btn.text(), "正在播放")
         self.assertEqual(fb.dir_btn.text(), "数据目录")
         self.assertEqual(fb.settings_btn.text(), "设置")
         self.window._toggle_theme()
         self.assertEqual(self.store.settings.theme, "dark")
+        self.assertFalse(self.window.float_bar.theme_toggle.isChecked())  # 深色主题 = 开关关闭
 
     # ---------- 我喜欢 ----------
 

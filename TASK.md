@@ -143,10 +143,26 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **N4** 回归测试 `tests/test_icon.py`（3 项）+ 接入 `run_tests.py`；全量回归 + ruff 干净；重建双 EXE
   - 验收：全量回归 **160 项全绿**（157 + 新 3）；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
 
+## O. v2.1.2 导入弹窗关闭修复 + 浮动工具条改版（2026-10-26，用户反馈）
+
+> 现象①：导入完成后点击弹窗底部「关闭」按钮，弹窗无法关闭（扫描中途点「取消」却能关）。
+> 根因：完成后 worker 已结束，按钮仍连 `cancelled → worker.cancel()`，而 `ScannerWorker.cancel()`
+> 仅 `requestInterruption()`（no-op），`on_cancelled(dialog.reject)` 永不触发。
+> 现象②（用户要求）：浮动工具条原为 4 个纯图标按钮，希望主题做成切换按钮、其余做成图标+文字。
+
+- [x] **O1** `ui/dialogs.py`：`ImportProgressDialog` 加 `_finished` 标志 + `_on_button()`，完成后点「关闭」直接 `accept()`
+  - 验收：`tests/test_dialogs.py`（完成后关闭=Accepted / 扫描中取消=emit cancelled / finish 状态）
+- [x] **O2** `ui/float_bar.py` + `ui/theme.py`：主题改开关式 `#ThemeToggle`（checkable，icon-only），其余改图标+文字 `#FloatTextBtn`
+  - 验收：`test_e2e.TestE2EV2.test_float_bar_theme_toggle` 断言 checkable + 开关状态随主题 + 文案
+- [x] **O3** `ui/player_bar.py`：左缩进 190 → 330 给加宽后的浮动条留位（实测条宽 ~294px）
+  - 验收：浮动条 x=16 起、宽 294px，结束于 x≈310 < 330，不压封面
+- [x] **O4** 回归测试 `tests/test_dialogs.py`（3 项）+ 接入 `run_tests.py`；全量回归 + ruff 干净；重建双 EXE
+  - 验收：全量回归 **13 进程 163 项全绿**（160 + 新 3）；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4
 ```
 
 ## v2.1 验收命令
