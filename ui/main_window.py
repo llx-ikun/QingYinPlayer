@@ -44,12 +44,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.covers import CoverProvider
+from app.filesize import file_size
 from app.lyrics import LyricLine, lyrics_from_text
 from app.metadata import read_track
 from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, Track
 from app.paths import covers_dir, data_file
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
+from app.sorting import default_sort_for, preset_by_id, sort_tracks
 from app.store import LibraryStore
 from ui import theme as ui_theme
 from ui.dialogs import ImportProgressDialog
@@ -62,14 +64,7 @@ from ui.track_list import TrackList
 from ui.now_playing import NowPlayingPage
 from ui.video_view import VideoFullscreenOverlay
 
-SORT_KEYS = {
-    "custom": None,
-    "title": lambda t: (t.display_title.lower(), t.display_artist.lower()),
-    "artist": lambda t: (t.display_artist.lower(), t.display_title.lower()),
-    "album": lambda t: (t.display_album.lower(), t.display_title.lower()),
-    "duration": lambda t: t.duration_ms,
-    "added": lambda t: -t.added_at,
-}
+# 排序预设集中在 app/sorting.py（维度 + 方向 + 文案），此文件只负责应用
 
 # 边缘缩放热区（像素）与方向位
 _RESIZE_MARGIN = 6
@@ -92,7 +87,9 @@ class MainWindow(QMainWindow):
         self.player = PlaybackController(self.store)
         self.covers = CoverProvider(covers_dir())
         self._view_id = self.store.settings.last_view or PLAYLIST_LIBRARY
-        self._sort_key = "custom" if self._is_playlist_view(self._view_id) else "added"
+        self._sort_id = default_sort_for(self._is_playlist_view(self._view_id))
+        # 各视图分别记住上次选择的排序：切走再切回来不会被打回默认值
+        self._sort_by_view: dict[str, str] = {}
         self._search_text = ""
         self._displayed: list[Track] = []
         self._scanner: ScannerWorker | None = None
@@ -285,12 +282,13 @@ class MainWindow(QMainWindow):
             self._history_pos = len(self._history) - 1
             self._update_nav_buttons()
         self._view_id = view_id
-        self._sort_key = "custom" if self._is_playlist_view(view_id) else "added"
+        self._sort_id = self._sort_by_view.get(
+            view_id, default_sort_for(self._is_playlist_view(view_id)))
         self._search_text = ""
         self.store.settings.last_view = view_id
         self.sidebar.set_active_view(view_id)
         self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
-        self.track_list.set_sort(self._sort_key)
+        self.track_list.set_sort(self._sort_id)
         self.title_bar.clear_search()
         self._show_page(0)
         self.refresh_list()
@@ -320,17 +318,21 @@ class MainWindow(QMainWindow):
                       if needle in t.display_title.casefold()
                       or needle in t.display_artist.casefold()
                       or needle in t.display_album.casefold()]
-        # 排序
-        key_fn = SORT_KEYS.get(self._sort_key)
-        if key_fn is not None:
-            tracks = sorted(tracks, key=key_fn)
+        # 排序（维度 + 方向由预设决定）
+        # 文件大小一次取齐：排序与「大小」列共用，避免逐行重复 stat
+        sizes = {t.id: file_size(t.path) for t in tracks}
+        tracks = sort_tracks(tracks, self._sort_id, lambda t: sizes.get(t.id, 0))
         self._displayed = tracks
         current_tid = self.player.current_track.id if self.player.current_track else None
-        self.track_list.set_header(self.store.view_name(self._view_id), len(tracks))
+        total_ms = sum(t.duration_ms for t in tracks)
+        self.track_list.set_header(self.store.view_name(self._view_id), len(tracks), total_ms)
         self.track_list.set_tracks(tracks, lambda t: self.covers.get_pixmap(t, 40, 6), current_tid,
-                                   lambda t: self.store.is_favorite(t.id))
+                                   lambda t: self.store.is_favorite(t.id),
+                                   lambda t: sizes.get(t.id, 0))
         in_playlist = self._is_playlist_view(self._view_id)
-        self.track_list.set_context_config(in_playlist, in_playlist and self._sort_key == "custom")
+        # 只有「自定义顺序」才允许拖拽排序，否则拖完又被排序覆盖
+        self.track_list.set_context_config(
+            in_playlist, in_playlist and preset_by_id(self._sort_id).is_custom)
 
     def _refresh_counts(self) -> None:
         self.sidebar.set_favorite_count(self.store.favorite_count())
@@ -689,6 +691,8 @@ class MainWindow(QMainWindow):
         self.store.save()
         self.float_bar.set_theme_icon(name == "dark")
         self.title_bar.refresh_icons()
+        # 主题切换会改变按钮字号/内边距 → 浮动条宽度要重新按 sizeHint 算一次
+        self._position_float_bar()
         # 主题切换后重刷列表（封面占位/均衡器条颜色等随主题变化）
         self.refresh_list()
         self._toast("已切换到浅色主题" if name == "light" else "已切换到深色主题", 2000)
@@ -838,8 +842,9 @@ class MainWindow(QMainWindow):
 
     # ---------- 排序/搜索 ----------
 
-    def _on_sort_changed(self, key: str) -> None:
-        self._sort_key = key
+    def _on_sort_changed(self, sort_id: str) -> None:
+        self._sort_id = preset_by_id(sort_id).id
+        self._sort_by_view[self._view_id] = self._sort_id
         self.refresh_list()
 
     def _on_search_changed(self, text: str) -> None:
@@ -875,11 +880,15 @@ class MainWindow(QMainWindow):
 
     def _position_float_bar(self) -> None:
         # 窗口左下角（压在播放栏左上角，QQ 音乐同款位置）；
-        # 播放栏左侧已留出 190px 缩进，不会与内容重叠
+        # 播放栏左侧已留出 312px 缩进，不会与封面/信息列重叠。
+        # 注意：绝对定位的子控件不会自动拿到 sizeHint 宽度，必须 adjustSize()，
+        # 否则宽度停在默认 100px，图标+文字按钮会被父控件裁掉（v2.1.2 起的真实缺陷）。
+        bar = self.float_bar
+        bar.adjustSize()
         x = 16
-        y = self._root.height() - self.float_bar.height() - 8
-        self.float_bar.move(x, y)
-        self.float_bar.raise_()
+        y = self._root.height() - bar.height() - 8
+        bar.move(x, y)
+        bar.raise_()
 
     def _update_mask(self) -> None:
         if self.isMaximized() or not self.isVisible():

@@ -219,6 +219,30 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 **修复的根因**：v2.1.2 把 `player_bar` 左缩进 190→330 给浮动条让位，使 `PlayerBar.minimumSizeHint` 达 **1340px**，**超过默认窗 1280 / 最小窗 1100** → 信息列（stretch）被挤到 0（副标题全省略）、布局在约束边界反复重算导致窗口抖动。压缩固定宽元素（seek 380→200、音量 90→70、两处 addSpacing 20→8）、左缩进 330→312 后，min 降至 **1098 ≤ 1100**，任何尺寸下不再超约束。
 > 附带：进度条 0:00↔0:02 来回跳的另一层原因是导入的「晴天」为 **2 秒测试片段**，循环模式每 2 秒重播归零（锯齿），真实长曲不会如此。
 
+### v2.1.4 列表页视觉统一 + 排序增强（2026-10-26）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 可按**大小**排序（升/降） | ✅ | `tests/test_sorting.py` 大小双向 + 未知大小恒排最后；`test_e2e.TestE2EV2.test_sort_by_size_desc` 断言 `_displayed` 体积逆序 |
+| 可按**时长**排序（升/降） | ✅ | `test_duration_both_directions` + `test_sort_by_duration_asc_then_desc` |
+| 可按**导入时间**排序（升/降） | ✅ | `test_added_both_directions` |
+| 提供「**最近导入**」独立选项 | ✅ | `test_recent_import_entry_exists`；`test_recent_import_is_default_and_newest_first`（下拉文案 = 「最近导入」） |
+| 升降序可切换、当前排序清晰展示 | ✅ | 13 条预设一一对应「维度+方向」，下拉文案即当前排序；`test_each_dimension_has_both_directions`、`test_sort_combo_lists_every_preset` |
+| 列表显示**文件大小**列 | ✅ | `test_row_shows_size_column`（820 KB / 8.4 MB / 未知显示 `--`）+ `test_filesize.py` 9 项 |
+| 列头与数据行**逐列对齐** | ✅ | `TestTrackListAlignment::test_columns_align_pixel_by_pixel`（套 QSS 后比较 10 列全局 X，Δ=0）+ `tools/probe_columns.py` 实测全部通过 |
+| 页头层次（标题 > 统计 > 控件） | ✅ | `test_header_shows_total_duration`、`test_header_hides_stats_when_empty`；截图人工审阅 |
+| 固定尺寸控件不再虚胖 | ✅ | `TestThemeSizes::test_icon_buttons_keep_declared_size`（40×40 正圆 / 34×34 / 46×46） |
+| 浮动条完整可见、不压封面 | ✅ | `test_float_bar_fits_player_bar_indent`；截图确认「正在播放/数据目录/设置」文字完整 |
+| 侧边栏昵称不被截断 | ✅ | `test_sidebar_nickname_not_truncated`（56→156px） |
+| 不影响现有功能 | ✅ | 全量回归 15 进程 **212 项全绿**（原有 165 项全保留）；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
+
+**修复的 4 个既有缺陷（排查附带发现）**：
+① **列头错位**：列头比行少 2 个间距位、且 `QListWidget::item` 的 8px margin 与行内容内边距叠加后未在列头补偿；更关键是弹性列宽度受 `sizeHint`（列头「歌曲」vs 行内歌名）影响而漂移。改为同一套槽位 + `sizePolicy=Ignored` 后 Δ 全为 0。
+② **按钮尺寸虚胖**：基础 `QPushButton{padding:6px 10px}` 叠加在 `min/max-width` 上，34→54、40→60、46→66、36→58；播放键 borderRadius 失效变椭圆、行内按钮多占 40px 直接导致列漂移、浮动条超宽。
+③ **浮动条被裁**：绝对定位的子控件不会自动取 `sizeHint` 宽度，`_position_float_bar()` 只 `move` 不 `adjustSize`，宽度停在默认 100px，图标+文字按钮全被父控件裁掉。
+④ **昵称截断**：徽标 `setFixedWidth(56)` 使 `QVBoxLayout` 的最大宽度被压到 56，父布局不再分配余量，「音乐爱好者」被省略成「音乐爱…」。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

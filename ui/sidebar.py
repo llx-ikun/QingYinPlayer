@@ -60,11 +60,22 @@ class Sidebar(QWidget):
         card_col.setSpacing(3)
         self.nickname_label = ElidedLabel("音乐爱好者")
         self.nickname_label.setObjectName("TrackTitle")
+        # 昵称宽度应跟随可用空间，而不是自己的文字宽（否则长昵称会把列卡死）
+        self.nickname_label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                          QSizePolicy.Policy.Preferred)
         badge = QLabel("本地模式")
         badge.setObjectName("Badge")
-        badge.setFixedWidth(56)
+        badge.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         card_col.addWidget(self.nickname_label)
-        card_col.addWidget(badge)
+        # 徽标外面套一层带 stretch 的行：QLabel 定宽/贴文字会把整个 QVBoxLayout
+        # 的最大宽度压到该标签的 sizeHint（实测 66px），父布局便不再分配余量——
+        # 「音乐爱好者」因此被省略成「音乐爱…」。加了 stretch 后列宽不再被卡住。
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(0, 0, 0, 0)
+        badge_row.setSpacing(0)
+        badge_row.addWidget(badge)
+        badge_row.addStretch(1)
+        card_col.addLayout(badge_row)
         card.addLayout(card_col, 1)
         root.addWidget(self.user_card)
         root.addSpacing(6)
@@ -132,7 +143,7 @@ class Sidebar(QWidget):
         import_btn.clicked.connect(self.import_menu_requested.emit)
         root.addWidget(import_btn)
 
-        version = QLabel("v2.1 · 本地音乐与视频")
+        version = QLabel("v2.1.4 · 本地音乐与视频")
         version.setObjectName("Dim")
         root.addWidget(version)
 

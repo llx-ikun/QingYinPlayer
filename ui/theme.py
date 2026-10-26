@@ -136,18 +136,30 @@ QLabel#VideoTitle {{ font-size: 16px; font-weight: bold; color: {t.TEXT}; }}
 /* ---------- 标签 ---------- */
 QLabel {{ background: transparent; }}
 QLabel#Dim {{ color: {t.TEXT_DIM}; }}
-QLabel#Title {{ font-size: 16px; font-weight: bold; }}
 QLabel#Logo {{ font-size: 15px; font-weight: bold; color: {t.TEXT}; }}
 QLabel#TrackTitle {{ font-size: 13px; font-weight: bold; color: {t.TEXT}; }}
 QLabel#TrackSub {{ color: {t.TEXT_DIM}; font-size: 12px; }}
-QLabel#ColumnHeader {{ color: {t.TEXT_DIM}; font-size: 12px; padding: 0px 4px; }}
-QLabel#Avatar {{
-    background: {t.ACCENT}; color: {t.ON_ACCENT}; font-size: 17px; font-weight: bold;
-    border-radius: 21px; min-width: 42px; max-width: 42px; min-height: 42px; max-height: 42px;
-}}
 QLabel#Badge {{
     background: {t.SURFACE_HOVER}; color: {t.TEXT_DIM}; border-radius: 8px;
     padding: 1px 8px; font-size: 11px;
+}}
+
+/* ---------- 列表页页头（v2.1.4：大标题 + 统计 + 排序工具行） ---------- */
+QWidget#PageHeader {{ background: transparent; }}
+QLabel#PageTitle {{ font-size: 20px; font-weight: bold; color: {t.TEXT}; }}
+/* 次级信息统一 12px 灰：统计、排序说明 */
+QLabel#Stats {{ color: {t.TEXT_DIM}; font-size: 12px; }}
+/* 列头：无额外内边距，位置完全由布局槽位决定（与行逐列对齐） */
+QWidget#ColumnHeaderBar {{
+    background: {t.BG}; border-bottom: 1px solid {t.BORDER};
+}}
+QLabel#ColumnHeader {{ color: {t.TEXT_DIM}; font-size: 12px; padding: 0px; }}
+/* 空态：大号音符水印 + 说明文案 */
+QLabel#EmptyGlyph {{ font-size: 44px; color: {t.BORDER}; }}
+QLabel#EmptyText {{ color: {t.TEXT_DIM}; font-size: 13px; }}
+QLabel#Avatar {{
+    background: {t.ACCENT}; color: {t.ON_ACCENT}; font-size: 17px; font-weight: bold;
+    border-radius: 21px; min-width: 42px; max-width: 42px; min-height: 42px; max-height: 42px;
 }}
 QLabel#FmtBadge {{
     border: 1px solid {t.BORDER}; border-radius: 6px; color: {t.TEXT_DIM};
@@ -181,6 +193,12 @@ QPushButton {{
 QPushButton:hover {{ background: {t.SURFACE_HOVER}; }}
 QPushButton:pressed {{ background: {t.SURFACE_ACTIVE}; }}
 QPushButton:disabled {{ color: {t.BORDER}; }}
+/* 固定尺寸的图标按钮必须显式 padding: 0：
+   基础 QPushButton 规则带 6px 10px 内边距，会叠加在 min/max-width 之上，
+   使声明尺寸普遍虚胖 20px（34→54、40→60、46→66、36→58）。
+   后果：播放键 border-radius 不再是圆、行内按钮撑歪列对齐、浮动条超宽被裁。 */
+QPushButton#TitleBtn, QPushButton#ControlBtn, QPushButton#PlayCircle,
+QPushButton#IconNav, QPushButton#ThemeToggle {{ padding: 0px; }}
 QPushButton#Primary {{
     background: {t.ACCENT};
     color: {t.ON_ACCENT};
@@ -229,9 +247,12 @@ QPushButton#ControlBtn {{
 }}
 QPushButton#ControlBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
 QPushButton#ControlBtn[active="true"] {{ color: {t.ACCENT}; }}
-/* 行内心形/更多按钮（小号） */
+/* 行内心形/更多按钮（小号）——padding 必须显式归零：
+   基础 QPushButton 规则带 6px 10px 内边距，会叠加在 min/max-width 之上，
+   实际宽度变成 28+20=48；列头占位槽是 28，于是整表逐列漂移 40px。 */
 QPushButton#RowBtn {{
     border-radius: 14px;
+    padding: 0px;
     min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px;
     color: {t.TEXT_DIM};
 }}
@@ -292,6 +313,25 @@ QComboBox QAbstractItemView {{
     selection-background-color: {t.ACCENT_SOFT};
     padding: 4px;
 }}
+/* 列表排序下拉（v2.1.4）：胶囊形，条目文案即当前排序方式 */
+QComboBox#SortCombo {{
+    background: {t.SURFACE};
+    border: 1px solid {t.BORDER};
+    border-radius: 14px;
+    padding: 4px 8px 4px 12px;
+    min-width: 132px;
+    font-size: 12px;
+    color: {t.TEXT};
+}}
+QComboBox#SortCombo:hover {{ border-color: {t.ACCENT_DIM}; color: {t.ACCENT}; }}
+QComboBox#SortCombo::drop-down {{ border: none; width: 20px; }}
+QComboBox#SortCombo QAbstractItemView {{
+    padding: 5px;
+    border-radius: 10px;
+    selection-background-color: {t.ACCENT_SOFT};
+    selection-color: {t.ACCENT};
+}}
+QComboBox#SortCombo QAbstractItemView::item {{ padding: 5px 8px; border-radius: 6px; }}
 
 /* ---------- 滑块 ---------- */
 QSlider::groove:horizontal {{

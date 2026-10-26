@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-"""通用小部件：省略号标签 / 可点击封面 / 均衡器动效条。"""
+"""通用小部件：省略号标签 / 可点击封面 / 均衡器动效条 / 带箭头的下拉框。"""
 from __future__ import annotations
 
 import contextlib
 import time
 import weakref
 
-from PySide6.QtCore import QRect, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtCore import QPointF, QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtWidgets import QComboBox, QLabel, QWidget
+
+from ui.theme import current_theme
 
 
 class ElidedLabel(QLabel):
@@ -127,3 +129,29 @@ def refresh_equalizers(color: str) -> None:
             bars.update()
         except RuntimeError:  # 已销毁
             pass
+
+
+class ChevronComboBox(QComboBox):
+    """下拉框 + 自绘 V 形展开指示。
+
+    QSS 一旦覆盖 QComboBox::drop-down，Qt 就不再绘制系统箭头——列表的排序框
+    曾因此长得像普通输入框，用户看不出可以点开。这里改为自绘，颜色跟随主题。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(current_theme().TEXT_DIM), 1.6,
+                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                            Qt.PenJoinStyle.RoundJoin))
+        cx = self.width() - 14.0
+        cy = self.height() / 2.0
+        half, drop = 3.8, 2.2
+        painter.drawLine(QPointF(cx - half, cy - drop), QPointF(cx, cy + drop))
+        painter.drawLine(QPointF(cx, cy + drop), QPointF(cx + half, cy - drop))
+        painter.end()

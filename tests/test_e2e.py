@@ -643,6 +643,68 @@ class TestE2EV2(unittest.TestCase):
         self.window._show_page(0)
         self.assertEqual(self.window.track_list.np_btn.property("active"), "false")
 
+    # ---------- 排序（v2.1.4） ----------
+
+    def test_sort_by_size_desc(self):
+        """按文件大小降序：列表顺序 = 实际体积逆序，且「大小」列有值。"""
+        import os
+        self._import()
+        self.window._on_sort_changed("size:desc")
+        sizes = [os.path.getsize(t.path) for t in self.window._displayed]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        # 行内「大小」列与真实体积一致（首行必为最大文件）
+        first = _row(self.window.track_list, 0)
+        self.assertNotEqual(first.size.text(), "--")
+
+    def test_sort_by_duration_asc_then_desc(self):
+        self._import()
+        self.window._on_sort_changed("duration:asc")
+        asc = [t.duration_ms for t in self.window._displayed]
+        self.assertEqual(asc, sorted(asc))
+        self.window._on_sort_changed("duration:desc")
+        desc = [t.duration_ms for t in self.window._displayed]
+        self.assertEqual(desc, sorted(desc, reverse=True))
+
+    def test_recent_import_is_default_and_newest_first(self):
+        """默认排序 = 「最近导入」：新增时间倒序，下拉框文案即当前排序方式。"""
+        self._import()
+        combo = self.window.track_list.sort_combo
+        self.assertEqual(combo.currentData(), "added:desc")
+        self.assertEqual(combo.currentText(), "最近导入")
+        added = [t.added_at for t in self.window._displayed]
+        self.assertEqual(added, sorted(added, reverse=True))
+
+    def test_sort_choice_survives_view_switch(self):
+        """各视图分别记住排序：切走再切回资料库，不会被重置回默认值。"""
+        from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY
+        self._import()
+        self.window._on_sort_changed("size:asc")
+        self.window.set_view(PLAYLIST_FAVORITES)   # 另一个视图用各自默认
+        self.assertEqual(self.window._sort_id, "added:desc")
+        self.window.set_view(PLAYLIST_LIBRARY)     # 切回资料库
+        self.assertEqual(self.window._sort_id, "size:asc")
+        self.assertEqual(self.window.track_list.sort_combo.currentData(), "size:asc")
+
+    def test_playlist_default_sort_keeps_custom_order(self):
+        """歌单默认「自定义顺序」：允许拖拽，不被排序打乱。"""
+        self._import()
+        pid = self.store.create_playlist("排序测试").id
+        ids = [t.id for t in self.store.all_tracks()]
+        self.store.add_to_playlist(pid, ids)
+        self.window.set_view(pid)
+        self.assertEqual(self.window._sort_id, "custom:asc")
+        self.assertTrue(self.window.track_list._drag_enabled)
+        self.window._on_sort_changed("title:asc")
+        self.assertFalse(self.window.track_list._drag_enabled,
+                         "非自定义排序下应关闭拖拽，否则拖完会被排序覆盖")
+
+    def test_header_shows_total_duration(self):
+        self._import()
+        total = sum(t.duration_ms for t in self.window._displayed)
+        self.assertIn("总时长", self.window.track_list.stats_label.text())
+        self.assertEqual(self.window.track_list.count_label.text(), f"共 {len(self.window._displayed)} 首")
+        self.assertGreater(total, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

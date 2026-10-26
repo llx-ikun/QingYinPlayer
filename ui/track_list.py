@@ -1,45 +1,54 @@
 # -*- coding: utf-8 -*-
-"""曲目列表（v2.0 表格形态）：列头 + 行（序号/封面/歌曲/艺人/专辑/格式徽标/时长/爱心/更多）。
+"""曲目列表（v2.1.4）：两行页头 + 列头 + 行（序号/封面/歌曲/艺人/专辑/格式/大小/时长/爱心/更多）。
 
-- 当前行：强调色标题 + 序号位均衡器动效条 + 行底淡强调色；
-- 爱心按钮切换「我喜欢」；更多按钮弹右键同款菜单；
-- 保留：双击播放、拖拽排序（歌单自定义序）、空态、滚动位置保持。
+v2.1.4 视觉与排序改造：
+- 页头拆两行：第一行「大标题 + 播放全部/正在播放」，第二行「统计 + 排序」，
+  标题字号与行距统一，信息层次（标题 > 统计 > 控件）一眼可辨；
+- 列头与行共用同一套槽位（含尺寸常量与间距），修掉此前列头比行右移/左移的错位；
+- 新增「大小」列（文件体积），同时作为排序维度；
+- 排序改为「维度 + 方向」预设下拉（含「最近导入」「文件大小（大→小）」等），
+  选中即确定升降序，控件本身即当前排序的展示；
+- 当前行：强调色标题 + 序号位均衡器动效条；爱心/更多按钮、右键菜单、拖拽排序、
+  空态、滚动位置保持等既有行为保持不变。
 """
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from PySide6.QtCore import QModelIndex, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from app.filesize import format_size
 from app.lyrics import format_time
 from app.models import Track, VIDEO_FORMATS
+from app.sorting import SORT_PRESETS, preset_by_id
 from ui import icons as ic
 from ui.theme import current_theme
-from ui.widgets import ClickableCover, ElidedLabel, EqualizerBars
+from ui.widgets import ChevronComboBox, ClickableCover, ElidedLabel, EqualizerBars
 
-SORT_OPTIONS = [
-    ("custom", "自定义"),
-    ("title", "标题"),
-    ("artist", "艺人"),
-    ("album", "专辑"),
-    ("duration", "时长"),
-    ("added", "添加时间"),
-]
-
-# 列宽（与列头保持一致）
-_LEAD_W, _COVER_W, _FMT_W, _TIME_W, _ROWBTN_W = 22, 40, 52, 44, 28
+# 列宽（列头与行共用同一套常量，保证逐列对齐）
+_LEAD_W, _COVER_W, _FMT_W, _SIZE_W, _TIME_W, _ROWBTN_W = 22, 40, 52, 56, 44, 28
 # 弹性列伸展系数：歌曲 3 / 艺人 2 / 专辑 2
 _STRETCH_TITLE, _STRETCH_ARTIST, _STRETCH_ALBUM = 3, 2, 2
+# 行内容的内边距（见 QSS `QListWidget::item { margin: 2px 8px }` + TrackItemWidget 的 8/6）
+_ITEM_MARGIN_H = 8
+_ROW_PAD_L, _ROW_PAD_R = 8, 6
+_HEAD_PAD_L = _ITEM_MARGIN_H + _ROW_PAD_L          # 16
+_HEAD_PAD_R = _ITEM_MARGIN_H + _ROW_PAD_R          # 14
+_ROW_PAD_V = 6
+_ROW_H = 52
+_SPACING = 8
 
 
 def format_badge(fmt: str) -> tuple[str, str]:
@@ -60,16 +69,44 @@ def format_badge(fmt: str) -> tuple[str, str]:
     return (fmt or "?").upper(), ""
 
 
+def _spacer(width: int) -> QWidget:
+    """固定宽度的占位槽——列头用它对齐行里不带文字的槽位（序号/封面/行按钮）。"""
+    w = QWidget()
+    w.setFixedWidth(width)
+    return w
+
+
+def _elastic(label: QLabel) -> QLabel:
+    """让弹性列的宽度只由 stretch 决定。
+
+    QBoxLayout 是「先按 sizeHint 给底宽，再按 stretch 分余量」；列头文字（"歌曲"）
+    与行内文字（"晴天"）sizeHint 不同，同 stretch 也会算出不同宽度，列会逐列漂移。
+    忽略 sizeHint 后两侧宽度完全一致，列头才能与行严格对齐。
+    """
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    return label
+
+
+def _frozen_label(text: str, width: int, align: Qt.AlignmentFlag) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setObjectName("ColumnHeader")
+    lbl.setFixedWidth(width)
+    lbl.setAlignment(align)
+    return lbl
+
+
 class TrackItemWidget(QWidget):
-    """列表行内容：[序号/动效条] [封面] [歌曲] [艺人] [专辑] [格式] [时长] [♥] [⋯]"""
+    """列表行内容：[序号/动效条] [封面] [歌曲] [艺人] [专辑] [格式] [大小] [时长] [♥] [⋯]"""
+
+    favorite_toggled = Signal(str, bool)  # (track_id, 目标状态)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(52)
+        self.setFixedHeight(_ROW_H)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 6, 6)
-        layout.setSpacing(8)
+        layout.setContentsMargins(_ROW_PAD_L, _ROW_PAD_V, _ROW_PAD_R, _ROW_PAD_V)
+        layout.setSpacing(_SPACING)
 
         self.leading = QLabel()
         self.leading.setObjectName("Dim")
@@ -78,27 +115,34 @@ class TrackItemWidget(QWidget):
         layout.addWidget(self.leading)
 
         self.cover = ClickableCover()
-        self.cover.setFixedSize(_COVER_W - 4, _COVER_W - 4)
+        # 行内容可用高度 = 52 - 6*2 = 40，封面正好铺满，避免缩放下采样
+        self.cover.setFixedSize(_COVER_W, _COVER_W)
         self.cover.setScaledContents(True)
         layout.addWidget(self.cover)
 
         self.title = ElidedLabel()
         self.title.setObjectName("TrackTitle")
-        layout.addWidget(self.title, _STRETCH_TITLE)
+        layout.addWidget(_elastic(self.title), _STRETCH_TITLE)
 
         self.artist = ElidedLabel()
         self.artist.setObjectName("TrackSub")
-        layout.addWidget(self.artist, _STRETCH_ARTIST)
+        layout.addWidget(_elastic(self.artist), _STRETCH_ARTIST)
 
         self.album = ElidedLabel()
         self.album.setObjectName("TrackSub")
-        layout.addWidget(self.album, _STRETCH_ALBUM)
+        layout.addWidget(_elastic(self.album), _STRETCH_ALBUM)
 
         self.fmt = QLabel()
         self.fmt.setObjectName("FmtBadge")
         self.fmt.setFixedSize(_FMT_W, 18)
         self.fmt.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.fmt)
+
+        self.size = QLabel()
+        self.size.setObjectName("Dim")
+        self.size.setFixedWidth(_SIZE_W)
+        self.size.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.size)
 
         self.duration = QLabel()
         self.duration.setObjectName("Dim")
@@ -129,7 +173,8 @@ class TrackItemWidget(QWidget):
 
     # ---------- 数据 ----------
 
-    def set_data(self, track: Track, cover_pixmap, index: int, is_fav: bool) -> None:
+    def set_data(self, track: Track, cover_pixmap, index: int, is_fav: bool,
+                 size: int = 0) -> None:
         self._index = index
         self._tid = track.id
         self._fav = is_fav
@@ -143,6 +188,8 @@ class TrackItemWidget(QWidget):
         self.fmt.style().unpolish(self.fmt)
         self.fmt.style().polish(self.fmt)
         self.fmt.setToolTip(f"格式：{track.fmt or '未知'}")
+        self.size.setText(format_size(size))
+        self.size.setToolTip("文件大小：未知" if size <= 0 else f"文件大小：{format_size(size)}")
         self.duration.setText(format_time(track.duration_ms) if track.duration_ms else "--:--")
         self._apply_fav_icon()
         self.set_current(self._current)
@@ -181,15 +228,13 @@ class TrackItemWidget(QWidget):
     def _on_fav_clicked(self) -> None:
         self.favorite_toggled.emit(self._tid, not self._fav)
 
-    favorite_toggled = Signal(str, bool)  # (track_id, 目标状态)
-
 
 class TrackList(QWidget):
     track_activated = Signal(str, int)      # (track_id, 视图内索引)
     context_action = Signal(str, str)       # (track_id, action)
     reordered = Signal(str, int)            # (track_id, new_index)
     play_all_requested = Signal()
-    sort_changed = Signal(str)
+    sort_changed = Signal(str)              # 排序预设 id，形如 "size:desc"
     now_playing_requested = Signal()
     favorite_toggled = Signal(str, bool)    # (track_id, 目标收藏状态)
 
@@ -197,68 +242,10 @@ class TrackList(QWidget):
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(0)
 
-        # ---- 头部 ----
-        header = QHBoxLayout()
-        header.setContentsMargins(20, 14, 20, 0)
-        header.setSpacing(8)
-        title_col = QVBoxLayout()
-        title_col.setSpacing(1)
-        self.title_label = QLabel("资料库")
-        self.title_label.setObjectName("Title")
-        self.count_label = QLabel("共 0 首")
-        self.count_label.setObjectName("Dim")
-        title_col.addWidget(self.title_label)
-        title_col.addWidget(self.count_label)
-        header.addLayout(title_col)
-        header.addStretch(1)
-
-        self.sort_combo = QComboBox()
-        for key, label in SORT_OPTIONS:
-            self.sort_combo.addItem(label, key)
-        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
-        header.addWidget(self.sort_combo)
-
-        play_all_btn = QPushButton("  播放全部")
-        play_all_btn.setObjectName("Ghost")
-        play_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        ic.bind_icon(play_all_btn, "play", 14, "text")
-        play_all_btn.clicked.connect(self.play_all_requested.emit)
-        header.addWidget(play_all_btn)
-
-        self.np_btn = QPushButton()
-        self.np_btn.setObjectName("ControlBtn")
-        self.np_btn.setToolTip("正在播放")
-        self.np_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        ic.bind_icon(self.np_btn, "note", 16, "dim")
-        self.np_btn.clicked.connect(self.now_playing_requested.emit)
-        header.addWidget(self.np_btn)
-        root.addLayout(header)
-
-        # ---- 列头 ----
-        self._column_header = QWidget()
-        col_header = QHBoxLayout(self._column_header)
-        col_header.setContentsMargins(8, 2, 6, 2)
-        col_header.setSpacing(8)
-        col_header.addSpacing(_LEAD_W)
-        col_header.addSpacing(_COVER_W)
-        for text, stretch in (("歌曲", _STRETCH_TITLE), ("艺人", _STRETCH_ARTIST), ("专辑", _STRETCH_ALBUM)):
-            lbl = QLabel(text)
-            lbl.setObjectName("ColumnHeader")
-            col_header.addWidget(lbl, stretch)
-        fmt_lbl = QLabel("格式")
-        fmt_lbl.setObjectName("ColumnHeader")
-        fmt_lbl.setFixedWidth(_FMT_W)
-        fmt_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        col_header.addWidget(fmt_lbl)
-        time_lbl = QLabel("时长")
-        time_lbl.setObjectName("ColumnHeader")
-        time_lbl.setFixedWidth(_TIME_W)
-        time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        col_header.addWidget(time_lbl)
-        col_header.addSpacing(_ROWBTN_W * 2)
-        root.addWidget(self._column_header)
+        root.addWidget(self._build_page_header())
+        root.addWidget(self._build_column_header())
 
         # ---- 列表 ----
         self.list = QListWidget()
@@ -270,20 +257,131 @@ class TrackList(QWidget):
         self.list.customContextMenuRequested.connect(self._on_menu)
         self.list.itemDoubleClicked.connect(self._on_double_clicked)
         self.list.model().rowsMoved.connect(self._on_rows_moved)
+        # 滚动条出现/消失会改变视口宽度，列头必须跟着让位，否则整列偏 10px
+        self.list.verticalScrollBar().rangeChanged.connect(lambda *_: self._sync_header_inset())
         root.addWidget(self.list, 1)
 
         # ---- 空状态 ----
-        self.empty_label = QLabel("还没有歌曲\n点击左下角「导入音乐」开始吧")
-        self.empty_label.setObjectName("Dim")
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.hide()
-        root.addWidget(self.empty_label)
+        root.addWidget(self._build_empty_state(), 1)
 
         self._tracks: list[Track] = []
         self._current_tid: str | None = None
         self._drag_enabled = False
         self._in_playlist = False
         self._suppress_sort_signal = False
+        self._size_getter: Callable[[Track], int] = lambda _t: 0
+        self._sync_header_inset()
+
+    # ---------- 装配 ----------
+
+    def _build_page_header(self) -> QWidget:
+        head = QWidget()
+        head.setObjectName("PageHeader")
+        outer = QVBoxLayout(head)
+        outer.setContentsMargins(20, 16, 20, 12)
+        outer.setSpacing(10)
+
+        # 第一行：标题 + 主操作
+        row1 = QHBoxLayout()
+        row1.setSpacing(10)
+        self.title_label = QLabel("资料库")
+        self.title_label.setObjectName("PageTitle")
+        row1.addWidget(self.title_label)
+        row1.addStretch(1)
+
+        play_all_btn = QPushButton("  播放全部")
+        play_all_btn.setObjectName("Ghost")
+        play_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ic.bind_icon(play_all_btn, "play", 14, "text")
+        play_all_btn.clicked.connect(self.play_all_requested.emit)
+        self.play_all_btn = play_all_btn
+        row1.addWidget(play_all_btn)
+
+        self.np_btn = QPushButton()
+        self.np_btn.setObjectName("ControlBtn")
+        self.np_btn.setToolTip("正在播放")
+        self.np_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ic.bind_icon(self.np_btn, "note", 16, "dim")
+        self.np_btn.clicked.connect(self.now_playing_requested.emit)
+        row1.addWidget(self.np_btn)
+        outer.addLayout(row1)
+
+        # 第二行：统计 + 排序
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        self.count_label = QLabel("共 0 首")
+        self.count_label.setObjectName("Dim")
+        row2.addWidget(self.count_label)
+
+        self.stats_label = QLabel()
+        self.stats_label.setObjectName("Stats")
+        self.stats_label.hide()
+        row2.addWidget(self.stats_label)
+        row2.addStretch(1)
+
+        sort_caption = QLabel("排序")
+        sort_caption.setObjectName("Stats")
+        row2.addWidget(sort_caption)
+
+        self.sort_combo = ChevronComboBox()
+        self.sort_combo.setObjectName("SortCombo")
+        self.sort_combo.setToolTip("按维度与方向排序")
+        self.sort_combo.setMaxVisibleItems(len(SORT_PRESETS) + 4)
+        prev_group: str | None = None
+        for preset in SORT_PRESETS:
+            if prev_group is not None and preset.group != prev_group:
+                self.sort_combo.insertSeparator(self.sort_combo.count())
+            self.sort_combo.addItem(preset.label, preset.id)
+            prev_group = preset.group
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        row2.addWidget(self.sort_combo)
+        outer.addLayout(row2)
+        return head
+
+    def _build_column_header(self) -> QWidget:
+        self._column_header = QWidget()
+        self._column_header.setObjectName("ColumnHeaderBar")
+        self._column_header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        col = QHBoxLayout(self._column_header)
+        col.setContentsMargins(_HEAD_PAD_L, 2, _HEAD_PAD_R, 2)
+        col.setSpacing(_SPACING)
+        self._col_header_layout = col
+
+        # 槽位与 TrackItemWidget 一一对应（含无文字的占位槽），否则列会整体错位
+        col.addWidget(_spacer(_LEAD_W))
+        col.addWidget(_spacer(_COVER_W))
+        for text, stretch in (("歌曲", _STRETCH_TITLE), ("艺人", _STRETCH_ARTIST),
+                              ("专辑", _STRETCH_ALBUM)):
+            lbl = QLabel(text)
+            lbl.setObjectName("ColumnHeader")
+            col.addWidget(_elastic(lbl), stretch)
+        col.addWidget(_frozen_label("格式", _FMT_W, Qt.AlignmentFlag.AlignCenter))
+        col.addWidget(_frozen_label("大小", _SIZE_W,
+                                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
+        col.addWidget(_frozen_label("时长", _TIME_W,
+                                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
+        col.addWidget(_spacer(_ROWBTN_W))
+        col.addWidget(_spacer(_ROWBTN_W))
+        return self._column_header
+
+    def _build_empty_state(self) -> QWidget:
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(20, 0, 20, 40)
+        layout.setSpacing(8)
+        layout.addStretch(1)
+        glyph = QLabel("♫")
+        glyph.setObjectName("EmptyGlyph")
+        glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(glyph)
+        self.empty_label = QLabel("还没有歌曲\n点击左下角「导入音乐」开始吧")
+        self.empty_label.setObjectName("EmptyText")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.empty_label)
+        layout.addStretch(1)
+        self._empty_box = box
+        box.hide()
+        return box
 
     # ---------- 对外 ----------
 
@@ -292,22 +390,30 @@ class TrackList(QWidget):
         self._in_playlist = in_playlist
         self.set_drag_enabled(drag_enabled)
 
-    def set_header(self, title: str, count: int) -> None:
+    def set_header(self, title: str, count: int, total_ms: int = 0) -> None:
         self.title_label.setText(title)
         self.count_label.setText(f"共 {count} 首")
+        if count and total_ms > 0:
+            self.stats_label.setText(f"· 总时长 {format_time(total_ms)}")
+            self.stats_label.show()
+        else:
+            self.stats_label.clear()
+            self.stats_label.hide()
 
     def set_tracks(self, tracks: list[Track], cover_getter, current_tid: str | None,
-                   favorite_getter=None) -> None:
-        """cover_getter: callable(track) -> QPixmap；favorite_getter: callable(track) -> bool"""
+                   favorite_getter=None, size_getter=None) -> None:
+        """cover_getter: callable(track) -> QPixmap；favorite_getter: callable(track) -> bool
+        size_getter: callable(track) -> 字节数（用于「大小」列）"""
         # 保持滚动位置，避免刷新（如点心）后跳回转
         scroll_value = self.list.verticalScrollBar().value()
         self._tracks = list(tracks)
         self._current_tid = current_tid
+        self._size_getter = size_getter or (lambda _t: 0)
         self.list.clear()
         for i, track in enumerate(self._tracks):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, track.id)
-            item.setSizeHint(QSize(100, 52))
+            item.setSizeHint(QSize(100, _ROW_H))
             self.list.addItem(item)
             row = TrackItemWidget()
             is_fav = bool(favorite_getter(track)) if favorite_getter else False
@@ -316,13 +422,16 @@ class TrackList(QWidget):
                 lambda _=False, t=track, b=row.more_btn: self._show_row_menu(t.id, b))
             row.cover.clicked.connect(
                 lambda _=False, t=track: self.track_activated.emit(t.id, self._tracks.index(t)))
-            row.set_data(track, cover_getter(track), i, is_fav)
+            row.set_data(track, cover_getter(track), i, is_fav, self._size_getter(track))
             self.list.setItemWidget(item, row)
-        self.empty_label.setVisible(not self._tracks)
-        self.list.setVisible(bool(self._tracks))
-        self._column_header.setVisible(bool(self._tracks))
+        has_tracks = bool(self._tracks)
+        self._empty_box.setVisible(not has_tracks)
+        self.list.setVisible(has_tracks)
+        self._column_header.setVisible(has_tracks)
+        self.play_all_btn.setEnabled(has_tracks)
         self.list.verticalScrollBar().setValue(scroll_value)
         self.set_current_track(current_tid)
+        self._sync_header_inset()
 
     def set_current_track(self, tid: str | None) -> None:
         self._current_tid = tid
@@ -341,10 +450,12 @@ class TrackList(QWidget):
         self.list.setDragEnabled(enabled)
         self.list.setAcceptDrops(enabled)
 
-    def set_sort(self, sort_key: str) -> None:
+    def set_sort(self, sort_id: str) -> None:
+        """定位到指定排序预设（旧式纯维度 key 会被归一化，不报错）。"""
+        target = preset_by_id(sort_id).id
         self._suppress_sort_signal = True
         for i in range(self.sort_combo.count()):
-            if self.sort_combo.itemData(i) == sort_key:
+            if self.sort_combo.itemData(i) == target:
                 self.sort_combo.setCurrentIndex(i)
                 break
         self._suppress_sort_signal = False
@@ -357,9 +468,22 @@ class TrackList(QWidget):
 
     # ---------- 内部 ----------
 
+    def _sync_header_inset(self) -> None:
+        """列头右侧让出滚动条宽度：滚动条一出现视口就变窄，列头不跟就会错位。"""
+        scrollbar = self.list.verticalScrollBar()
+        extra = scrollbar.width() if scrollbar.isVisible() else 0
+        self._col_header_layout.setContentsMargins(_HEAD_PAD_L, 2, _HEAD_PAD_R + extra, 2)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_header_inset()
+
     def _on_sort_changed(self, _index) -> None:
-        if not self._suppress_sort_signal:
-            self.sort_changed.emit(self.sort_combo.currentData())
+        if self._suppress_sort_signal:
+            return
+        sort_id = self.sort_combo.currentData()  # 分隔符项为 None
+        if sort_id:
+            self.sort_changed.emit(sort_id)
 
     def _on_double_clicked(self, item: QListWidgetItem) -> None:
         tid = item.data(Qt.ItemDataRole.UserRole)

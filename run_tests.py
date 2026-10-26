@@ -23,6 +23,10 @@ MODULES = [
     "tests.test_store",
     "tests.test_queue",
     "tests.test_player",
+    # v2.1.4 列表排序：预设归一化 + 各维度升降序（纯逻辑）
+    "tests.test_sorting",
+    # v2.1.4 文件大小读取/格式化（「大小」列 + 按大小排序）
+    "tests.test_filesize",
     "tests.test_widgets",
     # test_e2e 两个类必须拆开跑：同一进程内 QMediaPlayer 实例累积到 ~15-20 个
     # 后，Qt 多媒体后端在 offscreen 下会在 C++ 层死锁（stop/setStyleSheet 等

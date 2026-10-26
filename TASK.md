@@ -171,10 +171,43 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **P2** 回归测试 `tests/test_widgets.py::TestPlayerBarLayout`（min≤1100 + 浮动条不压封面）；全量回归 + ruff；重建 EXE
   - 验收：`TestPlayerBarLayout` 2 项通过；全量回归 13 进程 165 项全绿；ruff 干净；双 EXE smoke + 真实平台检查通过
 
+## Q. v2.1.4 列表页视觉统一 + 排序增强（2026-10-26，用户反馈）
+
+> 需求：① 统一列表页的布局、间距、字体与控件样式，提升视觉层次与操作体验；
+> ② 列表支持按大小 / 时长 / 导入时间排序，提供「最近导入」选项，支持升降序切换，
+> 清晰展示当前排序方式，且不影响现有功能。
+>
+> 排查中发现 4 个此前未被发现的真实缺陷（均由截图与几何探测暴露，非需求本身）：
+> ① 列头与数据行**逐列错位**（最多 48px）；② 基础 `QPushButton` 的 padding 叠加到
+> 所有固定尺寸按钮上，声明 34/40/46/36 实际 54/60/66/58；③ 左下浮动条从未 `adjustSize`，
+> 宽度停在默认 100px，文字按钮被裁得只剩图标；④ 侧边栏昵称列被徽标定宽卡死，只显示「音乐爱…」。
+
+- [x] **Q1** 新增 `app/sorting.py`：`SortPreset`（维度+方向+文案+分组）+ `SORT_PRESETS` 13 条 + `sort_tracks()`
+  - 维度覆盖 custom/added/size/duration/title/artist/album，每维度升降序各一条
+  - `最近导入` = `added:desc` 独立条目；旧式纯维度 key（`added`/`title`…）归一化到默认预设
+  - 大小未知（文件丢失/读不到）的条目**升降序下都排最后**
+  - 验收：`tests/test_sorting.py` 17 项
+- [x] **Q2** 新增 `app/filesize.py`：`file_size()`（不可读返回 0）+ `format_size()`（1024 进制，`8.4 MB`/`820 KB`/`--`）
+  - 验收：`tests/test_filesize.py` 9 项（含「最长形态 ≤ 7 字符以适配 56px 列宽」）
+- [x] **Q3** `ui/track_list.py` 结构性重排：页头拆两行（大标题+主操作 / 统计+排序），新增「大小」列，空态改「大音符水印+说明」
+  - `count_label` 保持「共 N 首」原格式（E2E 依赖），总时长放独立 `stats_label`
+  - 验收：`TestTrackListLayout` 10 项
+- [x] **Q4** 列对齐修复：列头改为与行**同一套槽位**（含占位槽与统一 spacing），弹性列 `sizePolicy=Ignored` 使宽度只由 stretch 决定，`QPushButton#RowBtn` padding 归零（28→实际 28，此前 48）
+  - 验收：`TestTrackListAlignment` 2 项（套 QSS 后逐列比较全局 X 坐标，Δ 必须为 0）；`tools/probe_columns.py` 实测 10 列 Δ=0
+- [x] **Q5** `ui/theme.py`：固定尺寸图标按钮统一 `padding: 0`（`#TitleBtn/#ControlBtn/#PlayCircle/#IconNav/#ThemeToggle`）；新增 `#PageHeader/#PageTitle/#Stats/#ColumnHeaderBar/#SortCombo/#EmptyGlyph/#EmptyText` 样式
+  - 验收：`TestThemeSizes::test_icon_buttons_keep_declared_size`（播放键 40×40 正圆、控制按钮 34×34、导航 46×46）
+- [x] **Q6** `ui/widgets.py` 新增 `ChevronComboBox`：QSS 覆盖 `::drop-down` 后系统箭头不再绘制，改为自绘 V 形（颜色随主题）
+- [x] **Q7** `ui/main_window.py`：排序状态改为 `_sort_id`（`维度:方向`）并按视图分别记忆；`_position_float_bar()` 补 `adjustSize()`；主题切换后重算浮动条宽度
+  - 验收：`test_e2e.TestE2EV2` 新增 6 项（大小/时长升降序、最近导入默认、切视图保留排序、歌单默认自定义序且非自定义序时禁用拖拽、总时长统计）
+- [x] **Q8** `ui/sidebar.py`：昵称 `Ignored` 策略 + 徽标外接带 stretch 的行，解除列宽被 sizeHint 卡死
+  - 验收：`TestThemeSizes::test_sidebar_nickname_not_truncated`（昵称 56→156px，完整显示「音乐爱好者」）
+- [x] **Q9** 回归 + 静态检查 + 版本号（`v2.1.4`）+ 重建双 EXE
+  - 验收：全量回归 **15 进程 212 项全绿**；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9
 ```
 
 ## v2.1 验收命令
