@@ -237,12 +237,19 @@ QPushButton#RowBtn {{
 }}
 QPushButton#RowBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
 QPushButton#RowBtn[active="true"] {{ color: {t.HEART}; }}
-/* 浮动工具条按钮 */
-QPushButton#FloatBtn {{
+/* 浮动工具条：主题切换按钮（开关式，checkable） */
+QPushButton#ThemeToggle {{
     background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 18px;
     min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; color: {t.TEXT_DIM};
 }}
-QPushButton#FloatBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; }}
+QPushButton#ThemeToggle:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; }}
+QPushButton#ThemeToggle:checked {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
+/* 浮动工具条：图标 + 文字按钮 */
+QPushButton#FloatTextBtn {{
+    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 16px;
+    padding: 5px 12px 5px 6px; color: {t.TEXT_DIM}; font-size: 12px;
+}}
+QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
 
 /* ---------- 列表 ---------- */
 QListWidget {{

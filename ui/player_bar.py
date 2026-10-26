@@ -61,8 +61,9 @@ class PlayerBar(QWidget):
         self._duration_ms = 0
 
         root = QHBoxLayout(self)
-        # 左侧 190px 缩进：给左下角浮动工具条留位（QQ 音乐同款布局）
-        root.setContentsMargins(190, 8, 14, 8)
+        # 左侧 330px 缩进：给左下角浮动工具条留位（QQ 音乐同款布局；
+        # 浮动条现为「主题切换 + 图标文字按钮」，展开后约 300px 宽）
+        root.setContentsMargins(330, 8, 14, 8)
         root.setSpacing(10)
 
         # ---- 左：封面 + 信息 + 爱心/更多 ----

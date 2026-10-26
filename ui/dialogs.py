@@ -27,6 +27,7 @@ class ImportProgressDialog(QDialog):
         self._done = 0
         self._total = 0
         self._current_name = ""
+        self._finished = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 16)
@@ -52,7 +53,7 @@ class ImportProgressDialog(QDialog):
         btn_row.addStretch(1)
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setObjectName("Ghost")
-        self.cancel_btn.clicked.connect(self.cancelled.emit)
+        self.cancel_btn.clicked.connect(self._on_button)
         btn_row.addWidget(self.cancel_btn)
         root.addLayout(btn_row)
 
@@ -74,10 +75,22 @@ class ImportProgressDialog(QDialog):
             text += f" · {self._current_name}"
         self.detail.setText(text)
 
+    def _on_button(self) -> None:
+        """扫描中点「取消」= 取消导入；完成后点「关闭」= 直接关闭弹窗。
+
+        完成后 worker 已结束，cancelled 信号不会再发出；若仍走 cancel 链路，
+        弹窗将无法关闭（历史 bug）。故完成后改为直接 accept 关闭。
+        """
+        if self._finished:
+            self.accept()
+        else:
+            self.cancelled.emit()
+
     def finish(self, added: int, total: int) -> None:
         self.title_label.setText("导入完成")
         self.detail.setText(f"共处理 {total} 个文件，资料库新增 {added} 首")
         self.cancel_btn.setText("关闭")
+        self._finished = True
         self.bar.setValue(self.bar.maximum())
 
     def reject(self) -> None:  #  ESC 关闭 = 取消导入
