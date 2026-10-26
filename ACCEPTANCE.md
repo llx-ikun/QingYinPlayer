@@ -178,6 +178,17 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 画面渲染（QVideoSink 自绘，非原生 surface） | ✅（🟡 真机） | `shots/dark-video.png`、`shots/light-video.png`、`shots/dark-video_fullscreen.png` 真实 windows 平台；浅色/深色均中文正常、4:3 等比居中、letterbox 正确、全屏无残留 UI |
 | 播放器绑定 sink 长期稳定（切模式不重连媒体源） | ✅ | `test_video_output_bound_to_player` |
 
+### v2.1.1 窗口图标修复（2026-10-26）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 窗口/任务栏图标不再显示「图片找不到」占位符 | ✅ | `tests/test_icon.py::test_generate_produces_spec_compliant_ico`（ICO 目录项 planes/bitcount 全为 0，数据为 PNG）；`main.py` 显式 `setWindowIcon` |
+| 开发态与打包态均能定位并应用图标 | ✅ | `test_icon_resolves_at_runtime`（`_resolve_app_icon` 冻结态取 `sys._MEIPASS`、否则取本地 `assets/app.ico`） |
+| 图标可在运行时被 Qt 正常加载（7 尺寸全非空） | ✅ | `test_qicon_loads_all_sizes` |
+| 全量回归 / 静态检查 | ✅ | 11 进程 **160 项全绿**（157 + 新 3）；`ruff check .` 干净 |
+
+**修复的根因**：`build.py:generate_icon` 写 ICO 目录项时用了 `planes=1, bitcount=32`（BMP 字段值），违反 ICO 规范——PNG 压缩图像这两项必须为 0。资源管理器常容忍，但 Windows 任务栏/标题栏图标加载器更严格会拒绝，叠加 `main.py` 未曾 `setWindowIcon`，窗口图标退化为占位符。已改为 0/0，并对打包产物 `--add-data` 带上图标，运行时显式设置。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

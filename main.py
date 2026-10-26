@@ -8,8 +8,23 @@
 import os
 import sys
 
+from PySide6.QtGui import QIcon
+
 APP_NAME = "轻音播放器"
 APP_VERSION = "1.0.0"
+
+
+def _resolve_app_icon() -> str | None:
+    """定位应用图标：打包后随 --add-data 进入 sys._MEIPASS，开发态用本地 assets。"""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(base, "assets", "app.ico")
+    return path if os.path.exists(path) else None
+
+
+def _apply_app_icon(app) -> None:
+    icon = _resolve_app_icon()
+    if icon:
+        app.setWindowIcon(QIcon(icon))
 
 
 def main() -> int:
@@ -37,6 +52,7 @@ def main() -> int:
 
         app = QApplication(sys.argv[:1])
         app.setApplicationName(APP_NAME)
+        _apply_app_icon(app)
         window = MainWindow()
         window.show()
 
@@ -89,6 +105,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
+    _apply_app_icon(app)
     window = MainWindow()
     window.show()
     return app.exec()

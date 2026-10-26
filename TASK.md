@@ -124,13 +124,29 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
   - 验收：视频用例通过；全量回归全绿；ruff 干净 ✅（11 进程 157 项全绿）
 - [x] **M2** 真实视频样本验证：画面、声音、进度、音乐模式、全屏/退出、返回列表；`tools/shot.py` 增加视频页状态
   - 验收：真实平台截图/本机确认；不支持的编码有友好错误 ✅ 截图已出；真实音频输出待用户本机确认
-- [ ] **M3** 更新 README / DESIGN §13 / ACCEPTANCE / 交付报告；重建双 EXE（smoke + 真实平台检查）
-- [ ] **M4** 提交 `feat/video-v2_1`，合并 main，更新工作区记忆
+- [x] **M3** 更新 README / DESIGN §13 / ACCEPTANCE / 交付报告；重建双 EXE（smoke + 真实平台检查）
+- [x] **M4** 提交 `feat/video-v2_1`，合并 main，更新工作区记忆
+
+## N. 窗口图标修复（2026-10-26，用户反馈「软件打开的图标」为占位符）
+
+> 现象：软件打开后任务栏/标题栏图标显示为「图片找不到」占位符（绿方块+青绿矩形+灰块）。
+> 根因：`build.py:generate_icon` 把 PNG 写进 ICO 时目录项填了 `planes=1, bitcount=32`（BMP 值）；
+> 按 ICO 规范 PNG 压缩图像这两项必须为 0。资源管理器常容忍，但任务栏/标题栏图标加载器更严格会拒绝，
+> 且 `main.py` 从不调用 `setWindowIcon()`，运行时完全依赖该畸形内嵌图标。
+
+- [x] **N1** `build.py:generate_icon`：ICO 目录项改为 `planes=0, bitcount=0`（PNG 规范）
+  - 验收：`tests/test_icon.py::test_generate_produces_spec_compliant_ico` 解析目录项断言全为 0/0 且数据为 PNG
+- [x] **N2** `build.py:_pyinstaller`：增加 `--add-data assets/app.ico;assets`，运行时可用代码定位图标
+  - 验收：`_resolve_app_icon` 在冻结态取到 `sys._MEIPASS/assets/app.ico`
+- [x] **N3** `main.py`：`_resolve_app_icon()` + `_apply_app_icon(app)` 在 `--smoke` 与正常启动两处显式设置窗口图标
+  - 验收：`tests/test_icon.py::test_icon_resolves_at_runtime`；`QIcon` 加载 7 尺寸全非空
+- [x] **N4** 回归测试 `tests/test_icon.py`（3 项）+ 接入 `run_tests.py`；全量回归 + ruff 干净；重建双 EXE
+  - 验收：全量回归 **160 项全绿**（157 + 新 3）；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
 
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4
 ```
 
 ## v2.1 验收命令

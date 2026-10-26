@@ -31,6 +31,8 @@ MODULES = [
     "tests.test_e2e.TestE2EV2",
     # v2.1 视频：后端纯逻辑单测
     "tests.test_video",
+    # 应用图标规范回归（PNG-in-ICO 的 planes/bitcount 必须为 0）
+    "tests.test_icon",
     # v2.1 视频 E2E 独立进程：视频链路会额外创建 QMediaPlayer + QVideoSink，
     # 累积后同样会触发 offscreen 下的 C++ 层 hang，必须单独成进程。
     "tests.test_e2e_video.TestE2EVideo",

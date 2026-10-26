@@ -90,13 +90,16 @@ def generate_icon() -> str:
         images.append(bytes(byte_array))
 
     # ICO = header(6) + N*entry(16) + PNG 数据
+    # 注意：PNG 压缩的图像，ICO 目录项的 planes / bitcount 必须为 0（规范要求）。
+    # 填 1/32（BMP 格式的值）在资源管理器里常被容忍，但任务栏/标题栏的图标
+    # 加载器更严格，会拒绝加载导致窗口图标退化成「图片找不到」占位符。
     header = struct.pack("<HHH", 0, 1, len(images))
     offset = 6 + 16 * len(images)
     entries = b""
     blob = b""
     for size, data in zip(sizes, images, strict=True):
         dim = 0 if size >= 256 else size
-        entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(data), offset)
+        entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 0, 0, len(data), offset)
         blob += data
         offset += len(data)
     with open(ICON_PATH, "wb") as f:
@@ -117,6 +120,8 @@ def _pyinstaller(onefile: bool) -> str:
         "--distpath", os.path.join(HERE, "dist"),
         "--workpath", os.path.join(HERE, "build", "pyinstaller"),
         "--specpath", os.path.join(HERE, "build"),
+        # 把图标随包带上，供运行时 app.setWindowIcon 显式设置（双保险）
+        "--add-data", f"{ICON_PATH}{os.pathsep}assets",
     ]
     if onefile:
         cmd.append("--onefile")
