@@ -2,7 +2,14 @@
 """生成测试夹具：多格式合成音频（含中文文件名、ID3/FLAC/WAVE/Vorbis 标签、内嵌封面、歌词）。
 
 运行：python tests/make_fixtures.py
-产物写入 tests/fixtures/（已被 .gitignore 忽略，可随时重新生成）。
+产物写入 tests/fixtures/_generated/（已被 .gitignore 忽略，可随时重新生成）。
+
+为什么是 `_generated/` 而不是直接写 `tests/fixtures/`：
+用户明确要求 `tests/fixtures/我的音乐` 只能放他自己提供的音乐，不得生成或混入
+合成音频。此前合成夹具直接写进该目录，导致①该目录每次跑测试都被塞满 6 个
+合成文件；②应用导入过这些路径后，夹具被清理时库里留下失效条目。
+生成物统一放到 `_generated/` 子目录后，`我的音乐` 永久归用户支配。
+子目录名仍保留中文（`我的音乐` / `我的视频`），全链路中文路径编码覆盖不丢。
 """
 import os
 import struct
@@ -12,7 +19,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 FIXTURES = os.path.join(HERE, "fixtures")
-MUSIC_DIR = os.path.join(FIXTURES, "我的音乐")   # 中文路径，验证全链路编码
+# 合成产物一律落在 _generated/ 下，绝不写进 tests/fixtures/我的音乐（用户专属目录）
+GENERATED = os.path.join(FIXTURES, "_generated")
+MUSIC_DIR = os.path.join(GENERATED, "我的音乐")   # 中文路径，验证全链路编码
 
 
 def _tone_bytes(freq=440.0, seconds=2.0, rate=44100):
@@ -52,7 +61,8 @@ def _cover_png(size=64):
     p.drawLine(QPointF(u * 0.52, u * 0.22), QPointF(u * 0.74, u * 0.32))
     p.drawLine(QPointF(u * 0.52, u * 0.36), QPointF(u * 0.74, u * 0.46))
     p.end()
-    path = os.path.join(FIXTURES, "_cover.png")
+    path = os.path.join(GENERATED, "_cover.png")
+    os.makedirs(GENERATED, exist_ok=True)
     img.save(path, "PNG")
     return path
 
@@ -96,7 +106,7 @@ LRC_TEXT = """[ti:晴天]
 # 因此用「Qt 合成 JPEG 帧 + 纯 Python 写 RIFF/AVI 容器」的方式造视频。
 # 产物是**真实可播放**的 MJPEG AVI（FFmpeg 后端可解码，实测 duration 正确），
 # 而不是占位文件——这样视频链路的解码、时长、画面输出都能被自动化断言。
-VIDEO_DIR = os.path.join(FIXTURES, "我的视频")
+VIDEO_DIR = os.path.join(GENERATED, "我的视频")
 VIDEO_NAME = "测试短片.avi"
 VIDEO_W, VIDEO_H, VIDEO_FPS, VIDEO_FRAMES = 320, 240, 5, 10
 
@@ -114,7 +124,8 @@ def _jpeg_frame(index: int, width: int, height: int) -> bytes:
     offset = (index * 12) % max(1, width - 40)
     p.fillRect(QRectF(offset, height / 3, 40, 40), QColor("#ffffff"))
     p.end()
-    path = os.path.join(FIXTURES, "_frame.jpg")
+    path = os.path.join(GENERATED, "_frame.jpg")
+    os.makedirs(GENERATED, exist_ok=True)
     img.save(path, "JPEG", 85)
     with open(path, "rb") as f:
         data = f.read()
@@ -269,7 +280,7 @@ def ensure_fixtures() -> str:
         return MUSIC_DIR
 
     os.makedirs(MUSIC_DIR, exist_ok=True)
-    marker = os.path.join(FIXTURES, ".done")
+    marker = os.path.join(GENERATED, ".done")
     cover = _cover_png()
 
     # 1. 带 ID3 标签 + 封面 + 内嵌歌词的 MP3 + 同名 LRC

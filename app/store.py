@@ -31,6 +31,11 @@ DATA_VERSION = 1
 
 class LibraryStore:
     def __init__(self, path: str | None = None):
+        """`path=None` 表示**纯内存** store：`load()` / `save()` 都是空操作。
+
+        注意：写库脚本请显式传 `app.paths.data_file()`，否则会得到一个空的内存
+        store，`save()` 静默不落盘（曾因此让一次「删除曲目」变成无效操作）。
+        """
         self._path = path
         self.tracks: dict[str, Track] = {}
         self.playlists: list[Playlist] = []
@@ -41,6 +46,8 @@ class LibraryStore:
     # ---------- 持久化 ----------
 
     def load(self) -> None:
+        if not self._path:          # 内存 store：没有可读的文件
+            return
         try:
             with open(self._path, "r", encoding="utf-8") as f:
                 data = json.load(f)

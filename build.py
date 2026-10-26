@@ -51,9 +51,14 @@ def _require_ascii_app_name() -> None:
         )
 
 
-def generate_icon() -> str:
-    """用 Qt 绘制渐变圆角 + ♫ 图标，手工拼接多尺寸 ICO。"""
-    os.makedirs(os.path.dirname(ICON_PATH), exist_ok=True)
+def generate_icon(out_path: str | None = None) -> str:
+    """用 Qt 绘制渐变圆角 + ♫ 图标，手工拼接多尺寸 ICO。
+
+    `out_path` 默认为仓库里的 `assets/app.ico`。测试应传临时路径：offscreen 下
+    字体库为空，`♫` 会画成空白/方块，若直接写仓库资产会把正式图标降级覆盖。
+    """
+    icon_path = out_path or ICON_PATH
+    os.makedirs(os.path.dirname(os.path.abspath(icon_path)), exist_ok=True)
     from PySide6.QtCore import Qt, QBuffer, QByteArray, QPointF, QRectF
     from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QLinearGradient, QPainter
 
@@ -102,10 +107,10 @@ def generate_icon() -> str:
         entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 0, 0, len(data), offset)
         blob += data
         offset += len(data)
-    with open(ICON_PATH, "wb") as f:
+    with open(icon_path, "wb") as f:
         f.write(header + entries + blob)
-    print(f"图标已生成: {ICON_PATH} ({len(sizes)} 尺寸, {os.path.getsize(ICON_PATH)} bytes)")
-    return ICON_PATH
+    print(f"图标已生成: {icon_path} ({len(sizes)} 尺寸, {os.path.getsize(icon_path)} bytes)")
+    return icon_path
 
 
 def _pyinstaller(onefile: bool) -> str:
@@ -223,8 +228,7 @@ def _real_platform_check(exe: str, timeout_s: int = 8) -> None:
 def main() -> None:
     _require_ascii_app_name()
     from tests.make_fixtures import ensure_fixtures
-    ensure_fixtures()
-    fixture_audio = os.path.join(HERE, "tests", "fixtures", "我的音乐", "晴天 - 周杰伦.mp3")
+    fixture_audio = os.path.join(ensure_fixtures(), "晴天 - 周杰伦.mp3")
 
     generate_icon()
     # 清理旧产物

@@ -9,8 +9,11 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import struct
+import tempfile
 import unittest
 
 from PySide6.QtCore import QSize
@@ -19,14 +22,44 @@ from PySide6.QtGui import QGuiApplication, QIcon
 import build
 
 
+def _digest(path: str) -> str | None:
+    """文件内容摘要（不存在返回 None），用于断言「仓库资产未被测试改写」。"""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def setUpModule() -> None:
     if QGuiApplication.instance() is None:
         QGuiApplication([])
 
 
 class TestAppIcon(unittest.TestCase):
+    def setUp(self) -> None:
+        """图标一律生成到临时目录。
+
+        回归默认在 offscreen 下跑，字体库为空，`♫` 会画成空白；若直接调用
+        `generate_icon()` 的默认路径，会把仓库里 `assets/app.ico` 覆盖成降级版
+        （打包进 EXE 的就是这张空白图标）。这里固定写临时文件，并断言仓库资产未被改动。
+        """
+        self._tmpdir = tempfile.mkdtemp(prefix="qy_icon_")
+        self._tmp_ico = os.path.join(self._tmpdir, "app.ico")
+        self._repo_ico_before = _digest(build.ICON_PATH)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_generate_does_not_touch_repo_asset(self) -> None:
+        build.generate_icon(self._tmp_ico)
+        self.assertEqual(
+            _digest(build.ICON_PATH),
+            self._repo_ico_before,
+            "测试不得改写仓库里的 assets/app.ico",
+        )
+
     def test_generate_produces_spec_compliant_ico(self) -> None:
-        path = build.generate_icon()
+        path = build.generate_icon(self._tmp_ico)
         self.assertTrue(os.path.exists(path), "图标文件应已生成")
         with open(path, "rb") as f:
             data = f.read()
@@ -48,13 +81,19 @@ class TestAppIcon(unittest.TestCase):
         self.assertEqual(count, 7)
 
     def test_qicon_loads_all_sizes(self) -> None:
-        path = build.generate_icon()
+        path = build.generate_icon(self._tmp_ico)
         icon = QIcon(path)
         sizes = icon.availableSizes()
         self.assertEqual(len(sizes), 7, "QIcon 应能加载全部 7 个尺寸")
         pm = icon.pixmap(QSize(256, 256))
         self.assertFalse(pm.isNull(), "256 尺寸应可渲染为非空 pixmap")
         self.assertEqual(pm.width(), 256)
+
+    def test_repo_icon_is_usable(self) -> None:
+        """仓库里的正式图标必须存在、可被 QIcon 加载，且 7 个尺寸齐全。"""
+        self.assertTrue(os.path.isfile(build.ICON_PATH), "assets/app.ico 应存在")
+        icon = QIcon(build.ICON_PATH)
+        self.assertEqual(len(icon.availableSizes()), 7)
 
     def test_icon_resolves_at_runtime(self) -> None:
         # main._resolve_app_icon 在开发态应能用本地 assets/app.ico

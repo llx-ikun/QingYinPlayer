@@ -70,5 +70,41 @@ class TestMetadata(unittest.TestCase):
         self.assertEqual(meta.duration_ms, 0)
 
 
+class TestFixtureIsolation(unittest.TestCase):
+    """用户专属目录 `tests/fixtures/我的音乐` 不得被合成夹具污染。
+
+    用户明确要求：该目录只能放他本人提供的音乐，不得生成、下载或混入其他音乐。
+    此前 `ensure_fixtures()` 直接往里面写 6 个合成文件，导致
+    ① 每次跑测试该目录都被塞满；
+    ② 应用导入过这些路径后，夹具被清理时库里留下失效条目（「晴天」）。
+    现在合成产物统一落在 `_generated/` 子目录，本组用例锁住该约束。
+    """
+
+    def setUp(self):
+        from tests.make_fixtures import FIXTURES, GENERATED
+
+        self.fixtures_root = FIXTURES
+        self.generated = GENERATED
+        self.user_dir = os.path.join(FIXTURES, "我的音乐")
+
+    def test_generated_audio_is_not_inside_user_dir(self):
+        self.assertTrue(
+            os.path.abspath(MUSIC_DIR).startswith(os.path.abspath(self.generated) + os.sep),
+            f"合成夹具应位于 _generated/ 下，实际为 {MUSIC_DIR}",
+        )
+
+    def test_user_dir_stays_empty_after_ensure(self):
+        # 再调一次（幂等路径）也不得往用户目录写东西
+        ensure_fixtures()
+        self.assertTrue(os.path.isdir(self.user_dir), "用户目录应保留（即使为空）")
+        self.assertEqual(
+            os.listdir(self.user_dir), [], "用户专属目录必须为空，不得混入合成夹具"
+        )
+
+    def test_generated_audio_files_all_exist(self):
+        names = sorted(os.listdir(MUSIC_DIR))
+        self.assertEqual(len(names), 6, f"合成夹具应为 6 个文件，实际 {names}")
+
+
 if __name__ == "__main__":
     unittest.main()
