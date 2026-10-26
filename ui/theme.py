@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""双主题（默认深色 / 浅色 QQ 风）：调色板 + QSS + 主题应用。
+"""双主题（默认深色 / 浅色浅蓝）：调色板 + QSS + 主题应用。
 
 - Theme 为不可变数据类；THEMES 注册全部主题；build_stylesheet(theme) 生成 QSS。
 - apply_theme(app, name)：切换主题 = 换 QSS + 重绘全部主题化图标 + 均衡器条换色。
@@ -40,10 +40,12 @@ DARK = Theme(
 
 LIGHT = Theme(
     name="light",
-    BG="#f5f6f7", SURFACE="#ffffff", SURFACE_HOVER="#f0f1f3", SURFACE_ACTIVE="#e9f6ef",
-    BORDER="#e4e7ec", TEXT="#1f2329", TEXT_DIM="#8a919e",
-    ACCENT="#31c27c", ACCENT_HOVER="#2fbd74", ACCENT_DIM="#1e9e64",
-    ACCENT_SOFT="#e2f5ea", DANGER="#e14a4a", HEART="#ec4141", ON_ACCENT="#ffffff",
+    # 浅蓝风：中性灰底改为淡蓝灰，悬浮/选中/边框都带一点蓝，与深色主题的蓝紫强调色、
+    # 应用图标（蓝紫渐变）保持一致。原先的 QQ 绿（#31c27c）与图标不同色系，已替换。
+    BG="#f3f6fc", SURFACE="#ffffff", SURFACE_HOVER="#eef3fb", SURFACE_ACTIVE="#e3ecfb",
+    BORDER="#dde5f3", TEXT="#1f2329", TEXT_DIM="#7f8b9e",
+    ACCENT="#3b82f6", ACCENT_HOVER="#2f74ea", ACCENT_DIM="#2563eb",
+    ACCENT_SOFT="#e7f0fe", DANGER="#e14a4a", HEART="#ec4141", ON_ACCENT="#ffffff",
 )
 
 THEMES = {"dark": DARK, "light": LIGHT}

@@ -331,5 +331,58 @@ class TestTrackListAlignment(unittest.TestCase):
         self.assertEqual(row.more_btn.width(), _ROWBTN_W)
 
 
+class TestLyricsThemeColor(unittest.TestCase):
+    """歌词常态色必须跟随当前主题（不能被 import 时求值冻结）。
+
+    曾把颜色写在类属性 `_NORMAL = QColor(TEXT_DIM)` 里：模块 import 的那一刻
+    求值（当时是深色主题），之后切浅色主题仍是深灰 —— 浅色背景上对比度不足。
+    改为在用的时候取 `current_theme().TEXT_DIM` 后，本组用例锁住行为。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def tearDown(self):
+        from ui.theme import apply_theme
+        apply_theme(self.app, "dark")
+
+    def _foreground_after(self, theme_name: str):
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel
+        from ui.theme import THEMES, apply_theme
+
+        apply_theme(self.app, theme_name)
+        panel = LyricsPanel()
+        panel.set_synced([LyricLine(time_ms=0, text="第一行")])
+        return panel.list.item(0).foreground().color().name(), THEMES[theme_name].TEXT_DIM
+
+    def test_normal_color_follows_light_theme(self):
+        actual, expected = self._foreground_after("light")
+        self.assertEqual(actual.lower(), expected.lower())
+
+    def test_normal_color_follows_dark_theme(self):
+        actual, expected = self._foreground_after("dark")
+        self.assertEqual(actual.lower(), expected.lower())
+
+    def test_switching_theme_changes_color(self):
+        """同一进程内先浅后深，颜色必须真的变化（冻结 bug 的核心表现）。"""
+        light, _ = self._foreground_after("light")
+        dark, _ = self._foreground_after("dark")
+        self.assertNotEqual(light, dark)
+
+    def test_plain_lyrics_also_themed(self):
+        from ui.lyrics_panel import LyricsPanel
+        from ui.theme import THEMES, apply_theme
+
+        apply_theme(self.app, "light")
+        panel = LyricsPanel()
+        panel.set_plain(["纯文本歌词"])
+        self.assertEqual(
+            panel.list.item(0).foreground().color().name().lower(),
+            THEMES["light"].TEXT_DIM.lower(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

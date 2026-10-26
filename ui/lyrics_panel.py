@@ -7,14 +7,20 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
 from app.lyrics import LyricLine, lyric_index_at
-from ui.theme import ACCENT, TEXT_DIM
+from ui.theme import ACCENT, current_theme
+
+
+def _normal_color() -> QColor:
+    """歌词常态色随主题走。
+
+    不能在类属性里 `QColor(TEXT_DIM)`：那是 import 时求值，模块级 `__getattr__`
+    当时返回的是深色主题的值，之后切到浅色主题仍是旧的灰（被冻结）。
+    """
+    return QColor(current_theme().TEXT_DIM)
 
 
 class LyricsPanel(QWidget):
     seek_requested = Signal(int)   # ms
-
-    _NORMAL = QColor(TEXT_DIM)
-    _PLAYED = QColor("#5a5a6e")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,7 +61,7 @@ class LyricsPanel(QWidget):
             for line in lines:
                 item = QListWidgetItem(line.text)
                 item.setData(Qt.ItemDataRole.UserRole, line.time_ms)
-                item.setForeground(self._NORMAL)
+                item.setForeground(_normal_color())
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.list.addItem(item)
         self._refresh_visibility()
@@ -70,7 +76,7 @@ class LyricsPanel(QWidget):
             for text in lines:
                 item = QListWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, -1)
-                item.setForeground(self._NORMAL)
+                item.setForeground(_normal_color())
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.list.addItem(item)
         self._refresh_visibility()
@@ -120,7 +126,7 @@ class LyricsPanel(QWidget):
             font.setBold(False)
             font.setPointSize(max(9, font.pointSize() - 3) if item.font().bold() else font.pointSize())
             item.setFont(font)
-            item.setForeground(self._NORMAL)
+            item.setForeground(_normal_color())
 
     def _smooth_scroll_to(self, item: QListWidgetItem) -> None:
         bar = self.list.verticalScrollBar()

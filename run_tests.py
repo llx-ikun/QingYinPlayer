@@ -27,6 +27,8 @@ MODULES = [
     "tests.test_sorting",
     # v2.1.4 文件大小读取/格式化（「大小」列 + 按大小排序）
     "tests.test_filesize",
+    # v2.1.5 主题调色板：浅色必须为浅蓝 + 对比度下限（纯逻辑）
+    "tests.test_theme",
     "tests.test_widgets",
     # test_e2e 两个类必须拆开跑：同一进程内 QMediaPlayer 实例累积到 ~15-20 个
     # 后，Qt 多媒体后端在 offscreen 下会在 C++ 层死锁（stop/setStyleSheet 等

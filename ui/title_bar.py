@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""通栏自定义标题栏：logo / 视图导航 / 刷新 / 全局搜索 / 窗口按钮。
+"""通栏自定义标题栏：logo / 刷新 / 全局搜索 / 窗口按钮。
 
 - 空白处拖拽移动窗口（未最大化走原生 startSystemMove，保留贴边；
   最大化时先还原到常规尺寸再跟手移动）；
 - 双击空白处切换最大化；
 - 搜索框为胶囊造型，leading 位放大镜图标。
+
+v2.1.5：按用户要求移除「← 后退 / → 前进」按钮（视图历史仍可用 Alt+←/Alt+→）。
 """
 from __future__ import annotations
 
@@ -22,8 +24,6 @@ from ui.theme import current_theme
 
 
 class TitleBar(QWidget):
-    back_clicked = Signal()
-    forward_clicked = Signal()
     refresh_clicked = Signal()
     search_changed = Signal(str)
     minimize_clicked = Signal()
@@ -50,15 +50,9 @@ class TitleBar(QWidget):
         root.addWidget(logo)
         root.addSpacing(14)
 
-        # ---- 视图导航 ----
-        self.back_btn = self._make_title_btn("back", "后退（Alt+Left）")
-        self.back_btn.clicked.connect(self.back_clicked.emit)
-        self.fwd_btn = self._make_title_btn("forward", "前进（Alt+Right）")
-        self.fwd_btn.clicked.connect(self.forward_clicked.emit)
-        self.refresh_btn = self._make_title_btn("refresh", "刷新当前视图")
+        # ---- 刷新（视图前进/后退按钮已移除，快捷键 Alt+←/Alt+→ 仍可用）----
+        self.refresh_btn = self._make_title_btn("refresh", "刷新当前视图（Alt+← / Alt+→ 可切换视图）")
         self.refresh_btn.clicked.connect(self.refresh_clicked.emit)
-        root.addWidget(self.back_btn)
-        root.addWidget(self.fwd_btn)
         root.addWidget(self.refresh_btn)
         root.addSpacing(10)
 
@@ -89,7 +83,6 @@ class TitleBar(QWidget):
         root.addWidget(self.max_btn)
         root.addWidget(self.close_btn)
 
-        self.set_nav_enabled(False, False)
 
     # ---------- 对外 ----------
 
@@ -100,10 +93,6 @@ class TitleBar(QWidget):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         ic.bind_icon(btn, kind, 15, "dim")
         return btn
-
-    def set_nav_enabled(self, back: bool, forward: bool) -> None:
-        self.back_btn.setEnabled(back)
-        self.fwd_btn.setEnabled(forward)
 
     def set_maximized(self, maximized: bool) -> None:
         ic.set_icon_kind(self.max_btn, "restore" if maximized else "maximize")

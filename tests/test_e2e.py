@@ -446,14 +446,15 @@ class TestE2EV2(unittest.TestCase):
 
     def test_theme_switch_applies_and_persists(self):
         from PySide6.QtWidgets import QApplication
+        from ui.theme import DARK, LIGHT
         app = QApplication.instance()
         self._import()
         self.assertEqual(self.store.settings.theme, "dark")
         self.window._apply_theme("light")
         self.assertEqual(self.store.settings.theme, "light")
-        self.assertIn("#31c27c", app.styleSheet())  # 浅色强调色进入 QSS
+        self.assertIn(LIGHT.ACCENT, app.styleSheet())  # 浅色强调色进入 QSS
         self.window._apply_theme("dark")
-        self.assertIn("#6c8cff", app.styleSheet())
+        self.assertIn(DARK.ACCENT, app.styleSheet())
         # 重启后主题保持
         self.window.close()
         from ui.main_window import MainWindow
@@ -547,10 +548,20 @@ class TestE2EV2(unittest.TestCase):
         self.assertTrue(_spin(lambda: not self.window.isMaximized()))
         self.assertEqual(self.window.title_bar.max_btn.toolTip(), "最大化")
 
-    def test_nav_buttons_disabled_without_history(self):
+    def test_title_bar_has_no_back_forward_buttons(self):
+        """v2.1.5：按用户要求移除标题栏的 ← / → 按钮，刷新 ↻ 保留。"""
         self._import()
-        self.assertFalse(self.window.title_bar.back_btn.isEnabled())
-        self.assertFalse(self.window.title_bar.fwd_btn.isEnabled())
+        self.assertFalse(hasattr(self.window.title_bar, "back_btn"))
+        self.assertFalse(hasattr(self.window.title_bar, "fwd_btn"))
+        self.assertTrue(self.window.title_bar.refresh_btn.isEnabled())
+
+    def test_view_history_shortcuts_still_bound(self):
+        """按钮删了，但视图历史的 Alt+← / Alt+→ 快捷键必须还在（功能不能丢）。"""
+        from PySide6.QtGui import QKeySequence, QShortcut
+        self._import()
+        bound = {s.key().toString() for s in self.window.findChildren(QShortcut)}
+        self.assertIn(QKeySequence("Alt+Left").toString(), bound)
+        self.assertIn(QKeySequence("Alt+Right").toString(), bound)
 
     # ---------- 视图历史 ----------
 
@@ -564,12 +575,18 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(self.window._view_id, "__recent__")
         self.window.go_back()
         self.assertEqual(self.window._view_id, "__library__")
-        self.assertFalse(self.window.title_bar.back_btn.isEnabled())
+        # 已到历史起点：再后退不动
+        self.assertEqual(self.window._history_pos, 0)
+        self.window.go_back()
+        self.assertEqual(self.window._view_id, "__library__")
         self.window.go_forward()
         self.assertEqual(self.window._view_id, "__recent__")
         self.window.go_forward()
         self.assertEqual(self.window._view_id, playlist.id)
-        self.assertFalse(self.window.title_bar.fwd_btn.isEnabled())
+        # 已到历史终点：再前进不动
+        self.assertEqual(self.window._history_pos, len(self.window._history) - 1)
+        self.window.go_forward()
+        self.assertEqual(self.window._view_id, playlist.id)
 
     # ---------- 队列浮层 ----------
 

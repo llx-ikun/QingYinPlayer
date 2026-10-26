@@ -61,7 +61,7 @@ class SettingsDialog(QDialog):
         stats_label.setWordWrap(True)
         root.addWidget(stats_label)
 
-        about = QLabel("轻音播放器 v2.1.4 · 纯本地播放，无需联网")
+        about = QLabel("轻音播放器 v2.1.5 · 纯本地播放，无需联网")
         about.setObjectName("Dim")
         root.addWidget(about)
 

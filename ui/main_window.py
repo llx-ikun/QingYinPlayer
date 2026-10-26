@@ -170,8 +170,6 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         # 标题栏
-        self.title_bar.back_clicked.connect(self.go_back)
-        self.title_bar.forward_clicked.connect(self.go_forward)
         self.title_bar.refresh_clicked.connect(self.refresh_list)
         self.title_bar.search_changed.connect(self._on_search_changed)
         self.title_bar.minimize_clicked.connect(self.showMinimized)
@@ -259,7 +257,6 @@ class MainWindow(QMainWindow):
         self.sidebar.set_nickname(self.store.settings.nickname)
         self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
         self.set_view(self._view_id)
-        self._update_nav_buttons()  # 初始历史 pos=0：前进/后退均禁用
         self.player_bar.set_mode(self.player.mode)
         self.player_bar.update_volume(self.player.volume, self.player.muted)
         self._refresh_counts()
@@ -280,7 +277,6 @@ class MainWindow(QMainWindow):
             del self._history[self._history_pos + 1:]
             self._history.append(view_id)
             self._history_pos = len(self._history) - 1
-            self._update_nav_buttons()
         self._view_id = view_id
         self._sort_id = self._sort_by_view.get(
             view_id, default_sort_for(self._is_playlist_view(view_id)))
@@ -297,17 +293,11 @@ class MainWindow(QMainWindow):
         if self._history_pos > 0:
             self._history_pos -= 1
             self.set_view(self._history[self._history_pos], record=False)
-            self._update_nav_buttons()
 
     def go_forward(self) -> None:
         if 0 <= self._history_pos < len(self._history) - 1:
             self._history_pos += 1
             self.set_view(self._history[self._history_pos], record=False)
-            self._update_nav_buttons()
-
-    def _update_nav_buttons(self) -> None:
-        self.title_bar.set_nav_enabled(self._history_pos > 0,
-                                       self._history_pos < len(self._history) - 1)
 
     def refresh_list(self) -> None:
         tracks = self.store.view_tracks(self._view_id)
