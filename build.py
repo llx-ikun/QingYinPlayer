@@ -190,6 +190,10 @@ def _real_platform_check(exe: str, timeout_s: int = 8) -> None:
     # 用 mkdtemp + ignore_errors 清理：taskkill 后被杀进程的文件句柄释放有延迟，
     # TemporaryDirectory 的上下文退出会因 WinError 32 把异常抛进构建流程。
     td = tempfile.mkdtemp(prefix="qy_realcheck_")
+    # 隔离用户数据目录：不带 --smoke 启动也会加载曲库，退出时可能回写 data.json。
+    # 构建检查绝不能碰用户的真实曲库（%APPDATA%\轻音播放器）。
+    env["APPDATA"] = os.path.join(td, "appdata")
+    os.makedirs(env["APPDATA"], exist_ok=True)
     try:
         out_path = os.path.join(td, "stdout.log")
         err_path = os.path.join(td, "stderr.log")

@@ -41,7 +41,19 @@ def main() -> int:
 
     if "--smoke" in sys.argv:
         # 打包产物自检：创建主窗口；若附带音频文件则验证可解码播放
+        #
+        # 关键：smoke 会走 MainWindow → LibraryStore(add_or_update)，而 store 默认
+        # 落在 %APPDATA%\轻音播放器\data.json —— 也就是**用户真实曲库**。若不隔离，
+        # 每次 build.py 自检都会把合成夹具「晴天」写进用户库，退出时还会覆盖
+        # last_view / last_track_id。这里在创建窗口之前把 APPDATA 指向临时目录。
+        import atexit
+        import shutil
+        import tempfile
         import time
+
+        _smoke_appdata = tempfile.mkdtemp(prefix="qy_smoke_")
+        os.environ["APPDATA"] = _smoke_appdata
+        atexit.register(shutil.rmtree, _smoke_appdata, True)
 
         from PySide6.QtCore import QCoreApplication, QTimer
         from PySide6.QtMultimedia import QMediaPlayer

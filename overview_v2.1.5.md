@@ -60,6 +60,14 @@ VIDEO_DIR = os.path.join(GENERATED, "我的视频")
 
 `generate_icon(out_path=None)` 支持指定输出路径后，测试一律写临时目录，并新增两条断言：仓库资产哈希不变、仓库图标能被 `QIcon` 加载出 7 个尺寸。提交前已用**真实平台**重新生成正式图标，并导出 256 尺寸目视确认（蓝紫渐变 + 白色音符）。
 
+### 7. 构建自检污染用户曲库（`main.py` / `build.py`）
+
+`build.py` 每个产物都会跑 `exe --smoke <音频>` 验证解码，而 smoke 分支走的是 `MainWindow → store.add_or_update()`，store 默认落在 `%APPDATA%\轻音播放器\data.json` —— **用户真实曲库**。结果就是：**每构建一次，曲库里就多一条合成夹具「晴天」**，退出时还会覆盖 `last_view` / `last_track_id`。
+
+这才是「晴天删掉又出现」的最终真相 —— 前两次清理只清了表象，罪魁每次构建都会把它写回来。
+
+现在 `--smoke` 在创建窗口**之前**把 `APPDATA` 指向 `tempfile.mkdtemp()`（`atexit` 清理），`build._real_platform_check()` 也注入隔离的 APPDATA。新增 `tests/test_smoke_isolation.py` 2 项：独立进程跑 `main.py --smoke`，APPDATA 预置一份哨兵 `data.json`，跑完断言**逐字节不变**且没有多出文件。反向验证：临时移除隔离后这 2 项立即失败。
+
 ## 三、验证证据
 
 | 项目 | 结果 |
@@ -68,7 +76,7 @@ VIDEO_DIR = os.path.join(GENERATED, "我的视频")
 | 歌词色跟随主题 | `TestLyricsThemeColor` **4 项**。**反向验证**：把颜色重新冻结到深色值后，其中 3 项立即失败 |
 | 导航按钮已移除 | `test_title_bar_has_no_back_forward_buttons` + `test_view_history_shortcuts_still_bound` |
 | 夹具目录隔离 | `TestFixtureIsolation` **3 项**（生成物不在用户目录 / 再调一次仍为空 / 6 个合成文件齐全） |
-| 全量回归 | **16 个独立进程 232 项全绿** |
+| 全量回归 | **17 个独立进程 234 项全绿** |
 | 静态检查 | `ruff check .` → `All checks passed!` |
 | 双 EXE | `build_v215.log`：onefile + onedir，smoke + 真实平台 8s 存活检查通过 |
 

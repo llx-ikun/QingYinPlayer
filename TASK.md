@@ -229,7 +229,7 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **R5** `ui/lyrics_panel.py`：`_NORMAL = QColor(TEXT_DIM)`（类属性，import 时求值 → 被冻结在深色值）
       改为 `_normal_color()` 在用的时候取 `current_theme().TEXT_DIM`；顺手删掉从未使用的 `_PLAYED`
 - [x] **R6** 回归 + 静态检查 + 版本号 `v2.1.5` + 重建双 EXE
-  - 验收：全量回归 **16 进程 232 项全绿**；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
+  - 验收：全量回归 **17 进程 234 项全绿**；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
 
 - [x] **R7** 测试夹具与用户目录隔离：`tests/make_fixtures.py` 新增 `GENERATED = tests/fixtures/_generated`，
       音频/视频/临时封面/`.done` 全部改落 `_generated/`（中文子目录 `我的音乐`/`我的视频` 保留），
@@ -253,10 +253,21 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
   - 验收：`tests.test_icon` 5 项；提交前用**真实平台**重新生成 `assets/app.ico`（14885 B / 7 尺寸 /
     planes=bitcount=0），并导出 256 尺寸目视确认音符正常
 
+- [x] **R10** 冒烟自检必须与用户曲库隔离：`main.py --smoke` 在创建窗口前把 `APPDATA` 指向
+      `tempfile.mkdtemp()`（`atexit` 清理）；`build._real_platform_check()` 同样注入隔离 APPDATA
+  - 起因：`build.py` 每次都跑 `exe --smoke <音频>`，smoke 分支走 `MainWindow → store.add_or_update()`，
+    store 落在 `%APPDATA%\轻音播放器\data.json` —— **用户真实曲库**。于是每次构建都往库里塞一条
+    合成夹具「晴天」，退出时还覆盖 `last_view`/`last_track_id`；夹具清理后就成了失效条目
+    （「晴天反复出现」的最终真相）
+  - 验收：新增 `tests/test_smoke_isolation.py` 2 项（独立进程跑 `main.py --smoke`，
+    APPDATA 预置哨兵 data.json，断言跑完**逐字节不变**且无额外文件）；
+    **反向验证**：临时移除 APPDATA 隔离后该模块 2 项立即失败；
+    重建一次 EXE 后用户 `data.json` 哈希不变
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10
 ```
 
 ## v2.1 验收命令

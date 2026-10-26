@@ -41,6 +41,9 @@ MODULES = [
     "tests.test_icon",
     # 导入进度对话框：完成后「关闭」按钮失效回归（v2.1.2）
     "tests.test_dialogs",
+    # v2.1.5 冒烟自检隔离：exe --smoke 不得写入用户真实曲库（每次构建都会跑，
+    # 曾把合成夹具「晴天」塞进 %APPDATA%）。独立进程运行 python main.py --smoke。
+    "tests.test_smoke_isolation",
     # v2.1 视频 E2E 独立进程：视频链路会额外创建 QMediaPlayer + QVideoSink，
     # 累积后同样会触发 offscreen 下的 C++ 层 hang，必须单独成进程。
     "tests.test_e2e_video.TestE2EVideo",

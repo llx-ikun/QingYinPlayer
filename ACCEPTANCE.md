@@ -5,7 +5,7 @@
 - ✅ = 已有自动化测试覆盖且当前全绿
 - 🟡 = 沙箱环境无法验证，需用户在真实 Windows 本机确认（原因见「已知限制」）
 
-全量回归（**232 项 / 16 个独立进程**）：
+全量回归（**234 项 / 17 个独立进程**）：
 
 ```bash
 cd music-player
@@ -29,7 +29,7 @@ env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py
 | 6 | 歌词：LRC 匹配/同步/点击跳转/内嵌/手动绑定 | ✅ | `test_lyrics_sync` 等 3 项 + `test_lyrics.py` 18 项 |
 | 7 | 关闭重开：歌单/设置/上次曲目与位置恢复 | ✅ | `test_restart_restores_state` 等 4 项 |
 | 8 | 文件丢失时友好提示不崩溃 | ✅ | `test_missing_file_errors_and_skips` 等 4 项 |
-| 9 | 单测 + E2E 全绿；交付双 EXE | ✅ | **232 项**全绿（16 进程）+ `dist/` 双产物 + smoke |
+| 9 | 单测 + E2E 全绿；交付双 EXE | ✅ | **234 项**全绿（17 进程）+ `dist/` 双产物 + smoke |
 
 ## 逐条明细
 
@@ -258,15 +258,17 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 标题栏**移除 ← 后退 / → 前进**按钮 | ✅ | `test_e2e.TestE2EV2::test_title_bar_has_no_back_forward_buttons`（`back_btn`/`fwd_btn` 已不存在，刷新 ↻ 仍可用）；截图人工审阅 |
 | 视图历史功能**不丢失** | ✅ | `test_view_history_shortcuts_still_bound`：`Alt+←` / `Alt+→` 仍绑定；`_history_pos` 按位置断言，不再依赖按钮 enabled 状态 |
 | 歌词常态色**随主题切换** | ✅ | `tests/test_widgets.py::TestLyricsThemeColor` 4 项（浅色/深色各自等于 `TEXT_DIM`、同进程先浅后深必须变色、纯文本歌词同样跟随）。**反向验证**：把颜色重新冻结在深色值后该组 3 项立即失败 |
-| 不影响现有功能 | ✅ | 全量回归 **16 进程 232 项全绿**（原有 212 项全保留）；`ruff check .` 干净 |
+| 不影响现有功能 | ✅ | 全量回归 **17 进程 234 项全绿**（原有 212 项全保留）；`ruff check .` 干净 |
 | 双 EXE 重建 | ✅ | `build_v215.log`：smoke + 真实平台 8s 存活检查通过 |
 | 图标回归不改写仓库资产 | ✅ | `tests/test_icon.py` 5 项（新增 `test_generate_does_not_touch_repo_asset` + `test_repo_icon_is_usable`）；测试一律写临时目录 |
+| 冒烟自检不写用户曲库 | ✅ | `tests/test_smoke_isolation.py` 2 项（独立进程跑 `main.py --smoke`，APPDATA 预置哨兵 data.json，断言逐字节不变）；**反向验证**：移除隔离后立即 2 红 |
 
 **修复的 3 个根因（都是「看起来改了其实没生效」）**：
 
 1. **歌词颜色被冻结在 import 时**：`_NORMAL = QColor(TEXT_DIM)` 是类属性，在模块导入那一刻求值（当时是深色主题），切到浅色主题后仍是深灰 —— 浅底上对比度不足。改为 `_normal_color()` 在用时取 `current_theme().TEXT_DIM`。
 2. **写库脚本静默不落盘**：`LibraryStore()` 不传路径时 `_path = None`，`load()` / `save()` 全是空操作（`open(None)` 抛的 `TypeError` 被 `except Exception` 吞掉）。所以上一次「删除失效条目」实际什么都没做，曲目自然又出现了。现在 `__init__` 明确写了「`path=None` = 纯内存 store」，`load()` 增加 `if not self._path: return` 前置守卫，不再走异常吞噬分支。
 3. **图标测试改写仓库资产**：回归默认 offscreen，字体库为空，`♫` 画不出来；旧 `test_icon` 直接调 `generate_icon()` 默认路径，把 `assets/app.ico` 从 14885 B 覆盖成 11515 B 的空白图标（打包/提交后即「窗口图标空白」复发）。`generate_icon` 现支持 `out_path`，测试一律写临时目录，并断言仓库资产哈希不变。
+4. **构建自检污染用户曲库**：`build.py` 每个产物都跑 `exe --smoke <音频>`，而 smoke 分支会 `store.add_or_update()` 到 `%APPDATA%\轻音播放器\data.json` —— 用户真实曲库。于是**每次构建都往库里塞一条合成「晴天」**，退出时还覆盖 `last_view`/`last_track_id`。这才是「晴天反复出现」的最终真相（前两次清理只清了表象）。现在 `--smoke` 在创建窗口前把 `APPDATA` 指向临时目录，`_real_platform_check()` 也注入隔离 APPDATA。
 
 ### 测试夹具与用户目录隔离（承接用户 10-26 21:35 要求）
 
