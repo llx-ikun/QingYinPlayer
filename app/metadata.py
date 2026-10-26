@@ -18,6 +18,8 @@ from mutagen.mp3 import MP3
 from mutagen.oggvorbis import OggVorbis
 from mutagen.wave import WAVE
 
+from app.models import VIDEO_FORMATS
+
 
 @dataclass
 class TrackMeta:
@@ -29,6 +31,7 @@ class TrackMeta:
     fmt: str = ""
     picture: bytes | None = None       # 内嵌封面（PNG/JPEG 二进制）
     lyrics_text: str | None = None     # 内嵌歌词原文（LRC 或纯文本）
+    is_video: bool = False             # v2.1：是否视频文件
 
 
 def format_from_path(path: str) -> str:
@@ -113,12 +116,18 @@ def _duration_ms(mf) -> int:
 
 
 def read_track(path: str) -> TrackMeta | None:
-    """读取单个音频文件元数据；文件不存在返回 None。"""
+    """读取单个媒体文件元数据；文件不存在返回 None。
+
+    v2.1：视频文件同样支持。MP4/M4V 走 mutagen 的 MP4 解析（可拿到标题与时长），
+    其余容器（mkv/avi/webm…）mutagen 读不出标签时以文件名兜底，
+    时长由播放器加载后回填（见 ui.main_window._on_duration）。
+    """
     if not path or not os.path.isfile(path):
         return None
 
     meta = TrackMeta(path=path, fmt=format_from_path(path))
     fallback_title = os.path.splitext(os.path.basename(path))[0]
+    meta.is_video = meta.fmt in VIDEO_FORMATS
 
     try:
         mf = mutagen.File(path)
@@ -170,9 +179,9 @@ def read_track(path: str) -> TrackMeta | None:
 
     if not meta.title:
         meta.title = fallback_title
-    if not meta.artist:
+    if not meta.artist and not meta.is_video:
         meta.artist = "未知艺人"
-    if not meta.album:
+    if not meta.album and not meta.is_video:
         meta.album = "未知专辑"
     return meta
 

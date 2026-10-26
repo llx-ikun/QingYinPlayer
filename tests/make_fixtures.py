@@ -5,6 +5,7 @@
 产物写入 tests/fixtures/（已被 .gitignore 忽略，可随时重新生成）。
 """
 import os
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,15 +27,17 @@ def _tone_bytes(freq=440.0, seconds=2.0, rate=44100):
 def _cover_png(size=64):
     """用 QImage 画一张封面图（渐变 + 手绘音符），无需 PIL。
 
-    注意：Qt 的 QFont/QPainter 在没有 QGuiApplication 实例时会直接崩溃
-    （进程退出码 127 且无 traceback），因此这里先确保应用实例存在。
-    音符用路径绘制而非字符：♫ 在部分字体回退下会渲染成豆腐块。
+    注意：Qt 的 QFont/QPainter 在**控件**上绘制时没有应用实例会直接崩溃
+    （进程退出码 127 且无 traceback）；这里只画 QImage，不碰控件，故安全。
+
+    特别注意：**不要**在这里创建 QGuiApplication/QApplication——Qt 全进程只允许
+    一个 QCoreApplication 实例，一旦这里建了 QGuiApplication，测试里的
+    QApplication.instance() 就会返回它，真正的 QApplication 永远建不出来，
+    随后任何 QWidget 构造都会崩（退出码 127、无 traceback）。
     """
     from PySide6.QtCore import QPointF, QRectF
-    from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter
+    from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter
 
-    if QGuiApplication.instance() is None:
-        QGuiApplication(sys.argv[:1])
     img = QImage(size, size, QImage.Format.Format_ARGB32)
     grad = QLinearGradient(QPointF(0, 0), QPointF(size, size))
     grad.setColorAt(0.0, QColor("#5b8cff"))
@@ -86,6 +89,115 @@ LRC_TEXT = """[ti:晴天]
 [00:15.50]♪ 哼唱 ♪
 [00:18.00]合成音频测试行
 """
+
+# ---------- 视频夹具（v2.1） ----------
+
+# 沙箱内没有 ffmpeg CLI，QMediaRecorder 也因无采集设备不可用，
+# 因此用「Qt 合成 JPEG 帧 + 纯 Python 写 RIFF/AVI 容器」的方式造视频。
+# 产物是**真实可播放**的 MJPEG AVI（FFmpeg 后端可解码，实测 duration 正确），
+# 而不是占位文件——这样视频链路的解码、时长、画面输出都能被自动化断言。
+VIDEO_DIR = os.path.join(FIXTURES, "我的视频")
+VIDEO_NAME = "测试短片.avi"
+VIDEO_W, VIDEO_H, VIDEO_FPS, VIDEO_FRAMES = 320, 240, 5, 10
+
+
+def _jpeg_frame(index: int, width: int, height: int) -> bytes:
+    """合成一帧彩色画面并编码为 JPEG 字节流。"""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    img = QImage(width, height, QImage.Format.Format_RGB32)
+    p = QPainter(img)
+    p.fillRect(img.rect(), QColor((index * 25) % 255, 90, 200))
+    p.setPen(QColor("#ffffff"))
+    # 画一个随帧数移动的方块，便于断言「画面确实在更新」
+    offset = (index * 12) % max(1, width - 40)
+    p.fillRect(QRectF(offset, height / 3, 40, 40), QColor("#ffffff"))
+    p.end()
+    path = os.path.join(FIXTURES, "_frame.jpg")
+    img.save(path, "JPEG", 85)
+    with open(path, "rb") as f:
+        data = f.read()
+    os.remove(path)
+    return data
+
+
+def _riff_chunk(tag: bytes, data: bytes) -> bytes:
+    out = tag + struct.pack("<I", len(data)) + data
+    if len(data) % 2:
+        out += b"\x00"   # RIFF 块按偶数字节对齐
+    return out
+
+
+def _riff_list(list_type: bytes, payload: bytes) -> bytes:
+    body = list_type + payload
+    return b"LIST" + struct.pack("<I", len(body)) + body
+
+
+def _build_avi(frames: list[bytes], width: int, height: int, fps: int) -> bytes:
+    """组装 MJPEG AVI（单视频流，无音轨）。"""
+    count = len(frames)
+    max_size = max(len(f) for f in frames)
+
+    avih = struct.pack(
+        "<IIIIIIIIII4I",
+        int(1_000_000 / fps),   # dwMicroSecPerFrame
+        max_size * fps,         # dwMaxBytesPerSec
+        0,                      # dwPaddingGranularity
+        0x10,                   # dwFlags: AVIF_HASINDEX
+        count,                  # dwTotalFrames
+        0,                      # dwInitialFrames
+        1,                      # dwStreams
+        max_size,               # dwSuggestedBufferSize
+        width, height,
+        0, 0, 0, 0,             # dwReserved[4]
+    )
+    strh = struct.pack(
+        "<4s4sIHHIIIIIIIIhhhh",
+        b"vids", b"MJPG",
+        0,                      # dwFlags
+        0, 0,                   # wPriority, wLanguage
+        0,                      # dwInitialFrames
+        1,                      # dwScale
+        fps,                    # dwRate
+        0,                      # dwStart
+        count,                  # dwLength
+        max_size,               # dwSuggestedBufferSize
+        0xFFFFFFFF,             # dwQuality
+        0,                      # dwSampleSize
+        0, 0, width, height,    # rcFrame
+    )
+    strf = struct.pack(
+        "<IiiHH4sIiiII",
+        40, width, height, 1, 24, b"MJPG", width * height * 3, 0, 0, 0, 0,
+    )
+    strl = _riff_list(b"strl", _riff_chunk(b"strh", strh) + _riff_chunk(b"strf", strf))
+    hdrl = _riff_list(b"hdrl", _riff_chunk(b"avih", avih) + strl)
+
+    movi_payload = b""
+    index = b""
+    base = 4   # dwChunkOffset 相对 'movi' FOURCC 起点的偏移
+    for data in frames:
+        offset = base + len(movi_payload)
+        movi_payload += _riff_chunk(b"00dc", data)
+        index += struct.pack("<4sIII", b"00dc", 0x10, offset, len(data))
+    movi = _riff_list(b"movi", movi_payload)
+    idx1 = _riff_chunk(b"idx1", index)
+
+    body = b"AVI " + hdrl + movi + idx1
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def ensure_video_fixture() -> str:
+    """确保视频夹具存在（幂等）；返回视频文件路径。"""
+    path = os.path.join(VIDEO_DIR, VIDEO_NAME)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return path
+    os.makedirs(VIDEO_DIR, exist_ok=True)
+    frames = [_jpeg_frame(i, VIDEO_W, VIDEO_H) for i in range(VIDEO_FRAMES)]
+    with open(path, "wb") as f:
+        f.write(_build_avi(frames, VIDEO_W, VIDEO_H, VIDEO_FPS))
+    return path
 
 
 def _tag_mp3(path, cover_path, with_lyrics=True):
@@ -191,5 +303,7 @@ def ensure_fixtures() -> str:
     print(f"夹具已生成: {MUSIC_DIR}")
     return MUSIC_DIR
 
+
 if __name__ == "__main__":
     ensure_fixtures()
+    print(f"视频夹具已生成: {ensure_video_fixture()}")

@@ -153,6 +153,31 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 文本省略（ElidedLabel） | ✅ | `tests/test_widgets.py` 7 项（延后省略 + full_text + 销毁安全） |
 | 视觉自审（双主题 × 7 状态） | ✅（🟡 真机） | `tools/shot.py` 真实平台截图：深/浅 × {曲库/播放中/歌词/队列/设置/最大化/空库}，中文渲染/布局/激活态/收藏心均正常 |
 
+## v2.1 增量验收（本地视频导入与画面播放）
+
+对照 `DESIGN.md` §13，v2.1 新增项逐条给证据。全量回归 **157 项** 全绿（既有 122 + 新增 35），`ruff check .` 干净。
+
+```bash
+cd music-player
+env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py   # 11 个独立进程，157 项 OK
+env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
+```
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 本地视频导入（mp4/mkv/mov/avi/wmv/flv/webm/m4v） | ✅ | `test_video.py::TestMediaScan`（混合扫描/单文件/旧别名/大写扩展名）、`TestE2EVideo.test_import_video_into_library` |
+| 视频行显示「视频」徽标，音频不回归 | ✅ | `test_video.py::TestBadge`、`TestE2EVideo.test_video_row_shows_video_badge` |
+| 双击视频进入视频页并播放画面 | ✅ | `TestE2EVideo.test_double_click_video_enters_video_page`、`test_video_frames_are_painted`（sink 收帧 + widget 出现非黑像素） |
+| 视频页播放/暂停/切歌/进度/音量/队列/收藏与音频一致 | ✅ | `test_video_supports_favorite_and_queue`、`test_back_to_list_keeps_playing` |
+| 音乐模式 ↔ 视频模式切换不中断声音/进度/曲目 | ✅ | `test_music_mode_switch_keeps_playback`（`current_track`/`position_ms`/`source()` 三重断言） |
+| 自动切歌按曲目类型切视图 | ✅ | `test_auto_switch_view_by_track_type` |
+| 返回列表声音继续 | ✅ | `test_back_to_list_keeps_playing` |
+| `F11` 全屏 / `Esc` 退出；全屏优先于清空搜索 | ✅ | `test_f11_shortcut_toggles_fullscreen`、`test_fullscreen_toggle_keeps_playback`、`test_escape_exits_fullscreen_before_clearing_search` |
+| 时长加载后回填并落盘（mutagen 读不出 AVI 时长） | ✅ | `test_video_duration_backfilled_after_load` |
+| 旧数据无损兼容（无 v2.1 字段的 JSON 仍可用） | ✅ | `test_video.py::TestStoreCompatibility`（旧 JSON 加载 + 视频 roundtrip） |
+| 画面渲染（QVideoSink 自绘，非原生 surface） | ✅（🟡 真机） | `shots/dark-video.png`、`shots/light-video.png`、`shots/dark-video_fullscreen.png` 真实 windows 平台；浅色/深色均中文正常、4:3 等比居中、letterbox 正确、全屏无残留 UI |
+| 播放器绑定 sink 长期稳定（切模式不重连媒体源） | ✅ | `test_video_output_bound_to_player` |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。
@@ -165,3 +190,5 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 - **m4a/aac 无真实样本验证**：mutagen MP4 分支有代码实现但无测试夹具，交付标注 🟡。
 - **声音输出 / 进度自动推进 / 真实字体渲染**：沙箱无音频设备、无音频渲染、offscreen 字体库为空，相关条目需用户本机确认。
 - offscreen 截图中文显示为方块属环境限制，非 UI 缺陷（视觉验证需真实 windows 平台）。
+- **v2.1 视频真实音频输出 / 拖拽手感 / 无边框拖拽贴边**：沙箱无音频渲染与真实显卡链路，画面已用自造 MJPEG AVI 夹具在真实平台验证渲染正确，但「声音」与「拖拽/全屏手感」需用户本机双击确认。
+- **视频编码兼容性以 Qt 自带 FFmpeg 后端为准**：容器可导入 ≠ 该容器内所有编码都可解码；不支持的编码走既有 toast/跳过链，不承诺全部可播。

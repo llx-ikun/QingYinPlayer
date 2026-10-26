@@ -17,6 +17,15 @@ from dataclasses import dataclass, field
 # 支持的音频格式（导入扫描用；实际可播性由播放引擎决定）
 AUDIO_EXTENSIONS = (".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wma")
 
+# 支持的视频格式（v2.1：本地视频导入 + 画面播放）
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v")
+
+# 导入扫描用的全部媒体扩展名
+MEDIA_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
+
+# 视频扩展名（不带点），用于按 fmt 派生 is_video
+VIDEO_FORMATS = frozenset(ext.lstrip(".") for ext in VIDEO_EXTENSIONS)
+
 # 播放模式
 MODE_SEQUENTIAL = "sequential"   # 顺序播放（播完停止）
 MODE_LOOP = "loop"               # 列表循环
@@ -64,11 +73,27 @@ class Track:
         return self.title or os.path.splitext(os.path.basename(self.path))[0]
 
     @property
+    def is_video(self) -> bool:
+        """是否视频文件：按 fmt 派生（旧数据 fmt 为空时回退到路径扩展名）。
+
+        不新增 JSON 字段——视频/音频由文件扩展名唯一确定，旧歌单与设置无需迁移。
+        """
+        fmt = (self.fmt or "").lower()
+        if fmt:
+            return fmt in VIDEO_FORMATS
+        ext = os.path.splitext(self.path or "")[1].lower()
+        return ext in VIDEO_EXTENSIONS
+
+    @property
     def display_artist(self) -> str:
+        if self.is_video and not self.artist:
+            return "本地视频"
         return self.artist or "未知艺人"
 
     @property
     def display_album(self) -> str:
+        if self.is_video and not self.album:
+            return "视频文件"
         return self.album or "未知专辑"
 
     def to_dict(self) -> dict:

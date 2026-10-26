@@ -6,7 +6,7 @@
     python tools/shot.py --out ./shots --theme light   # 浅色
     python tools/shot.py --out ./shots --state playing # 单个状态
 
-状态：library / playing / lyrics / queue / settings / empty / maximized
+状态：library / playing / lyrics / queue / settings / empty / maximized / video / video_fullscreen
 数据：APPDATA 指向隔离临时目录，自动注入夹具曲目 + 示例歌单 + 收藏。
 """
 from __future__ import annotations
@@ -23,7 +23,8 @@ sys.path.insert(0, ROOT)
 DESKTOP_BG = "#dcdcdc"
 
 
-def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "dark") -> None:
+def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "dark",
+                  with_video: bool = False) -> None:
     """在隔离 APPDATA 中构造演示数据。"""
     os.environ["APPDATA"] = appdata
     os.makedirs(appdata, exist_ok=True)
@@ -51,6 +52,11 @@ def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "dark") -
             store.toggle_favorite(ids[0])
             store.toggle_favorite(ids[1])
         store.settings.nickname = "音乐爱好者"
+    if with_video:
+        from tests.make_fixtures import ensure_video_fixture
+        video_path = ensure_video_fixture()
+        if os.path.isfile(video_path):
+            store.add_or_update(read_track(video_path), video_path)
     store.settings.theme = theme
     store.save()
 
@@ -81,18 +87,47 @@ def _spin_loaded(window, timeout_ms: int = 8000) -> None:
         time.sleep(0.05)
 
 
+def _spin_frames(window, timeout_ms: int = 8000) -> int:
+    """等视频画面真的送到 sink（否则截出来是一块黑）。"""
+    import time
+    from PySide6.QtCore import QCoreApplication
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        QCoreApplication.processEvents()
+        if window.now_playing.video_host.frames > 0:
+            # 再多转几圈，确保画面控件完成一次 paint
+            for _ in range(10):
+                QCoreApplication.processEvents()
+            return window.now_playing.video_host.frames
+        time.sleep(0.05)
+    return window.now_playing.video_host.frames
+
+
+def _play_first_video(window) -> bool:
+    """在当前列表里找第一个视频并播放，返回是否成功。"""
+    from app.models import Track
+    ids = [t.id for t in window._displayed if isinstance(t, Track) and t.is_video]
+    if not ids:
+        return False
+    window.player.play_tracks(ids, 0)
+    _spin_loaded(window)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="./shots")
     parser.add_argument("--theme", default=None, choices=["dark", "light"])
     parser.add_argument("--state", default=None,
-                        choices=["library", "playing", "lyrics", "queue", "settings", "empty", "maximized"])
+                        choices=["library", "playing", "lyrics", "queue", "settings", "empty",
+                                 "maximized", "video", "video_fullscreen"])
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     theme = args.theme or "dark"
     states = [args.state] if args.state else \
-        ["library", "playing", "lyrics", "queue", "settings", "maximized", "empty"]
+        ["library", "playing", "lyrics", "queue", "settings", "maximized", "empty",
+         "video", "video_fullscreen"]
 
     from PySide6.QtWidgets import QApplication
 
@@ -105,8 +140,9 @@ def main() -> int:
     shots = []
     for state in states:
         with_tracks = state != "empty"
+        with_video = state in ("video", "video_fullscreen")
         appdata = tempfile.mkdtemp(prefix="qy_shot_")
-        _prepare_data(appdata, with_tracks=with_tracks, theme=theme)
+        _prepare_data(appdata, with_tracks=with_tracks, theme=theme, with_video=with_video)
         window = MainWindow()
         window.resize(1280, 800)
         window.show()
@@ -126,6 +162,22 @@ def main() -> int:
                 window.player.play_tracks(ids, 0)
                 _spin_loaded(window)
             window._show_page(1)
+        elif state == "video":
+            if _play_first_video(window):
+                window._show_page(1)
+                print("   video frames:", _spin_frames(window))
+        elif state == "video_fullscreen":
+            if _play_first_video(window):
+                window._show_page(1)
+                _spin_frames(window)
+                window._set_video_fullscreen(True)
+                _spin_frames(window)
+                overlay = window._fullscreen
+                _capture_to_desktop_bg(overlay, path)
+                shots.append(path)
+                window._exit_video_fullscreen()
+                window.close()
+                continue
         elif state == "queue":
             ids = [t.id for t in window._displayed]
             if ids:

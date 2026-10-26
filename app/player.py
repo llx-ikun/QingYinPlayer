@@ -42,6 +42,7 @@ class PlaybackController(QObject):
         self._queue = PlayQueue(mode=store.settings.play_mode)
         self._current: Track | None = None
         self._pending_seek_ms: int | None = None
+        self._video_sink = None
 
         self._player.playbackStateChanged.connect(self._on_state)
         self._player.positionChanged.connect(self._on_position)
@@ -79,6 +80,45 @@ class PlaybackController(QObject):
     @property
     def media_status(self):
         return self._player.mediaStatus()
+
+    # ---------- 视频输出（v2.1） ----------
+
+    def set_video_output(self, target) -> None:
+        """绑定视频输出目标。
+
+        target 可以是：
+        - QVideoSink：自绘路线（推荐）。画面由 QVideoFrame -> QImage -> QPainter
+          绘制到普通 QWidget，与本项目「无边框 + 半透明 + 圆角 mask」窗口不冲突，
+          也不会引入原生视频 surface 与显卡驱动的组合风险；
+        - QWidget：原生 QVideoWidget 路线（setVideoOutput）；
+        - None：解除绑定（静音画面，音频继续）。
+
+        注意：本方法**不触碰媒体源**，因此切换音/视频显示模式不会中断播放与进度。
+        """
+        from PySide6.QtMultimedia import QVideoSink
+
+        if target is None:
+            self._video_sink = None
+            self._player.setVideoSink(None)
+            self._player.setVideoOutput(None)
+        elif isinstance(target, QVideoSink):
+            self._video_sink = target
+            self._player.setVideoSink(target)
+        else:
+            self._video_sink = None
+            self._player.setVideoOutput(target)
+
+    @property
+    def video_sink(self):
+        """当前绑定的 QVideoSink（未绑定时 None）。"""
+        return self._video_sink
+
+    @property
+    def video_size(self):
+        """当前视频尺寸（未加载时为无效 QSize）。"""
+        if self._video_sink is None:
+            return None
+        return self._video_sink.videoSize()
 
     # ---------- 队列查询（v2.0 队列浮层用） ----------
 

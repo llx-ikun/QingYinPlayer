@@ -8,6 +8,12 @@ v2.0 变更：
 - toast 取代状态栏做瞬时提示；
 - 主题在启动时按 settings.theme 应用，切换即时生效；
 - 「我喜欢」：行内心 / 播放栏心 -> store.toggle_favorite。
+
+v2.1 变更（本地视频导入与画面播放）：
+- 双击视频直接进入视频页（显示画面并播放），双击音频保持原行为；
+- 正在播放页按当前曲目类型在音频/视频子视图间切换，切换不中断播放；
+- 视频全屏走独立浮窗（只针对画面），F11 切换、Esc 退出；
+- 导入入口（文件夹/文件/拖拽）同时接受音频与视频文件。
 """
 from __future__ import annotations
 
@@ -54,6 +60,7 @@ from ui.sidebar import Sidebar
 from ui.title_bar import TitleBar
 from ui.track_list import TrackList
 from ui.now_playing import NowPlayingPage
+from ui.video_view import VideoFullscreenOverlay
 
 SORT_KEYS = {
     "custom": None,
@@ -151,6 +158,10 @@ class MainWindow(QMainWindow):
         self.float_bar = FloatBar(self._root)
         self.float_bar.raise_()
 
+        # 视频全屏浮窗（v2.1）：画面控件临时搬进去，播放器不受影响
+        self._fullscreen = VideoFullscreenOverlay()
+        self._fullscreen.exited.connect(self._exit_video_fullscreen)
+
         # toast（瞬时提示，替代状态栏）
         self._toast_label = QLabel(self._root)
         self._toast_label.setObjectName("Toast")
@@ -218,6 +229,20 @@ class MainWindow(QMainWindow):
         # 正在播放页歌词
         self.now_playing.seek_requested.connect(lambda ms: self.player.seek(ms))
 
+        # 视频页交互（v2.1）
+        self.now_playing.back_to_list_requested.connect(lambda: self._show_page(0))
+        self.now_playing.fullscreen_requested.connect(self._set_video_fullscreen)
+        self.now_playing.audio_view.video_btn.clicked.connect(
+            lambda: self.now_playing.set_media_mode(True))
+        self.now_playing.video_view.music_btn.clicked.connect(
+            lambda: self.now_playing.set_media_mode(False))
+        self.now_playing.video_view.back_btn.clicked.connect(lambda: self._show_page(0))
+        self.now_playing.video_view.full_btn.clicked.connect(
+            lambda: self._set_video_fullscreen(True))
+
+        # 视频画面输出：sink 与播放器长期绑定（切模式不重连，播放不中断）
+        self.player.set_video_output(self.now_playing.video_host.sink)
+
         # 快捷键
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, self.player.toggle_play)
         QShortcut(QKeySequence("Ctrl+Right"), self, self.player.next)
@@ -228,8 +253,10 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Down), self, lambda: self._volume_by(-0.05))
         QShortcut(QKeySequence("Alt+Left"), self, self.go_back)
         QShortcut(QKeySequence("Alt+Right"), self, self.go_forward)
-        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self.title_bar.clear_search)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self._on_escape)
         QShortcut(QKeySequence("Ctrl+F"), self, self.title_bar.focus_search)
+        # 视频全屏：F11 切换，Esc 优先退出全屏
+        QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_video_fullscreen)
 
     def _restore_state(self) -> None:
         self.sidebar.set_nickname(self.store.settings.nickname)
@@ -320,15 +347,49 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         self.track_list.set_now_playing_active(index == 1)
         if index == 1 and self.player.current_track:
+            track = self.player.current_track
             self.now_playing.set_track(
-                self.player.current_track, self.covers.get_pixmap(self.player.current_track, 280, 14))
+                track, self.covers.get_pixmap(track, 280, 14))
+            # 进入正在播放页时按当前曲目类型选择子视图
+            self.now_playing.set_media_mode(track.is_video)
+
+    # ---------- 视频模式 / 全屏（v2.1） ----------
+
+    def _set_video_fullscreen(self, active: bool) -> None:
+        """视频全屏：把画面控件搬进浮窗；播放器与 sink 不动，播放不中断。"""
+        if active:
+            if self.now_playing.media_mode != "video":
+                self.now_playing.set_media_mode(True)
+            self._fullscreen.enter(self.now_playing.video_host.surface)
+        else:
+            self._fullscreen.leave()
+
+    def _exit_video_fullscreen(self) -> None:
+        self._fullscreen.leave()
+        if self.stack.currentIndex() != 1:
+            self._show_page(1)
+
+    def _toggle_video_fullscreen(self) -> None:
+        self._set_video_fullscreen(not self._fullscreen.active)
+
+    def _on_escape(self) -> None:
+        """Esc 优先级：全屏 > 清空搜索。"""
+        if self._fullscreen.active:
+            self._exit_video_fullscreen()
+            return
+        self.title_bar.clear_search()
 
     # ---------- 播放相关 ----------
 
     def _on_track_activated(self, tid: str, index: int) -> None:
         ids = [t.id for t in self._displayed]
-        if tid in ids:
-            self.player.play_tracks(ids, ids.index(tid))
+        if tid not in ids:
+            return
+        track = self.store.get_track(tid)
+        self.player.play_tracks(ids, ids.index(tid))
+        # 视频双击 -> 直接进入视频页显示画面；音频保持原行为（留在列表页）
+        if track is not None and track.is_video:
+            self._show_page(1)
 
     def _play_all(self) -> None:
         ids = [t.id for t in self._displayed]
@@ -339,6 +400,8 @@ class MainWindow(QMainWindow):
     def _on_track_changed(self, track: Track) -> None:
         self.track_list.set_current_track(track.id)
         self.now_playing.set_track(track, self.covers.get_pixmap(track, 280, 14))
+        # 自动切歌后，正在播放页的子视图跟随新曲目类型
+        self.now_playing.set_media_mode(track.is_video)
         self.player_bar.update_track(track.display_title, f"{track.display_artist} · {track.display_album}",
                                      self.covers.get_pixmap(track, 52, 8))
         self.player_bar.set_favorite_active(self.store.is_favorite(track.id))
@@ -356,8 +419,13 @@ class MainWindow(QMainWindow):
         self.player_bar.update_duration(duration_ms)
         track = self.player.current_track
         if track is not None and not track.duration_ms:
+            # v2.1：视频等 mutagen 读不出时长的媒体，加载后回填并落盘
             track.duration_ms = duration_ms
+            self.store.save()
             self.refresh_list()
+            if self.now_playing.media_mode == "video":
+                self.now_playing.set_track(
+                    track, self.covers.get_pixmap(track, 280, 14))
 
     def _cycle_mode(self) -> None:
         self.player.cycle_mode()
@@ -696,14 +764,18 @@ class MainWindow(QMainWindow):
             self._import_files()
 
     def _import_folders(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "选择音乐文件夹")
+        folder = QFileDialog.getExistingDirectory(self, "选择音乐或视频文件夹")
         if folder:
             self._start_import([folder])
 
     def _import_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
-            self, "选择音乐文件", "",
-            "音频文件 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.oga *.opus *.wma);;所有文件 (*)")
+            self, "选择音乐或视频文件", "",
+            "媒体文件 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.oga *.opus *.wma "
+            "*.mp4 *.mkv *.mov *.avi *.wmv *.flv *.webm *.m4v);;"
+            "音频文件 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.oga *.opus *.wma);;"
+            "视频文件 (*.mp4 *.mkv *.mov *.avi *.wmv *.flv *.webm *.m4v);;"
+            "所有文件 (*)")
         if files:
             self._start_import(files)
 

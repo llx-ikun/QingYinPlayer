@@ -1,9 +1,9 @@
 # 「轻音播放器」任务清单（TASK.md）
 
-> 版本：v2.0 UI 改版 · 2026-10-25 · 状态：**待用户评审**
+> 当前版本：v2.1 本地视频导入与画面播放 · 2026-10-26 · 状态：**待用户评审**
 > 规则：按依赖顺序执行；每项完成即勾选并跑该项验证；修复循环 ≤3 轮，超限输出待人工确认项。
-> 基线：`main @ 39d9251`（v1.1，91 项测试全绿，dist 双产物在手）。
-> 迭代分支：`feat/ui-v2`。
+> 基线：`main @ 7c4d5b1`（v2.0，122 项测试全绿，dist 双产物在手）。
+> 迭代分支：`feat/video-v2_1`（用户确认设计后创建）。
 
 ## A. 后端（app/，无 UI 依赖，先行）
 
@@ -90,4 +90,54 @@ env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py                       # 
 env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .                     # 静态检查
 env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out /tmp/shots      # 视觉自审截图
 env -u PYTHONPATH .venv/Scripts/python.exe build.py                            # 双产物重建
+```
+
+---
+
+# v2.1 本地视频导入与画面播放（2026-10-26）
+
+> 范围：本地视频导入、双击显示画面、音乐模式不中断切换、全屏；不做在线视频/转码/缩略图。
+> 设计依据：DESIGN.md §13；开始开发前需用户确认。
+
+## K. 视频识别与播放输出
+
+- [x] **K1** `app/models.py` 增加视频扩展名集合、`MEDIA_EXTENSIONS`、`Track.is_video`；`app/scanner.py` 扫描与导入过滤器支持本地视频
+  - 验收：音频/视频均可扫描，大小写扩展名正确；旧 JSON 无需迁移 ✅（`tests.test_video.TestMediaScan` / `TestTrackIsVideo`）
+- [x] **K2** `app/player.py` 增加 `set_video_output`；视频元数据以文件名兜底，时长加载后回填
+  - 验收：现有音频播放控制测试不变；视频输出接线可测 ✅（`tests.test_player` 20 项无回归；`TestE2EVideo.test_video_output_bound_to_player`）
+- [x] **K3** 后端单测：格式识别、混合媒体扫描、旧数据兼容、视频元数据兜底
+  - ✅ `tests/test_video.py`（20 项全绿）
+
+## L. 视频页与模式切换
+
+- [x] **L1** `ui/now_playing.py` 增加音频/视频子视图：画面层等比黑底、标题信息、返回列表、音乐模式、全屏
+  - 验收：视频/音频布局各自正常；全屏 F11/Esc 行为正确 ✅
+  - **路线修正**：原计划 `QVideoWidget`，实测改为 `QVideoSink` → `QVideoFrame` → `QPainter` 自绘（`ui/video_view.py`）。理由：半透明无边框顶层窗 + 原生 surface（D3D/flip model）易黑框/遮挡/驱动崩溃；自绘可自由 reparent 进全屏浮窗。详见 DESIGN.md §13.3
+- [x] **L2** `ui/main_window.py` 接线：双击视频进入视频页；正在播放按曲目类型显示；音乐模式只切视图不重载媒体；返回列表声音继续
+  - 验收：切换前后 current_track 与 position 不变；自动切歌类型同步 ✅（`TestE2EVideo.test_music_mode_switch_keeps_playback` 三重断言）
+- [x] **L3** `ui/track_list.py` 视频徽标；主题样式/必要图标补齐；不破坏现有音频行与拖拽排序
+  - 验收：双主题下视频页与列表无遮挡、无文字方块 ✅（`shots/dark-video.png`、`shots/light-video.png`）
+
+## M. 测试、视觉与交付
+
+- [x] **M1** 新增视频测试：混合导入、双击视频页、音/视频模式切换、全屏快捷键、断点恢复；视频 E2E 独立类并加入 `run_tests.py`
+  - 验收：视频用例通过；全量回归全绿；ruff 干净 ✅（11 进程 157 项全绿）
+- [x] **M2** 真实视频样本验证：画面、声音、进度、音乐模式、全屏/退出、返回列表；`tools/shot.py` 增加视频页状态
+  - 验收：真实平台截图/本机确认；不支持的编码有友好错误 ✅ 截图已出；真实音频输出待用户本机确认
+- [ ] **M3** 更新 README / DESIGN §13 / ACCEPTANCE / 交付报告；重建双 EXE（smoke + 真实平台检查）
+- [ ] **M4** 提交 `feat/video-v2_1`，合并 main，更新工作区记忆
+
+## v2.1 依赖关系
+
+```
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4
+```
+
+## v2.1 验收命令
+
+```bash
+cd music-player
+env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py
+env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .
+env -u PYTHONPATH .venv/Scripts/python.exe build.py
 ```

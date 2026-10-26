@@ -132,7 +132,7 @@ class Sidebar(QWidget):
         import_btn.clicked.connect(self.import_menu_requested.emit)
         root.addWidget(import_btn)
 
-        version = QLabel("v2.0 · 纯本地播放")
+        version = QLabel("v2.1 · 本地音乐与视频")
         version.setObjectName("Dim")
         root.addWidget(version)
 
