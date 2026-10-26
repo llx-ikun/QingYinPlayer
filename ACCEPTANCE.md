@@ -5,13 +5,17 @@
 - ✅ = 已有自动化测试覆盖且当前全绿
 - 🟡 = 沙箱环境无法验证，需用户在真实 Windows 本机确认（原因见「已知限制」）
 
-全量回归（91 项，本轮由 67 项增至 91 项）：
+全量回归（**232 项 / 16 个独立进程**）：
 
 ```bash
 cd music-player
-QT_QPA_PLATFORM=offscreen env -u PYTHONPATH .venv/Scripts/python.exe -m unittest discover -s tests
-# Ran 91 tests ... OK
+env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py
+# 每个模块（或测试类）独立进程运行，全部 PASS
 ```
+
+> 为什么不用 `unittest discover` 单进程跑：`QMediaPlayer` 在 offscreen 无音频后端下，
+> 同进程累积 ~15-20 个实例后会在 C++ 层偶发死锁。逐模块/逐类独立进程可彻底规避，
+> 属测试环境约束，不是业务缺陷。
 
 ## 总览
 
@@ -25,7 +29,7 @@ QT_QPA_PLATFORM=offscreen env -u PYTHONPATH .venv/Scripts/python.exe -m unittest
 | 6 | 歌词：LRC 匹配/同步/点击跳转/内嵌/手动绑定 | ✅ | `test_lyrics_sync` 等 3 项 + `test_lyrics.py` 18 项 |
 | 7 | 关闭重开：歌单/设置/上次曲目与位置恢复 | ✅ | `test_restart_restores_state` 等 4 项 |
 | 8 | 文件丢失时友好提示不崩溃 | ✅ | `test_missing_file_errors_and_skips` 等 4 项 |
-| 9 | 单测 + E2E 全绿；交付双 EXE | ✅ | 91 项全绿 + `dist/` 双产物 + smoke |
+| 9 | 单测 + E2E 全绿；交付双 EXE | ✅ | **232 项**全绿（16 进程）+ `dist/` 双产物 + smoke |
 
 ## 逐条明细
 
@@ -242,6 +246,43 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 ② **按钮尺寸虚胖**：基础 `QPushButton{padding:6px 10px}` 叠加在 `min/max-width` 上，34→54、40→60、46→66、36→58；播放键 borderRadius 失效变椭圆、行内按钮多占 40px 直接导致列漂移、浮动条超宽。
 ③ **浮动条被裁**：绝对定位的子控件不会自动取 `sizeHint` 宽度，`_position_float_bar()` 只 `move` 不 `adjustSize`，宽度停在默认 100px，图标+文字按钮全被父控件裁掉。
 ④ **昵称截断**：徽标 `setFixedWidth(56)` 使 `QVBoxLayout` 的最大宽度被压到 56，父布局不再分配余量，「音乐爱好者」被省略成「音乐爱…」。
+
+### v2.1.5 浅色主题改浅蓝 + 移除前进/后退按钮（2026-10-26）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 浅色主题为**浅蓝**（不是原来的 QQ 绿） | ✅ | `LIGHT.ACCENT #3b82f6`、`ACCENT_HOVER #2f74ea`、`ACCENT_DIM #2563eb`、`ACCENT_SOFT #e7f0fe`；底板 `#f3f6fc`/`#ffffff`/`#eef3fb`/`#e3ecfb`/`#dde5f3` 全带蓝调 |
+| 浅色与深色主题**同色系** | ✅ | `test_theme.py::test_accent_is_blue_dominant`（两主题强调色均为蓝通道主导）、`test_light_surfaces_are_blue_tinted` |
+| 旧 QQ 绿**无残留** | ✅ | `test_legacy_green_is_gone` 断言 `#31c27c/#2bb673/#31b96f/#2fa86d/#4ecb8c` 不出现在构建出的 QSS 中 |
+| 文字对比度达标 | ✅ | `test_body_text_contrast`（正文 ≥7:1）、`test_accent_readable_on_surface` / `test_on_accent_readable_on_accent`（≥3:1）、`test_accent_soft_is_a_tint_not_a_block` |
+| 标题栏**移除 ← 后退 / → 前进**按钮 | ✅ | `test_e2e.TestE2EV2::test_title_bar_has_no_back_forward_buttons`（`back_btn`/`fwd_btn` 已不存在，刷新 ↻ 仍可用）；截图人工审阅 |
+| 视图历史功能**不丢失** | ✅ | `test_view_history_shortcuts_still_bound`：`Alt+←` / `Alt+→` 仍绑定；`_history_pos` 按位置断言，不再依赖按钮 enabled 状态 |
+| 歌词常态色**随主题切换** | ✅ | `tests/test_widgets.py::TestLyricsThemeColor` 4 项（浅色/深色各自等于 `TEXT_DIM`、同进程先浅后深必须变色、纯文本歌词同样跟随）。**反向验证**：把颜色重新冻结在深色值后该组 3 项立即失败 |
+| 不影响现有功能 | ✅ | 全量回归 **16 进程 232 项全绿**（原有 212 项全保留）；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | `build_v215.log`：smoke + 真实平台 8s 存活检查通过 |
+| 图标回归不改写仓库资产 | ✅ | `tests/test_icon.py` 5 项（新增 `test_generate_does_not_touch_repo_asset` + `test_repo_icon_is_usable`）；测试一律写临时目录 |
+
+**修复的 3 个根因（都是「看起来改了其实没生效」）**：
+
+1. **歌词颜色被冻结在 import 时**：`_NORMAL = QColor(TEXT_DIM)` 是类属性，在模块导入那一刻求值（当时是深色主题），切到浅色主题后仍是深灰 —— 浅底上对比度不足。改为 `_normal_color()` 在用时取 `current_theme().TEXT_DIM`。
+2. **写库脚本静默不落盘**：`LibraryStore()` 不传路径时 `_path = None`，`load()` / `save()` 全是空操作（`open(None)` 抛的 `TypeError` 被 `except Exception` 吞掉）。所以上一次「删除失效条目」实际什么都没做，曲目自然又出现了。现在 `__init__` 明确写了「`path=None` = 纯内存 store」，`load()` 增加 `if not self._path: return` 前置守卫，不再走异常吞噬分支。
+3. **图标测试改写仓库资产**：回归默认 offscreen，字体库为空，`♫` 画不出来；旧 `test_icon` 直接调 `generate_icon()` 默认路径，把 `assets/app.ico` 从 14885 B 覆盖成 11515 B 的空白图标（打包/提交后即「窗口图标空白」复发）。`generate_icon` 现支持 `out_path`，测试一律写临时目录，并断言仓库资产哈希不变。
+
+### 测试夹具与用户目录隔离（承接用户 10-26 21:35 要求）
+
+用户要求 `tests/fixtures/我的音乐` 只能放他本人提供的音乐，不得生成或混入合成音频。此前 `ensure_fixtures()` 直接往该目录写 6 个合成文件 → ① 每次跑测试都被塞满；② 应用导入过这些路径后，夹具被清理时库里留下失效条目。
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 合成夹具**不再写入** `tests/fixtures/我的音乐` | ✅ | `make_fixtures.py` 新增 `GENERATED = tests/fixtures/_generated`，音频/视频/临时封面/`.done` 全部落到 `_generated/` 下 |
+| 用户目录**保持为空** | ✅ | `test_metadata.py::TestFixtureIsolation::test_user_dir_stays_empty_after_ensure`（再调一次 `ensure_fixtures()` 后仍断言 `listdir == []`） |
+| 中文路径编码覆盖不丢 | ✅ | 生成目录仍为 `_generated/我的音乐`、`_generated/我的视频`（中文段保留） |
+| 夹具本身完整 | ✅ | `test_generated_audio_files_all_exist`（6 个文件）；`test_generated_audio_is_not_inside_user_dir` |
+| `build.py` 不再硬编码夹具路径 | ✅ | 改为 `os.path.join(ensure_fixtures(), "晴天 - 周杰伦.mp3")`，随生成目录迁移自动跟随 |
+
+**用户库清理与导入（本机 `%APPDATA%\轻音播放器\data.json`，每次改动前均有 `.bak-<时间戳>` 备份）**：
+- 删除指向已清空夹具的失效条目「晴天」（`tests/fixtures/我的音乐/晴天 - 周杰伦.mp3`），同时清空指向它的 `last_track_id` / `last_position_ms`。
+- 导入用户指定的 `C:\Users\西\Music\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac`：标题 `Blazing Heart (英文版)`、艺人 `Chrissy Costanza/HOYO-MiX`、专辑 `原神-灼火之心 Blazing Heart`、时长 **177.98 s**、格式 `flac`、内嵌封面 83483 B、文件大小 **38.2 MB**（`tools/check_media.py` 实测 `LoadedMedia`、无解码错误）。
 
 ## v2.0 修复的缺陷
 

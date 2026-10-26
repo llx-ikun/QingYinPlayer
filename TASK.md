@@ -204,10 +204,59 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **Q9** 回归 + 静态检查 + 版本号（`v2.1.4`）+ 重建双 EXE
   - 验收：全量回归 **15 进程 212 项全绿**；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
 
+## R. v2.1.5 浅色主题改浅蓝 + 移除前进/后退按钮（2026-10-26，用户反馈）
+
+> 需求①：浅色主题原为 QQ 绿（`#31c27c`），与深色主题的蓝紫强调色（`#6c8cff`）、
+> 应用图标的蓝紫渐变都不同色系，整体不统一 —— 改为**浅蓝**。
+> 需求②：标题栏的「← 后退 / → 前进」按钮不再需要（截图圈出），
+> 视图历史的 `Alt+←` / `Alt+→` 快捷键保留，功能不丢。
+> 附带：歌词面板把主题色算在类属性里（import 时求值），切主题后颜色被冻结。
+
+- [x] **R1** `ui/theme.py`：`LIGHT` 整套换浅蓝 —— `ACCENT #3b82f6`、`ACCENT_HOVER #2f74ea`、
+      `ACCENT_DIM #2563eb`、`ACCENT_SOFT #e7f0fe`；`BG/SURFACE_HOVER/SURFACE_ACTIVE/BORDER`
+      全部带蓝调（`#f3f6fc / #eef3fb / #e3ecfb / #dde5f3`），中性灰→淡蓝灰
+  - 验收：`tests/test_theme.py` 色相与对比度约束（见 R4）
+- [x] **R2** `ui/title_bar.py` + `ui/main_window.py`：移除 `back_btn` / `fwd_btn`、
+      `back_clicked` / `forward_clicked` 信号、`set_nav_enabled()`、`_update_nav_buttons()` 及其 4 处调用；
+      刷新 ↻ 保留
+  - 验收：`test_title_bar_has_no_back_forward_buttons`（按钮已消失、刷新仍可用）
+- [x] **R3** `test_view_history_shortcuts_still_bound`：删按钮后 `Alt+←` / `Alt+→` 必须仍然绑定
+  - 验收：从 `QShortcut` 集合断言两个序列仍在；历史逻辑本身按 `_history_pos` 断言（不再依赖按钮 enabled）
+- [x] **R4** 新增 `tests/test_theme.py`（10 项）：两主题强调色蓝通道主导、浅色底板蓝调、
+      文字/强调色对比度下限（正文 ≥7:1、强调 ≥3:1）、`ACCENT_SOFT` 是淡底、
+      旧 QQ 绿五个色值不得残留在 QSS
+  - 验收：`tests.test_theme` 10 项通过；接入 `run_tests.py`（第 16 个进程）
+- [x] **R5** `ui/lyrics_panel.py`：`_NORMAL = QColor(TEXT_DIM)`（类属性，import 时求值 → 被冻结在深色值）
+      改为 `_normal_color()` 在用的时候取 `current_theme().TEXT_DIM`；顺手删掉从未使用的 `_PLAYED`
+- [x] **R6** 回归 + 静态检查 + 版本号 `v2.1.5` + 重建双 EXE
+  - 验收：全量回归 **16 进程 232 项全绿**；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
+
+- [x] **R7** 测试夹具与用户目录隔离：`tests/make_fixtures.py` 新增 `GENERATED = tests/fixtures/_generated`，
+      音频/视频/临时封面/`.done` 全部改落 `_generated/`（中文子目录 `我的音乐`/`我的视频` 保留），
+      `build.py` 不再硬编码夹具路径
+  - 起因：用户 10-26 21:35 要求 `tests/fixtures/我的音乐` 只能放他本人提供的音乐；
+    此前合成夹具直接写该目录 → 每次跑测试被塞满，且应用导入后夹具被清理会留下失效条目
+  - 验收：`tests/test_metadata.py::TestFixtureIsolation` 3 项（生成物不在用户目录 /
+    再调 `ensure_fixtures()` 后用户目录仍为空 / 6 个合成文件齐全）
+- [x] **R8** 用户库清理与导入：删除指向已清空夹具的失效条目「晴天」（同时清 `last_track_id`/`last_position_ms`），
+      导入用户指定的 `Blazing Heart (英文版).flac`
+  - 根因：`LibraryStore()` 不传路径时 `_path = None`，`load()`/`save()` 全是静默空操作
+    （`open(None)` 的 `TypeError` 被 `except Exception` 吞掉）——上一次「删除」实际没落盘。
+    现 `__init__` 写明「`path=None` = 纯内存 store」，`load()` 增加 `if not self._path: return` 前置守卫
+  - 验收：落盘后库为 2 条（mp4 + flac）；`tools/check_media.py` 确认 FLAC `LoadedMedia`、178s、无解码错误
+
+- [x] **R9** 图标回归不得改写仓库资产：`build.generate_icon(out_path=None)` 支持指定输出路径；
+      `tests/test_icon.py` 全部生成到临时目录，并新增「仓库资产未被改写」「仓库图标可被 QIcon 加载」两项断言
+  - 起因：回归默认 offscreen（字体库为空，`♫` 画不出来），旧 `test_icon` 直接调 `generate_icon()`
+    默认路径，把 `assets/app.ico` 从 14885 B 覆盖成 11515 B 的空白图标 —— 如果把这份文件打包/提交，
+    就是「窗口图标空白」的复发
+  - 验收：`tests.test_icon` 5 项；提交前用**真实平台**重新生成 `assets/app.ico`（14885 B / 7 尺寸 /
+    planes=bitcount=0），并导出 256 尺寸目视确认音符正常
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9
 ```
 
 ## v2.1 验收命令
