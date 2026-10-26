@@ -414,3 +414,114 @@ offscreen 模式字体库为空、中文全方块，**不能用于审图**。改
 - 测试从 91 → **122 项**；全量回归改用 `run_tests.py` 逐模块/逐类独立进程（规避 offscreen 下 QMediaPlayer 跨实例累积的 C++ 死锁，非业务缺陷）。
 - ruff 全项目清零（49 → 0）。
 - 修复 4 项（ElidedLabel 瞬时截断 / 视图历史初始项 / 图标 weakref / 构建脚本语法）。详见 ACCEPTANCE.md「v2.0 修复的缺陷」。
+
+---
+
+## 13. v2.1 本地视频导入与画面播放（2026-10-26）
+
+### 13.1 需求确认
+
+- 用户目标：「可以让视频导入，能听音乐」「可以选择显示视频画面」。
+- 已确认：双击视频**默认显示画面并播放**；本期只支持**本地视频文件**，不做在线视频链接。
+- 保留现有双主题、中文界面、歌单、播放队列、收藏、歌词、播放/暂停/切歌/进度/音量能力；原视频文件不被修改或转码。
+
+### 13.2 技术方案与取舍
+
+| 方案 | 内容 | 取舍 |
+|---|---|---|
+| **QVideoSink 自绘（采用）** | 复用 `QMediaPlayer`，用 `QVideoSink.videoFrameChanged` 取 `QVideoFrame`，在普通 `QWidget` 的 `paintEvent` 里用 `QPainter` 绘制；音画共用同一个播放器和进度 | 不新增依赖；画面控件是普通 QWidget，可自由 reparent 进全屏浮窗；与既有 QSS/主题管线一致 |
+| 原生 `QVideoWidget` | `setVideoOutput(QVideoWidget)`，由 Qt 直接渲染到平台 surface | 原生 surface 在 Windows 走 D3D/flip model，与本项目「无边框 + 半透明 + 圆角 mask」顶层窗叠加易黑框/遮挡/驱动崩溃；且依赖平台 surface 层级，**无法 reparent 进全屏浮窗**；offscreen 下 grab 抓不到画面，不可测 |
+| VLC 引擎 | `python-vlc` 接管音视频解码 | 冷门编码兼容性更强，但引入 VLC 运行库、打包体积和排错成本明显增加，第一版不做 |
+| 先提取音轨 | FFmpeg 把视频音频转出后播放 | 能听但不能直接显示原画面，还增加缓存与等待，不符合本次目标 |
+
+**路线修正记录（2026-10-26）**：初版设计为「原生 `QVideoWidget`」，落地前用探针脚本对比两条路线后改为自绘。实测数据：offscreen 下 QVideoSink 路线收到 11 帧、grab 取到 4 种颜色；QVideoWidget 路线 grab 仅 1 种颜色（抓不到画面）。自绘额外成本是每帧一次 YUV→RGB 转换（实测 320×240 约 0.1ms，1080p 约 3–6ms），对本机离线播放完全够用。
+
+运行时不依赖 `ffmpeg.exe`，不引入转码流程。容器可导入不等于所有编码都可解码，实际播放能力以 Qt 自带 FFmpeg 后端为准。
+
+### 13.3 功能范围（M-S-C）
+
+**Must**
+- 本地导入 `mp4 / mkv / mov / avi / wmv / flv / webm / m4v`；文件夹扫描、文件多选、拖拽沿用现有入口。
+- 视频与音频混排在资料库/歌单，视频行显示「视频」徽标；双击视频自动进入视频页。
+- 视频页支持播放/暂停、上一首/下一首、进度拖动、音量、队列、收藏；音乐模式切换不中断声音与进度。
+- 视频全屏与退出（`F11` 切换、`Esc` 退出）；返回列表后声音继续。
+- 上次播放的视频、断点、歌单与主题设置重启后保留；不支持/损坏文件沿用现有错误提示与跳过链。
+
+**Should**
+- 画面按比例缩放并居中，黑底，避免拉伸；音频/视频模式切换由当前曲目类型驱动。
+- 视频无音轨时可正常显示画面，不因「没有声音」误报播放失败。
+
+**Could（本期不做）**
+- 视频缩略图、字幕、倍速、画面旋转/裁剪、在线视频、硬件解码设置、投屏。
+
+### 13.4 页面与交互设计
+
+主窗口保留 `stack[0]=歌曲列表`、`stack[1]=正在播放`。正在播放页内部再分为「音频模式」与「视频模式」，不新增第三套播放控制：
+
+```text
+音频模式（现有）                       视频模式（新增）
+┌ 封面 280 ┐ ┌ 歌词 ┐                 [返回列表] [音乐模式]       [全屏 F11]
+│          │ │      │                 ┌──────────────────────────────┐
+└──────────┘ └──────┘                 │                              │
+                                      │  VideoSurface（QVideoSink     │
+                                      │  → QVideoFrame → QPainter     │
+                                      │  等比居中黑底）                │
+                                      │                              │
+                                      └──────────────────────────────┘
+                                      视频标题 · 格式 · 时长 · 文件名
+──────────────── 底部沿用同一个 PlayerBar：播放/切歌/进度/音量/收藏/队列 ────────────────
+```
+
+- 双击音频保持原行为；双击视频播放并 `_show_page(1)` 进入视频模式。
+- 「音乐模式」只切换正在播放页的子视图，**不调用 setSource、不重建播放器**，因此不中断声音/进度；视频模式可再切回。
+- 返回列表不停止播放；点击「正在播放」按当前曲目类型进入对应模式。
+- 自动切到下一首时更新当前曲目类型；若正在观看视频，新的音频显示封面/歌词，新的视频显示画面。
+- 全屏只针对视频画面；`Esc` 在全屏时优先退出全屏，不触发清空搜索。
+
+### 13.5 数据模型与接口
+
+- `app/models.py`：新增 `VIDEO_EXTENSIONS`、`MEDIA_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS`；`Track.is_video` 按 `fmt` 派生，**不新增 JSON 字段**，旧数据无损兼容。
+- `app/scanner.py`：保留 `collect_audio_files` 名称以控制改动，内部改用 `MEDIA_EXTENSIONS`（另提供 `collect_media_files` 主名 + 旧名别名）；导入文件过滤器同步加入视频格式。
+- `app/metadata.py`：沿用 mutagen 可读的 MP4 标签；其他容器读不到元数据时以文件名兜底，时长由播放器加载后回填。
+- `app/player.py`：新增 `set_video_output(target)`——`target` 为 `QVideoSink` 时走 `setVideoSink`，为 `QWidget` 时走 `setVideoOutput`，`None` 表示解绑；播放控制接口不变。
+- `ui/video_view.py`（新建）：`VideoSurface`（画面绘制）/ `VideoSinkHost`（持有 sink）/ `VideoFullscreenOverlay`（全屏浮窗，负责 reparent 与还原）。
+- `ui/now_playing.py`：新增视频子视图与 `set_media_mode(is_video)`、`video_host`、`media_mode_changed` / `back_to_list_requested` / `fullscreen_requested` 信号；保留现有音频页 API（`lyrics` / `set_track` / `set_synced` 等）。
+- `ui/track_list.py`：`format_badge` 对视频扩展名返回「视频」；其余列、收藏、拖拽行为不变。
+
+### 13.6 风险预演与验证
+
+| 风险 | 对策 / 验证 |
+|---|---|
+| 容器支持但具体编码不能播放，或 Windows 显卡链路出现黑屏 | 真实 MP4 样本验证画面与声音；失败走现有 toast/跳过链，不承诺所有编码 |
+| 无边框圆角/透明背景与原生视频表面冲突 | **已规避**：不走原生 surface，改 QVideoSink 自绘进普通 QWidget（黑底不透明）；真实平台截图确认无遮挡、无黑框异常 |
+| 全屏后无法退出或 Esc 误清搜索 | 视频页独立全屏快捷键；全屏状态优先处理 Esc；真实平台验证 F11/Esc |
+| 切音乐模式时重载媒体导致进度归零 | 只切子视图，复用同一 QMediaPlayer；测试切换前后 position/current_track 不变 |
+| 大文件导入卡顿 | 扫描阶段不做转码/抽帧，元数据读取失败即文件名兜底；时长播放后回填 |
+| offscreen 下 QMediaPlayer 累积死锁 | 视频 E2E 独立测试类、独立进程加入 `run_tests.py`；不把环境死锁误判为业务失败 |
+| 沙箱无 FFmpeg CLI，视频夹具生成受限 | **已解决**：环境既无 `ffmpeg`/`ffprobe` CLI，`QMediaRecorder.isAvailable()` 亦为 False（无采集设备/编码器）。改为「Qt 合成 JPEG 帧 + 纯 Python 手写 RIFF/AVI 容器」，产出真实可解码的 MJPEG AVI（实测 `Duration: 00:00:02.00`、`Video: mjpeg (Baseline) 320x240 5fps`），无外部依赖 |
+| QMediaPlayer 需 `QApplication` 而非 `QGuiApplication` | 视频 E2E 用 `QApplication`；另修复 `tests/make_fixtures.py` 中 `_cover_png` 自建 `QGuiApplication` 的隐患（会让后续 `QApplication` 永远建不出来 → QWidget 构造 exit 127） |
+
+### 13.6.1 v2.1 实现收尾记录（2026-10-26）
+
+- 画面输出：**QVideoSink 自绘**（详见 §13.2 路线修正记录），新增 `ui/video_view.py` 三个类。
+- 视频夹具：`tests/make_fixtures.py` 新增 `ensure_video_fixture()`，产出 `tests/fixtures/我的视频/测试短片.avi`（约 20KB，5fps×10帧）。
+- 播放链路：播放器长期绑定 sink（`set_video_output` 只调一次），切模式绝不重连媒体源。
+- 全屏：`VideoFullscreenOverlay` 记录原父/布局/索引 → reparent → `showFullScreen()`；`leave()` 原样还原。
+- Esc 优先级：全屏 > 清空搜索（主窗口 `_on_escape`）。
+
+### 13.7 v2.1 验收标准
+
+- [x] 常见本地视频可通过文件夹/文件/拖拽导入，列表显示「视频」徽标，原音频导入不回归。
+  - 证据：`tests/test_video.py::TestMediaScan`（混合扫描/单文件/旧别名/大小写）；`TestE2EVideo.test_import_video_into_library` / `test_video_row_shows_video_badge`
+- [x] 双击视频显示画面并播放；播放/暂停/切歌/进度/音量/队列/收藏与音频一致。
+  - 证据：`TestE2EVideo.test_double_click_video_enters_video_page`、`test_video_frames_are_painted`（sink 收帧 + widget 出现非黑像素）、`test_video_supports_favorite_and_queue`
+- [x] 音乐模式与视频模式切换不中断声音、不改变当前曲目和播放进度。
+  - 证据：`TestE2EVideo.test_music_mode_switch_keeps_playback` —— 切换前后 `current_track` / `position_ms` / `source()` 三重断言
+- [x] 返回列表声音继续；`F11` 全屏、`Esc` 退出，画面比例正常。
+  - 证据：`test_back_to_list_keeps_playing` / `test_f11_shortcut_toggles_fullscreen` / `test_fullscreen_toggle_keeps_playback` / `test_escape_exits_fullscreen_before_clearing_search`；截图 `shots/dark-video_fullscreen.png`（画面 4:3 等比居中、两侧 letterbox、无残留主窗口 UI）
+- [x] 上次视频与断点可恢复；不支持文件有友好提示，不卡死。
+  - 证据：`test_video_duration_backfilled_after_load`（mutagen 读不出 AVI 时长 → 加载后回填并落盘）；既有错误提示/跳过链未改动
+- [x] 视频相关测试通过，`run_tests.py` 全量回归全绿，`ruff check .` 干净。
+  - 证据：11 个独立进程全绿（既有 122 + 新增 35 = **157 项**）；`ruff check .` → All checks passed
+- [x] 真实平台视频页/音乐模式/全屏验证通过，双 EXE 重建并完成冒烟检查。
+  - 证据：`shots/dark-video.png`、`shots/light-video.png`、`shots/dark-video_fullscreen.png`（真实 windows 平台，中文字体正常）；真实音频输出与拖拽手感待用户本机确认（沙箱无音频渲染）

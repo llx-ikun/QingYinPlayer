@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.lyrics import format_time
-from app.models import Track
+from app.models import Track, VIDEO_FORMATS
 from ui import icons as ic
 from ui.theme import current_theme
 from ui.widgets import ClickableCover, ElidedLabel, EqualizerBars
@@ -45,6 +45,8 @@ _STRETCH_TITLE, _STRETCH_ARTIST, _STRETCH_ALBUM = 3, 2, 2
 def format_badge(fmt: str) -> tuple[str, str]:
     """格式 -> (徽标文案, tier)；tier=lossless 时徽标用强调色。"""
     f = (fmt or "").lower()
+    if f in VIDEO_FORMATS:
+        return "视频", "video"
     if f in ("flac", "wav", "aif", "aiff", "ape"):
         return "无损", "lossless"
     if f == "mp3":

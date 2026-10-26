@@ -246,6 +246,37 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         p.drawPath(path)
         p.setBrush(color)
         p.drawRoundedRect(QRectF(u * 0.42, u * 0.58, u * 0.16, u * 0.24), u * 0.02, u * 0.02)
+    # ---------- v2.1 视频 ----------
+    elif kind == "video":
+        # 摄像机：机身 + 镜头 + 右侧取景框
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(u * 0.14, u * 0.30, u * 0.42, u * 0.40), u * 0.06, u * 0.06)
+        path = QPainterPath()
+        path.moveTo(u * 0.60, u * 0.42)
+        path.lineTo(u * 0.84, u * 0.30)
+        path.lineTo(u * 0.84, u * 0.70)
+        path.lineTo(u * 0.60, u * 0.58)
+        path.closeSubpath()
+        p.drawPath(path)
+    elif kind == "fullscreen":
+        # 四角括号
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(u * 0.18, u * 0.38), QPointF(u * 0.18, u * 0.18))
+        p.drawLine(QPointF(u * 0.18, u * 0.18), QPointF(u * 0.38, u * 0.18))
+        p.drawLine(QPointF(u * 0.82, u * 0.38), QPointF(u * 0.82, u * 0.18))
+        p.drawLine(QPointF(u * 0.82, u * 0.18), QPointF(u * 0.62, u * 0.18))
+        p.drawLine(QPointF(u * 0.18, u * 0.62), QPointF(u * 0.18, u * 0.82))
+        p.drawLine(QPointF(u * 0.18, u * 0.82), QPointF(u * 0.38, u * 0.82))
+        p.drawLine(QPointF(u * 0.82, u * 0.62), QPointF(u * 0.82, u * 0.82))
+        p.drawLine(QPointF(u * 0.82, u * 0.82), QPointF(u * 0.62, u * 0.82))
+    elif kind == "video_fill":
+        # 实心播放三角（视频列表行徽标用）
+        path = QPainterPath()
+        path.moveTo(u * 0.32, u * 0.26)
+        path.lineTo(u * 0.76, u * 0.50)
+        path.lineTo(u * 0.32, u * 0.74)
+        path.closeSubpath()
+        p.drawPath(path)
     else:  # 未知类型画个圆点
         p.drawEllipse(QRectF(u * 0.35, u * 0.35, u * 0.30, u * 0.30))
 

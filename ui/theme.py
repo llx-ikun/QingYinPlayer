@@ -128,6 +128,11 @@ QWidget#PlayerBar {{ border-top: 1px solid {t.BORDER};
 QWidget#WindowRoot[is_maximized="true"] QWidget#PlayerBar {{ border-radius: 0px; }}
 QWidget#HeaderBar {{ background: {t.BG}; }}
 
+/* ---------- 视频页（v2.1） ---------- */
+QWidget#VideoSinkHost {{ background: #000000; border-radius: 10px; }}
+QWidget#VideoSurface {{ background: #000000; }}
+QLabel#VideoTitle {{ font-size: 16px; font-weight: bold; color: {t.TEXT}; }}
+
 /* ---------- 标签 ---------- */
 QLabel {{ background: transparent; }}
 QLabel#Dim {{ color: {t.TEXT_DIM}; }}
@@ -149,6 +154,7 @@ QLabel#FmtBadge {{
     font-size: 10px; padding: 1px 5px;
 }}
 QLabel#FmtBadge[tier="lossless"] {{ color: {t.ACCENT}; border-color: {t.ACCENT}; }}
+QLabel#FmtBadge[tier="video"] {{ color: {t.HEART}; border-color: {t.HEART}; }}
 QLabel#Toast {{
     background: {t.SURFACE}; color: {t.TEXT}; border: 1px solid {t.BORDER};
     border-radius: 8px; padding: 7px 14px;
