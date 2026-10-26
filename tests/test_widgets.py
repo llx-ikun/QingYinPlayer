@@ -82,5 +82,32 @@ class TestElidedLabel(unittest.TestCase):
         self.app.processEvents()  # 不炸即通过
 
 
+class TestPlayerBarLayout(unittest.TestCase):
+    """播放栏宽度必须适配窗口：过宽会把信息列挤空并导致布局抖动（v2.1.3 回归）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def test_player_bar_fits_min_window(self):
+        from ui.player_bar import PlayerBar
+        pb = PlayerBar()
+        # MainWindow.setMinimumSize(1100, 720)：播放栏最小宽不得超过窗口最小宽，
+        # 否则信息列被挤到 0（副标题全成「…」）、布局在约束边界反复重算导致
+        # 窗口/播放栏抖动、进度手柄跟着乱跳。当前实测 ~1098。
+        self.assertLessEqual(pb.minimumSizeHint().width(), 1100,
+                             "PlayerBar 最小宽度不能超过窗口最小宽度 1100")
+
+    def test_float_bar_not_overlap_cover(self):
+        from ui.float_bar import FloatBar
+        from ui.player_bar import PlayerBar
+        pb = PlayerBar()
+        fb = FloatBar()
+        left = pb.layout().contentsMargins().left()
+        # 浮动条从 x=16 起，右端不得超过播放栏左缩进，否则压住封面
+        self.assertLessEqual(16 + fb.sizeHint().width(), left,
+                             "浮动条右端应不超过播放栏左缩进，避免压封面")
+
+
 if __name__ == "__main__":
     unittest.main()

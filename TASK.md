@@ -159,10 +159,22 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **O4** 回归测试 `tests/test_dialogs.py`（3 项）+ 接入 `run_tests.py`；全量回归 + ruff 干净；重建双 EXE
   - 验收：全量回归 **13 进程 163 项全绿**（160 + 新 3）；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
 
+## P. v2.1.3 播放栏超宽修复（2026-10-26，用户反馈「窗口/播放栏在抖、进度条来回跳」）
+
+> 根因：v2.1.2 把 `player_bar` 左缩进 190→330 给浮动条让位，`PlayerBar.minimumSizeHint`
+> 涨到 **1340px**（> 默认窗 1280、> 最小窗 1100）。后果：① 信息列被挤空，副标题
+> 「周杰伦 · 叶惠美」全省略成「周杰伦 · ...」；② 布局在约束边界反复重算 → 窗口/播放栏
+> 抖、进度手柄乱跳。「进度 0:00↔0:02」另有 2 秒测试片段循环重播的锯齿因素（属正常）。
+
+- [x] **P1** `ui/player_bar.py`：seek 380→200、音量 90→70、两处 addSpacing 20→8、左缩进 330→312
+  - 验收：`PlayerBar().minimumSizeHint().width()` 1340 → **1098 ≤ 1100**（默认 1280 下信息列 182px）
+- [x] **P2** 回归测试 `tests/test_widgets.py::TestPlayerBarLayout`（min≤1100 + 浮动条不压封面）；全量回归 + ruff；重建 EXE
+  - 验收：`TestPlayerBarLayout` 2 项通过；全量回归 13 进程 165 项全绿；ruff 干净；双 EXE smoke + 真实平台检查通过
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2
 ```
 
 ## v2.1 验收命令

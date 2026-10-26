@@ -61,9 +61,11 @@ class PlayerBar(QWidget):
         self._duration_ms = 0
 
         root = QHBoxLayout(self)
-        # 左侧 330px 缩进：给左下角浮动工具条留位（QQ 音乐同款布局；
-        # 浮动条现为「主题切换 + 图标文字按钮」，展开后约 300px 宽）
-        root.setContentsMargins(330, 8, 14, 8)
+        # 左侧 312px 缩进：给左下角浮动工具条留位（QQ 音乐同款布局；
+        # 浮动条「主题切换 + 图标文字按钮」实测约 294px，结束于 x≈310）。
+        # 注意：缩进不能过大——否则播放栏最小宽度会超过窗口，信息列被挤空、
+        # 布局在约束边界反复重算导致窗口抖动（曾把 330 撑到 1340px > 1280）。
+        root.setContentsMargins(312, 8, 14, 8)
         root.setSpacing(10)
 
         # ---- 左：封面 + 信息 + 爱心/更多 ----
@@ -93,7 +95,7 @@ class PlayerBar(QWidget):
         self.more_btn.clicked.connect(self.more_clicked.emit)
         root.addWidget(self.more_btn)
 
-        root.addSpacing(20)
+        root.addSpacing(8)
 
         # ---- 中：控制 + 进度（双行） ----
         center = QVBoxLayout()
@@ -141,7 +143,7 @@ class PlayerBar(QWidget):
         progress.addWidget(self.time_cur)
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
-        self.seek_slider.setFixedWidth(380)
+        self.seek_slider.setFixedWidth(200)
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setTracking(False)  # 拖动中不触发 seek，release 时才跳转
         self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
@@ -156,7 +158,7 @@ class PlayerBar(QWidget):
         center.addLayout(progress)
         root.addLayout(center, 3)
 
-        root.addSpacing(20)
+        root.addSpacing(8)
 
         # ---- 右：音量 + 格式 + 歌词 + 队列 ----
         vol_col = QHBoxLayout()
@@ -168,7 +170,7 @@ class PlayerBar(QWidget):
         vol_col.addWidget(self.mute_btn)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setFixedWidth(90)
+        self.volume_slider.setFixedWidth(70)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
         vol_col.addWidget(self.volume_slider)

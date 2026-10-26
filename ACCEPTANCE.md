@@ -206,6 +206,19 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 ① **关闭失效**：`ImportProgressDialog` 完成后 worker 已结束，底部按钮仍连接 `cancelled → worker.cancel()`；`ScannerWorker.cancel()` 仅 `requestInterruption()`（no-op），`on_cancelled(dialog.reject)` 永不触发，弹窗关不掉。改为 dialog 内 `_finished` 标志 + `_on_button()`：完成后直接 `accept()` 关闭。
 ② **浮动条改版**：主题由纯图标按钮改为开关式 `#ThemeToggle`（checkable），其余改为图标+文字 `#FloatTextBtn`；文字按钮使条宽增至 ~294px，故 `player_bar` 左缩进由 190 扩到 330。
 
+### v2.1.3 播放栏超宽修复（2026-10-26）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 播放栏最小宽度 ≤ 窗口最小宽度（不再超约束/抖动） | ✅ | `tests/test_widgets.py::TestPlayerBarLayout::test_player_bar_fits_min_window`（`minimumSizeHint ≤ 1100`）；实测 1340→1098 |
+| 浮动条加宽后不压封面 | ✅ | `test_float_bar_not_overlap_cover`（16 + 浮动条宽 ≤ 左缩进） |
+| 副标题能显示完整「艺人 · 专辑」 | ✅ | 默认窗 1280 下信息列 182px（> 90px 需求）；缩进 330→312、seek 380→200 释放宽度 |
+| 全量回归 / 静态检查 | ✅ | 13 进程 **165 项全绿**（163 + 新 2）；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
+
+**修复的根因**：v2.1.2 把 `player_bar` 左缩进 190→330 给浮动条让位，使 `PlayerBar.minimumSizeHint` 达 **1340px**，**超过默认窗 1280 / 最小窗 1100** → 信息列（stretch）被挤到 0（副标题全省略）、布局在约束边界反复重算导致窗口抖动。压缩固定宽元素（seek 380→200、音量 90→70、两处 addSpacing 20→8）、左缩进 330→312 后，min 降至 **1098 ≤ 1100**，任何尺寸下不再超约束。
+> 附带：进度条 0:00↔0:02 来回跳的另一层原因是导入的「晴天」为 **2 秒测试片段**，循环模式每 2 秒重播归零（锯齿），真实长曲不会如此。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。
