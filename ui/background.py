@@ -109,8 +109,8 @@ def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str) -> None:
     #   ② 右上角裁出画面 → 弧的缺口被切掉，只剩一大块淡圆盘，像污渍；
     #   ③ 现在这版：**完整月牙**、细一点、放在右半区竖向 56% 处。
     #      形状完整才读得出是月亮，alpha 压到 18 又不会抢列表里的字。
-    diameter = min(w, h) * 0.40
-    cx, cy = w * 0.88, h * 0.56
+    diameter = min(w, h) * 0.38
+    cx, cy = w * 0.87, h * 0.70
     left = cx - diameter * 0.5
     top = cy - diameter * 0.5
     outer = QRectF(left, top, diameter, diameter)
@@ -124,7 +124,7 @@ def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str) -> None:
     path.closeSubpath()
 
     moon_color = QColor(color)
-    moon_color.setAlpha(18)
+    moon_color.setAlpha(14)
     painter.setBrush(moon_color)
     painter.drawPath(path)
 

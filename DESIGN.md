@@ -656,18 +656,18 @@ COLUMBINA = Theme(
 def _paint_theme_decor(painter, rect, color):
     rnd = random.Random(_DECOR_SEED)     # 固定种子，缩放时星点不乱跳
     for _ in range(56): ...              # 半径 0.6~1.9px，alpha 22~72
-    # 月牙：直径 = min(w,h)*0.40，圆心 (0.88w, 0.56h)，alpha 18
+    # 月牙：直径 = min(w,h)*0.38，圆心 (0.87w, 0.70h)，alpha 14
 ```
 
 - 只在 **`columbina` + 背景类型为 none** 时画（用户自己设了背景就不叠加，否则是脏图）
 - 画在 `BackgroundLayer.paintEvent` 里，**不参与 `is_active()`**：装饰不算自定义背景，
   所以不会触发面板转半透明（`test_theme_decor_is_not_custom_background`）
-- alpha 上限刻意压到 72/18：装饰是氛围，不能跟歌词和封面抢注意力
+- alpha 上限刻意压到 72/14：装饰是氛围，不能跟歌词和封面抢注意力
 - **月牙位置试了三版**（截图对比才看出来的问题）：
   ① 贴右下角 → 被 84px 播放栏压成一道残弧横穿音量条，像渲染脏点；
   ② 右上角故意裁出画面 → 月牙缺口被切掉，只剩一大块淡圆盘，像污渍；
-  ③ 现在：**完整细月牙**放在右半区竖向 56% 处。形状完整才读得出是月亮，
-  alpha 18 又不抢列表里的字
+  ③ 现在：**完整细月牙**放在右半区竖向 70%（歌曲行下方的空白带）。形状完整才
+  读得出是月亮，alpha 14 又不会让列表里的字和爱心发灰
 - `feather` 图标也返工过一次：首版是「羽轴 + 8 条细羽枝」的纯线条画法，
   16px 下糊成一小团灰点、和相邻 `settings`（细横线）撞气质；改为
   「实心羽片 + 镂空羽轴 + 两侧羽枝缺口」，靠实心轮廓站住（同 `gear` 的教训）
@@ -702,6 +702,7 @@ DEFAULT_THEME = "columbina"
 - [x] 主题切换 / 持久化 / 浮动条按钮语义全部跟随三态。
   - 证据：e2e `test_theme_switch_applies_and_persists`、`test_float_bar_theme_toggle`
 - [x] 视觉验收：整窗截图（星月/深色/浅色）+ 图标验收表含羽毛与齿轮对照。
-  - 证据：`shots/columbina-library-v230sky3.png`、`shots/columbina-maximized-v230final.png`、
-    `shots/icons_v230.png`（7 个图标 72px 原图 + 16px 最近邻放大 8×，浅/深两版，
+  - 证据：`shots/columbina-library-v230r2.png`、`shots/columbina-maximized-v230r2.png`、
+    `shots/columbina-playing-v230r2.png`；图标表 `shots/icons_v230.png`
+    （7 个图标 72px 原图 + 16px 最近邻放大 8×，浅/深两版，
     顺序按界面相邻关系排：gear / settings / feather / moon / sun / folder / plus）

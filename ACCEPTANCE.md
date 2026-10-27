@@ -456,10 +456,10 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 新做一个主题 | `COLUMBINA` 色卡：深紫夜空 `#130e26` + 冰蓝月光 `#7ec8e8` + 莓红 `#ff5c8a` 点缀 | `test_all_themes_registered`（三主题集合） |
 | 成为**所有背景**下的默认主题 | `DEFAULT_THEME = "columbina"`；`Settings.theme` 默认值与旧数据回落都改到它 | `test_default_is_columbina`、`test_legacy_data_without_new_settings` |
 | 只有一坨深色不够 | 新增 `Theme.BG_ALT`，窗口底走 `qlineargradient` 斜向渐变（首版纯色糊成一块黑） | `test_bg_gradient_only_for_columbina` |
-| 角色元素（星月） | 底层 56 颗固定星点（alpha 22~72）+ 一枚完整细月牙（alpha 18） | `TestThemeDecor` 3 项 + 截图目检 |
+| 角色元素（星月） | 底层 56 颗固定星点（alpha 22~72）+ 一枚完整细月牙（alpha 14） | `TestThemeDecor` 3 项 + 截图目检 |
 | 装饰不能干扰内容 | 只在「星月主题 + 背景类型 none」时画；不算自定义背景，不触发面板半透明 | `test_decor_does_not_count_as_custom_background` |
 | 主题钮能切到新主题 | 改为**三态循环** 星月 → 深色 → 浅色 → 星月；图标与提示都指向「点下去会切到哪个」 | `test_cycle_covers_all_themes_and_closes`、e2e `test_float_bar_theme_toggle` |
-| 设置里能选 | 按 `THEME_ORDER` 生成三个 radio；`dark_radio`/`light_radio` 保留为别名 | 截图 `shots/columbina-settings-v230final.png` |
+| 设置里能选 | 按 `THEME_ORDER` 生成三个 radio；`dark_radio`/`light_radio` 保留为别名 | 截图 `shots/columbina-settings-v230r2.png` |
 | 文字可读 | `TEXT/SURFACE=16.0`、`ACCENT/SURFACE=9.8`、`ON_ACCENT/ACCENT=9.8`、`TEXT_DIM/SURFACE=6.3` | `test_theme` 对比度断言 |
 | 图标要认得出 | 新增 `feather`（实心羽片 + 镂空羽轴 + 羽枝缺口） | `shots/icons_v230.png`（16px 放大 8× 与 gear/settings 对照） |
 | 不影响现有功能 | ✅ | 22 进程 **344 项全绿**；`ruff check .` 干净 |
@@ -469,7 +469,7 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 1. **配色太黑**：首版 `BG #0e0a18` 与 `SURFACE #181226` 只差一点，整窗糊成一块黑。
    → 整套面板色提亮拉开 + 渐变色 `BG_ALT`，深度来自光而不是靠深色。
 2. **月牙位置三版**：贴右下角被播放栏压成残弧；裁出右上角变成淡圆盘（像污渍）；
-   最终放右半区竖向 56% 处，完整细月牙、alpha 18。
+   最终放右半区竖向 70%（歌曲行下方空白带），完整细月牙、alpha 14。
 3. **羽毛图标太碎**：首版「羽轴 + 8 条细羽枝」在 16px 下糊成灰团，且与相邻的
    `settings`（细横线）撞气质 → 改实心羽片，靠轮廓站住（与 v2.2.2 齿轮同一类教训）。
 
