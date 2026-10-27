@@ -9,6 +9,7 @@ import os
 
 from PySide6.QtCore import QThread, Signal
 
+from app.library import import_into_library
 from app.metadata import read_track
 from app.models import MEDIA_EXTENSIONS
 
@@ -50,9 +51,14 @@ class ScannerWorker(QThread):
     finished_ok = Signal(int)          # 处理总数
     cancelled = Signal()
 
-    def __init__(self, paths: list[str], parent=None):
+    def __init__(self, paths: list[str], parent=None, library_dir: str | None = None):
         super().__init__(parent)
         self._paths = list(paths)
+        # 传入 library_dir 时，先把每个文件复制进曲库，再从副本读元数据（v2.1.9）。
+        # 不传则维持旧行为（只登记原路径）——单测与外部脚本仍按老语义调用。
+        self._library_dir = library_dir
+        self.copied = 0     # 真正复制进曲库的文件数（去重命中不算）
+        self.failed = 0     # 复制失败被跳过的文件数
 
     def run(self) -> None:
         files = collect_media_files(self._paths)
@@ -62,7 +68,19 @@ class ScannerWorker(QThread):
                 self.cancelled.emit()
                 return
             self.scanning.emit(path)
-            meta = read_track(path)
+            target = path
+            if self._library_dir:
+                try:
+                    target, copied = import_into_library(path, self._library_dir)
+                    if copied:
+                        self.copied += 1
+                except OSError:
+                    # 磁盘满 / 无权限 / 源文件在扫描后被移走：跳过这一首，
+                    # 不把半成品写进曲库，也不中断其余文件。
+                    self.failed += 1
+                    self.progress.emit(done, total)
+                    continue
+            meta = read_track(target)
             if meta is not None:
                 self.track_ready.emit(meta)
             self.progress.emit(done, total)

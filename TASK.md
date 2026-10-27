@@ -332,10 +332,23 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
       `test_float_bar_inside_window`（右缘 ≤ 236）、`test_version_label_at_bottom_right`
 - [x] **U6** 版本号 `v2.1.8`、全量回归、`ruff check .`、重建双 EXE
 
+## v2.1.9 任务（导入即复制：受管理曲库）
+
+- [x] **V1** 新增 `app/library.py`：`file_signature`（size+首尾 64KB）、
+      `import_into_library`（复制+同内容去重+同名加指纹后缀+`.part` 原子落盘）、
+      `is_in_library`、`safe_stem`
+- [x] **V2** `app/paths.py` 增加 `library_dir()`（`%APPDATA%/轻音播放器/library`）
+- [x] **V3** `ScannerWorker` 增加可选 `library_dir`：先复制再从副本读元数据，
+      复制失败跳过并计数；不传则维持旧语义
+- [x] **V4** `_start_import` 传曲库目录，完成提示报告复制结果
+- [x] **V5** `_remove_from_library`：曲库内副本随移除删除，外部老条目不动（文案区分）
+- [x] **V6** 新增 `tests/test_library.py`（9 项）+ e2e `test_import_copies_files_into_library`
+- [x] **V7** 版本号 `v2.1.9`、全量回归、`ruff check .`、重建双 EXE
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → U1 → U2 → U3 → U4 → U5 → U6
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → U1 → U2 → U3 → U4 → U5 → U6 → V1 → V2 → V3 → V4 → V5 → V6 → V7
 ```
 
 ## v2.1 验收命令

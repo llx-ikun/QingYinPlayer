@@ -17,6 +17,7 @@ v2.1 变更（本地视频导入与画面播放）：
 """
 from __future__ import annotations
 
+import contextlib
 import os
 
 from PySide6.QtCore import (
@@ -47,8 +48,9 @@ from app.covers import CoverProvider
 from app.filesize import file_size
 from app.lyrics import LyricLine, lyrics_from_text
 from app.metadata import read_track
+from app.library import is_in_library
 from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, Track
-from app.paths import covers_dir, data_file
+from app.paths import covers_dir, data_file, library_dir
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
 from app.sorting import default_sort_for, preset_by_id, sort_tracks
@@ -156,7 +158,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.1.8 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.1.9 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -653,9 +655,17 @@ class MainWindow(QMainWindow):
             self._toast("文件所在文件夹不存在", 4000)
 
     def _remove_from_library(self, track: Track) -> None:
+        # 曲库内的副本：移出时一并删除，避免占着磁盘又不在列表里（v2.1.9）。
+        # 老条目（外部路径）仍按「不动磁盘文件」处理。
+        in_library = is_in_library(track.path, library_dir())
         box = QMessageBox(self)
         box.setWindowTitle("移除出资料库")
-        box.setText(f"将「{track.display_title}」移出资料库？\n（不会删除磁盘文件，但会从所有歌单中移除）")
+        if in_library:
+            box.setText(f"将「{track.display_title}」移出资料库？\n"
+                        f"（软件曲库内的副本会被删除，你自己的原文件不受影响）")
+        else:
+            box.setText(f"将「{track.display_title}」移出资料库？\n"
+                        f"（不会删除磁盘文件，但会从所有歌单中移除）")
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.No)
         if box.exec() != QMessageBox.StandardButton.Yes:
@@ -663,6 +673,9 @@ class MainWindow(QMainWindow):
         if self.player.current_track and self.player.current_track.id == track.id:
             self.player.stop()
         self.store.remove_track(track.id)
+        if in_library:
+            with contextlib.suppress(OSError):
+                os.remove(track.path)
         self.store.save()
         self.refresh_list()
         self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
@@ -786,7 +799,9 @@ class MainWindow(QMainWindow):
             return
         self._import_added = 0
         dialog = ImportProgressDialog(self)
-        worker = ScannerWorker(paths)
+        # v2.1.9：导入 = 把文件复制进软件曲库；之后曲目与原文件解耦，
+        # 用户挪动/删除原文件也不会变成「失效」。
+        worker = ScannerWorker(paths, library_dir=library_dir())
         self._scanner = worker
 
         def on_track(meta) -> None:
@@ -806,7 +821,10 @@ class MainWindow(QMainWindow):
             self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
             self.refresh_list()
             self._refresh_counts()
-            self._toast(f"导入完成，新增 {self._import_added} 首", 5000)
+            msg = f"导入完成，新增 {self._import_added} 首，已复制到曲库"
+            if worker.failed:
+                msg += f"（{worker.failed} 个文件复制失败已跳过）"
+            self._toast(msg, 5000)
 
         def on_cancelled() -> None:
             self.store.save()

@@ -21,6 +21,8 @@ MODULES = [
     "tests.test_lyrics",
     "tests.test_metadata",
     "tests.test_store",
+    # v2.1.9 受管理曲库：导入即复制 / 去重 / 同名冲突 / 扫描器落库
+    "tests.test_library",
     "tests.test_queue",
     "tests.test_player",
     # v2.1.4 列表排序：预设归一化 + 各维度升降序（纯逻辑）

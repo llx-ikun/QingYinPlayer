@@ -334,6 +334,23 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 不影响现有功能 | ✅ | 全量回归 **17 进程全绿**；`ruff check .` 干净 |
 | 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
 
+## v2.1.9 增量验收（导入即复制：受管理曲库）
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 导入 = **把文件复制进软件** | ✅ | 曲库存于 `%APPDATA%/轻音播放器/library/`；`test_copies_file_into_library`（原文件仍在、副本内容一致） |
+| 曲目与原文件解耦 | ✅ | 导入后 `Track.path` 指向曲库副本；e2e `test_import_copies_files_into_library`（5 首全在曲库内且文件存在） |
+| 重复导入不占第二份空间 | ✅ | `file_signature`（size+首尾 64KB）去重；`test_same_content_is_deduped`（第二次 `copied=False`、目录仅 1 个文件） |
+| 同名不同内容不覆盖 | ✅ | 追加 8 位指纹后缀；`test_same_name_diff_content_not_overwritten`（2 个文件、内容各自完整） |
+| 同名 `.lrc` 歌词一并进曲库 | ✅ | `test_sidecar_lrc_copied`；回归抓到的真实缺陷（只复制媒体会让自动歌词失效）→ 修复后 `test_lyrics_sync` 恢复 |
+| 曲库已有歌词不被覆盖 | ✅ | `test_existing_lrc_not_overwritten`（再次导入不覆盖用户手动换过的歌词） |
+| 失败不留半成品 | ✅ | `.part` + `os.replace` 原子落盘；`test_no_partial_file_left_behind` |
+| 非法文件名安全 | ✅ | `safe_stem` 过滤 `< > : " / \| ? *`；`test_safe_stem_strips_illegal_chars` |
+| 复制失败不中断导入 | ✅ | `ScannerWorker.failed` 计数 + toast 提示；不传 `library_dir` 时维持旧行为（`test_scanner_without_library_keeps_original_path`） |
+| 移出资料库不留孤儿副本 | ✅ | 曲库内副本随移除删除；外部老条目不动（对话框文案自动区分） |
+| 不影响现有功能 | ✅ | 全量回归 17 进程全绿；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

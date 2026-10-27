@@ -128,6 +128,25 @@ class TestE2E(unittest.TestCase):
         first_row = _row(self.window.track_list, 0)
         self.assertIsNotNone(first_row)
 
+    def test_import_copies_files_into_library(self):
+        """v2.1.9：导入 = 把文件复制进软件曲库，曲目与原文件解耦。"""
+        from app.library import is_in_library
+        from app.models import MEDIA_EXTENSIONS
+        from app.paths import library_dir
+
+        self._import()
+        lib = library_dir()
+        tracks = self.store.all_tracks()
+        self.assertEqual(len(tracks), 5)
+        for t in tracks:
+            self.assertTrue(is_in_library(t.path, lib), f"未落进曲库: {t.path}")
+            self.assertTrue(os.path.isfile(t.path), f"曲库副本不存在: {t.path}")
+        # 曲库目录里的媒体文件数应与曲目数一致（.lrc 歌词不算媒体）
+        media = [n for n in os.listdir(lib) if n.lower().endswith(MEDIA_EXTENSIONS)]
+        self.assertEqual(len(media), 5)
+        # 同名歌词也被一并带进曲库（否则自动歌词失效）
+        self.assertTrue(any(n.lower().endswith(".lrc") for n in os.listdir(lib)))
+
     def test_search_filters(self):
         self._import()
         self.window._on_search_changed("周杰伦")
