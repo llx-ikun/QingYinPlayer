@@ -413,16 +413,16 @@ QPushButton#RowBtn[active="true"] {{ color: {t.HEART}; }}
    主题，再加一圈强调色边框只会抢走内容注意力）。
    注意：`border-radius` 不得超过控件短边的一半（QSS 里超了 Qt 会直接不圆，
    退化成直角方块 —— 旧版 #FloatTextBtn radius 16 配 28px 高就踩了这个坑）。
-   现在按钮高 34，radius 12 合规。 */
+   现在按钮高 38：圆钮 radius 19（= 38/2 正圆），文字按钮 radius 13（≤ 19 合规）。 */
 QPushButton#CircleBtn {{
-    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 17px;
+    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 19px;
     color: {t.TEXT_DIM};
 }}
 QPushButton#CircleBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
 QPushButton#CircleBtn:pressed {{ background: {t.SURFACE_ACTIVE}; }}
 QPushButton#FloatTextBtn {{
-    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 12px;
-    padding: 0px 4px; color: {t.TEXT_DIM}; font-size: 11px;
+    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 13px;
+    padding: 0px 4px; color: {t.TEXT_DIM}; font-size: 12px;
 }}
 QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; border-color: {t.ACCENT}; }}
 QPushButton#FloatTextBtn:pressed {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; }}

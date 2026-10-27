@@ -71,6 +71,9 @@ from ui.video_view import VideoFullscreenOverlay
 # 联网检索中给用户的提示：既解释「为什么现在没歌词」，也暗示等一下会出现
 ONLINE_PENDING_HINT = "正在联网匹配歌词…"
 
+# 左下浮动条与窗口底边的距离：贴到 0 会被窗口圆角遮罩削掉一块，也缺呼吸空间
+_FLOAT_BOTTOM_GAP = 4
+
 # 排序预设集中在 app/sorting.py（维度 + 方向 + 文案），此文件只负责应用
 
 # 边缘缩放热区（像素）与方向位
@@ -172,7 +175,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.2.2 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.2.3 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -1009,17 +1012,17 @@ class MainWindow(QMainWindow):
         self._layout_background()
 
     def _position_float_bar(self) -> None:
-        # 左下角，右缘对齐侧边栏内容右边界（248 - 12 = 236），不再跨进内容区；
-        # 竖直方向在播放栏高度内居中。
+        # 左下角，右缘对齐侧边栏内容右边界（248 - 12 = 236），不再跨进内容区。
+        # 竖直方向：底边固定留 4px。原来「在播放栏内居中」在改大后会贴到窗口底边
+        # （84 高的播放栏放 82 高的条，只剩 1px），正好压进窗口圆角遮罩里被削掉一块。
         # 注意：绝对定位的子控件不会自动拿到 sizeHint 宽度，必须 adjustSize()，
         # 否则宽度停在默认 100px，图标+文字按钮会被父控件裁掉（v2.1.2 起的真实缺陷）。
         bar = self.float_bar
         bar.adjustSize()
         right = SIDEBAR_WIDTH - 12
         x = right - bar.width()
-        player_h = self.player_bar.height() or 84
-        y = self._root.height() - player_h + max(0, (player_h - bar.height()) // 2)
-        bar.move(x, y)
+        y = self._root.height() - bar.height() - _FLOAT_BOTTOM_GAP
+        bar.move(x, max(0, y))
         bar.raise_()
         self._position_version_label()
 

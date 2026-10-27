@@ -453,8 +453,8 @@ class TestFloatBarStyle(unittest.TestCase):
         fb = FloatBar()
         self.assertEqual(fb.settings_btn._kind, "gear", "设置钮应使用 gear 图标")
         self.assertEqual(fb.settings_btn.toolTip(), "设置")
-        # 齿轮与其他图标同尺寸渲染（都是 14px）
-        self.assertEqual(fb.settings_btn.iconSize().width(), 14)
+        # 齿轮与其他图标同尺寸渲染（v2.2.2 放大后为 16px）
+        self.assertEqual(fb.settings_btn.iconSize().width(), 16)
 
     def test_import_and_dir_are_separate_buttons(self):
         """导入音乐 / 数据目录是各自独立的按钮，不再共用分段托盘。"""

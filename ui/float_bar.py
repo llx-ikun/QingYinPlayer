@@ -19,13 +19,15 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 from ui import icons as ic
 
 _FLOAT_W = 224        # 与侧边栏内容宽度对齐（侧栏 248 - 左右各 12 边距）
-_CIRCLE = 34          # 左列圆钮直径
-_BTN_W = 88           # 右侧独立按钮宽
-_BTN_H = 34           # 右侧独立按钮高（与圆钮同高，横向读成一行）
+_CIRCLE = 38          # 左列圆钮直径
+_BTN_W = 86           # 右侧独立按钮宽
+_BTN_H = 38           # 右侧独立按钮高（与圆钮同高，横向读成一行）
+_ICON = 16            # 图标尺寸（比 14 更醒目）
 _GAP_V = 6            # 左列两个圆钮的竖向间距
 _GAP_H = 8            # 左右两列的水平间距
 _GAP_BTN = 6          # 右侧两个按钮的水平间距
-# 34 + 8 + 88 + 6 + 88 = 224，刚好铺满整条宽度，不需要 stretch
+# 38 + 8 + 86 + 6 + 86 = 224，刚好铺满整条宽度，不需要 stretch
+# 高度 = 38 + 6 + 38 = 82（播放栏 84，仍放得下，不会被窗口底边裁掉）
 
 
 class _HoverIconButton(QPushButton):
@@ -39,20 +41,20 @@ class _HoverIconButton(QPushButton):
     def __init__(self, kind: str, text: str = "", parent=None) -> None:
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setIconSize(QSize(14, 14))
+        self.setIconSize(QSize(_ICON, _ICON))
         self._kind = kind
-        ic.bind_icon(self, kind, 14, "dim")
+        ic.bind_icon(self, kind, _ICON, "dim")
 
     def set_kind(self, kind: str) -> None:
         self._kind = kind
-        ic.bind_icon(self, kind, 14, "text" if self.underMouse() else "dim")
+        ic.bind_icon(self, kind, _ICON, "text" if self.underMouse() else "dim")
 
     def enterEvent(self, event) -> None:  # noqa: N802
-        ic.bind_icon(self, self._kind, 14, "text")
+        ic.bind_icon(self, self._kind, _ICON, "text")
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
-        ic.bind_icon(self, self._kind, 14, "dim")
+        ic.bind_icon(self, self._kind, _ICON, "dim")
         super().leaveEvent(event)
 
 
