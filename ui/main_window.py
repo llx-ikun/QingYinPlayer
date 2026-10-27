@@ -58,7 +58,7 @@ from ui.dialogs import ImportProgressDialog
 from ui.float_bar import FloatBar
 from ui.player_bar import PlayerBar
 from ui.settings_dialog import SettingsDialog, stats_for
-from ui.sidebar import Sidebar
+from ui.sidebar import SIDEBAR_WIDTH, Sidebar
 from ui.title_bar import TitleBar
 from ui.track_list import TrackList
 from ui.now_playing import NowPlayingPage
@@ -151,9 +151,15 @@ class MainWindow(QMainWindow):
         self.player_bar = PlayerBar()
         outer.addWidget(self.player_bar)
 
-        # 浮动工具条（覆盖播放栏左上角）
+        # 浮动工具条（覆盖播放栏左上角，右缘对齐侧边栏内容右边界）
         self.float_bar = FloatBar(self._root)
         self.float_bar.raise_()
+
+        # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
+        self.version_label = QLabel("v2.1.8 · 本地音乐与视频", self._root)
+        self.version_label.setObjectName("VersionLabel")
+        self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.version_label.raise_()
 
         # 视频全屏浮窗（v2.1）：画面控件临时搬进去，播放器不受影响
         self._fullscreen = VideoFullscreenOverlay()
@@ -870,16 +876,27 @@ class MainWindow(QMainWindow):
         self._position_float_bar()
 
     def _position_float_bar(self) -> None:
-        # 窗口左下角（压在播放栏左上角，QQ 音乐同款位置）；
-        # 播放栏左侧已留出 312px 缩进，不会与封面/信息列重叠。
+        # 左下角，右缘对齐侧边栏内容右边界（248 - 12 = 236），不再跨进内容区；
+        # 竖直方向在播放栏高度内居中。
         # 注意：绝对定位的子控件不会自动拿到 sizeHint 宽度，必须 adjustSize()，
         # 否则宽度停在默认 100px，图标+文字按钮会被父控件裁掉（v2.1.2 起的真实缺陷）。
         bar = self.float_bar
         bar.adjustSize()
-        x = 16
-        y = self._root.height() - bar.height() - 8
+        right = SIDEBAR_WIDTH - 12
+        x = right - bar.width()
+        player_h = self.player_bar.height() or 84
+        y = self._root.height() - player_h + max(0, (player_h - bar.height()) // 2)
         bar.move(x, y)
         bar.raise_()
+        self._position_version_label()
+
+    def _position_version_label(self) -> None:
+        # 右下角：贴在播放栏右下角，右/下各留一点边距
+        lbl = self.version_label
+        lbl.adjustSize()
+        lbl.move(self._root.width() - lbl.width() - 14,
+                 self._root.height() - lbl.height() - 4)
+        lbl.raise_()
 
     def _update_mask(self) -> None:
         if self.isMaximized() or not self.isVisible():

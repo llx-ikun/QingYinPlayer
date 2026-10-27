@@ -102,12 +102,19 @@ class TestPlayerBarLayout(unittest.TestCase):
     def test_float_bar_not_overlap_cover(self):
         from ui.float_bar import FloatBar
         from ui.player_bar import PlayerBar
+        from ui.sidebar import SIDEBAR_WIDTH
         pb = PlayerBar()
         fb = FloatBar()
-        left = pb.layout().contentsMargins().left()
-        # 浮动条从 x=16 起，右端不得超过播放栏左缩进，否则压住封面
-        self.assertLessEqual(16 + fb.sizeHint().width(), left,
-                             "浮动条右端应不超过播放栏左缩进，避免压封面")
+        fb.adjustSize()
+        # v2.1.8：浮动条宽度 = 侧边栏内容宽度（248 - 左右 12），右缘对齐内容右边界 236
+        self.assertLessEqual(12 + fb.sizeHint().width(), SIDEBAR_WIDTH - 12,
+                             "浮动条右缘应与侧边栏内容右边界对齐，不得跨进内容区")
+        self.assertLessEqual(12 + fb.sizeHint().width(),
+                             pb.layout().contentsMargins().left(),
+                             "浮动条右端不得超过播放栏左缩进，避免压封面")
+        # 主题圆钮必须在托盘上方（提到上排，整条才能收进侧栏宽度）
+        self.assertLess(fb.theme_toggle.geometry().top(), fb.tray.geometry().top(),
+                        "主题按钮应位于托盘上方")
 
     def test_player_bar_fits_min_window_with_long_title(self):
         """长标题/长艺人名不得把最小宽度顶爆（v2.1.5 复查发现 1185 > 1100）。
@@ -365,7 +372,8 @@ class TestThemeSizes(unittest.TestCase):
         pb = PlayerBar()
         fb = FloatBar()
         fb.adjustSize()
-        self.assertLessEqual(16 + fb.sizeHint().width(), pb.layout().contentsMargins().left())
+        self.assertLessEqual(12 + fb.sizeHint().width(),
+                             pb.layout().contentsMargins().left())
         # 每个文字按钮都得有正宽度，不能因父控件过窄被裁掉
         for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
             self.assertGreater(btn.sizeHint().width(), 40, btn.text())
@@ -433,6 +441,16 @@ class TestFloatBarStyle(unittest.TestCase):
         self.assertTrue(hasattr(fb, "tray"), "浮动条缺托盘容器")
         for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
             self.assertIs(btn.parent(), fb.tray, f"{btn.text()} 不在托盘内")
+
+    def test_width_matches_sidebar_content(self):
+        """整条宽度必须等于侧边栏内容宽度，右缘才能与内容右边界对齐。"""
+        from ui.float_bar import FloatBar
+        from ui.sidebar import SIDEBAR_WIDTH, Sidebar
+        fb = FloatBar()
+        m = Sidebar().layout().contentsMargins()
+        content = SIDEBAR_WIDTH - m.left() - m.right()
+        self.assertEqual(fb.width(), content,
+                         f"浮动条宽 {fb.width()} != 侧栏内容宽 {content}")
 
     def test_text_button_radius_within_half_height(self):
         """圆角不得超过按钮半高，否则 Qt 渲染成直角方块。"""

@@ -283,10 +283,15 @@ QWidget#FloatTray {{
 }}
 QPushButton#FloatTextBtn {{
     background: transparent; border: none; border-radius: 10px;
-    padding: 0px 9px; color: {t.TEXT_DIM}; font-size: 12px;
+    padding: 0px 4px; color: {t.TEXT_DIM}; font-size: 11px;
 }}
 QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_ACTIVE}; color: {t.TEXT}; }}
 QPushButton#FloatTextBtn:pressed {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; }}
+
+/* 右下角版本号：极低存在感的一行小字，贴着播放栏右下角 */
+QLabel#VersionLabel {{
+    color: {t.TEXT_DIM}; font-size: 10px; background: transparent; padding: 0px;
+}}
 
 /* ---------- 列表 ---------- */
 QListWidget {{

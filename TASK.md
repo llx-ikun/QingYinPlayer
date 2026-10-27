@@ -318,10 +318,24 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **T8** 回归 4 项：`TestFloatBarStyle`（同托盘 / 圆角不超半高 / 主题钮正圆同高 / 悬停底色可辨）
 - [x] **T9** 版本号 `v2.1.7`、全量回归、`ruff check .`、重建双 EXE
 
+## v2.1.8 任务（浮动条对齐 + 主题钮上移 + 版本号右下角）
+
+- [x] **U1** 对齐：浮动条宽 288 → **224**（= 侧栏内容宽度 248-24），右缘与侧栏内容右边界 236 齐平，
+      不再跨进内容区把「设置」压到侧栏竖线外
+- [x] **U2** 主题钮上移：`FloatBar` 由单行 → 上下两排（上排圆钮 / 下排托盘），
+      圆钮腾出的 44px 让托盘收进 224px 内；圆钮/托盘左缘都对齐侧栏内容左边界 12
+- [x] **U3** 托盘三等分 + 字号 11 / 内边距 4：224px 内放下三个入口且文字不省略
+- [x] **U4** 版本号挪位置：从侧栏底部删掉 → 右下角浮动 `QLabel#VersionLabel`（10px、TEXT_DIM），
+      `_position_version_label()` 随 resize/show/主题切换重定位
+- [x] **U5** 回归：`test_float_bar_not_overlap_cover` / `test_float_bar_fits_player_bar_indent`
+      改判右缘 ≤ 236；新增 `test_width_matches_sidebar_content`、
+      `test_float_bar_inside_window`（右缘 ≤ 236）、`test_version_label_at_bottom_right`
+- [x] **U6** 版本号 `v2.1.8`、全量回归、`ruff check .`、重建双 EXE
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → U1 → U2 → U3 → U4 → U5 → U6
 ```
 
 ## v2.1 验收命令

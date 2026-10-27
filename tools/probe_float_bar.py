@@ -48,11 +48,11 @@ def main() -> int:
     # 把托盘/按钮自己的底色一起刷掉，渲染出来会变成「只有描边没有填充」。
     host = QWidget()
     host.setObjectName("ProbeCanvas")
-    host.resize(360, 68)
+    host.resize(300, 92)
     host.setStyleSheet(f"QWidget#ProbeCanvas {{ background: {t.BG}; }}")
     bar = FloatBar(host)
     bar.set_theme_icon(args.theme == "dark")   # 太阳=当前深色，月亮=当前浅色
-    bar.move(PAD, (68 - bar.height()) // 2)
+    bar.move(PAD, (92 - bar.height()) // 2)
     host.show()
     app.processEvents()
     bar.adjustSize()
@@ -68,7 +68,7 @@ def main() -> int:
         radius = 17 if target is bar.theme_toggle else 10
         target.setStyleSheet(
             f"background: {fill}; border: none; border-radius: {radius}px;"
-            f" color: {t.TEXT}; padding: 0px 9px;"
+            f" color: {t.TEXT}; padding: 0px 4px;"
         )
         app.processEvents()
 
@@ -94,8 +94,8 @@ def main() -> int:
     print(f"截图: {out}  ({shot.width()}x{shot.height()} -> {big.width()}x{big.height()})")
     print(f"FloatBar.sizeHint() = ({bar.sizeHint().width()}, {bar.sizeHint().height()})"
           f"  actual = ({bar.width()}, {bar.height()})")
-    print(f"16(左缩进) + {bar.sizeHint().width()} = {16 + bar.sizeHint().width()}"
-          f"  (必须 <= 312，不压封面)")
+    print(f"右缘 = 12(侧栏内容左) + {bar.sizeHint().width()} = {12 + bar.sizeHint().width()}"
+          f"  (必须 <= 236，侧栏内容右边界)")
     host.close()
     return 0
 

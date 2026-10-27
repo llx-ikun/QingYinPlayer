@@ -322,6 +322,18 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 不影响现有功能 | ✅ | 全量回归 **17 进程 244 项全绿**；`ruff check .` 干净 |
 | 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
 
+## v2.1.8 增量验收（浮动条对齐 / 主题钮上移 / 版本号右下角）
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 浮动条**对齐**侧边栏，不跨进内容区 | ✅ | 宽 288 → **224**（= 248−24），右缘 12+224 = **236** = 侧栏内容右边界；`test_width_matches_sidebar_content`、`test_float_bar_inside_window`（右缘 ≤ 236） |
+| 主题按钮**往上调** | ✅ | `FloatBar` 单行 → 上下两排（上圆钮 / 下托盘），圆钮左缘与托盘左缘都对齐侧栏内容左边界 12；`test_float_bar_not_overlap_cover`（圆钮 top < 托盘 top） |
+| 三个入口文字不被截断 | ✅ | 托盘三等分 + 字号 11 / 内边距 4，224px 内放下「正在播放 / 数据目录 / 设置」（`probe_float_bar.py` 4 倍目视） |
+| 版本号放**右下角** | ✅ | 侧栏底部删除 → 右下角 `QLabel#VersionLabel`（10px、TEXT_DIM），随 resize/show/主题切换重定位；`test_version_label_at_bottom_right`（靠右、贴底、侧栏内无版本号） |
+| 不压播放栏封面 / 不影响最小宽 | ✅ | 右缘 236 ≤ 播放栏左缩进 312；`test_float_bar_fits_player_bar_indent` |
+| 不影响现有功能 | ✅ | 全量回归 **17 进程全绿**；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

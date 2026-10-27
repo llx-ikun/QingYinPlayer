@@ -648,6 +648,24 @@ class TestE2EV2(unittest.TestCase):
         self.assertLessEqual(geom.y() + geom.height(), self.window._root.height())
         # 位于播放栏左上角区域
         self.assertGreater(geom.y(), self.window._root.height() - 120)
+        # 右缘对齐侧边栏内容右边界（不跨进内容区）
+        self.assertLessEqual(geom.x() + geom.width(), 236)
+
+    def test_version_label_at_bottom_right(self):
+        """版本号从侧边栏底部挪到窗口右下角（v2.1.8）。"""
+        self._import()
+        lbl = self.window.version_label
+        self.assertTrue(lbl.text().startswith("v"))
+        self.assertTrue(lbl.isVisible(), "版本号应可见")
+        g = lbl.geometry()
+        root_w, root_h = self.window._root.width(), self.window._root.height()
+        self.assertGreater(g.left(), root_w * 0.6, "版本号应靠窗口右侧")
+        self.assertGreater(g.top(), root_h - 40, "版本号应贴窗口底部")
+        # 侧边栏底部不再挂版本号
+        from PySide6.QtWidgets import QLabel
+        for lab in self.window.sidebar.findChildren(QLabel):
+            self.assertFalse(lab.text().startswith("v2."),
+                             "侧边栏里不应再有版本号")
 
     def test_now_playing_page_switch(self):
         self._import()
