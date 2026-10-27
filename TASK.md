@@ -376,6 +376,16 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
       全量回归 **22 进程 331 项全绿**、`ruff check .` 干净、`tools/shot.py` 视觉验收、
       双 EXE 重建（55.6MB / 2.4MB，smoke + 8s 存活）、版本号 `v2.2`（`APP_VERSION=2.2.0`）
 
+## v2.2.1 内存优化（封面缓存）
+
+- [x] **X1** `app/covers.py`：`CoverProvider._mem` 由无上限 dict 改为 `_LruPixmapCache`
+      （按像素预算 LRU，默认 `CACHE_MAX_PIXELS = 10_000_000` ≈ 40MB）；三处写入走 `put`。
+      根因：`track_list.set_tracks` 全量渲染，5000 首 = 5000 张 40px；切歌 280px 大图
+      （78400px/张，49 倍）随切随涨、永不回收。
+  - 量化（`build/probe_memory.py`）：5000 首列表 + 切 300 首，改前 123MB 无界 → 改后 38MB 封顶
+  - 验收：新增 `test_covers_scanner` +4 项（有界 / LRU 淘汰 / 命中置新 / 单张超预算）；
+    全量回归 **22 进程 335 项全绿**；`ruff check .` 干净；版本 `v2.2.1`
+
 ## v2.1 依赖关系
 
 ```

@@ -205,6 +205,46 @@ class TestCoverProvider(unittest.TestCase):
         track = Track(id="deadbeefdeadbeef", path=os.path.join(MUSIC_DIR, "不存在.mp3"))
         self.assertFalse(provider.get_pixmap(track, 48).isNull())
 
+    # ---------- v2.2.1：内存缓存按像素预算 LRU，避免无上限增长 ----------
+
+    def test_mem_cache_bounded_by_pixels(self):
+        from app.covers import CoverProvider
+        from app.models import Track
+        provider = CoverProvider(self.covers_dir, max_pixels=2000)  # 40px 图=1600px
+        for i in range(20):
+            provider.get_pixmap(Track(id=f"t{i:04x}", path=""), 40, 6)
+        # 1600px/张 × 20 张 = 32000px，被 2000px 预算压到 2 张以内
+        self.assertLessEqual(len(provider._mem), 2)
+        self.assertLessEqual(provider._mem.pixels, 2000 + 1600)
+
+    def test_lru_evicts_least_recently_used(self):
+        from app.covers import CoverProvider
+        from app.models import Track
+        provider = CoverProvider(self.covers_dir, max_pixels=2000)
+        provider.get_pixmap(Track(id="aaaa", path=""), 40, 6)
+        provider.get_pixmap(Track(id="bbbb", path=""), 40, 6)  # 挤掉 aaaa
+        self.assertNotIn(("aaaa", 40, 6), provider._mem._items)
+        self.assertIn(("bbbb", 40, 6), provider._mem._items)
+
+    def test_lru_hit_marks_recent(self):
+        from app.covers import CoverProvider
+        from app.models import Track
+        provider = CoverProvider(self.covers_dir, max_pixels=2000)
+        provider.get_pixmap(Track(id="aaaa", path=""), 40, 6)
+        provider.get_pixmap(Track(id="bbbb", path=""), 40, 6)  # aaaa 被淘汰
+        provider.get_pixmap(Track(id="aaaa", path=""), 40, 6)  # 重读 aaaa → bbbb 被淘汰
+        self.assertIn(("aaaa", 40, 6), provider._mem._items)
+        self.assertNotIn(("bbbb", 40, 6), provider._mem._items)
+
+    def test_oversized_pixmap_still_returned(self):
+        from app.covers import CoverProvider
+        from app.models import Track
+        provider = CoverProvider(self.covers_dir, max_pixels=2000)
+        # 单张 200px = 40000px 远超预算，仍应返回有效图且不抛
+        pixmap = provider.get_pixmap(Track(id="big", path=""), 200, 0)
+        self.assertFalse(pixmap.isNull())
+        self.assertEqual(pixmap.width(), 200)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -407,6 +407,18 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 双 EXE 重建 | ✅ | `build.py` onefile **55.6MB** + onedir **2.4MB**；两者 smoke 与真实平台 8s 存活检查均通过；图标仍 14885B（未被 offscreen 污染） |
 | 版本号 | ✅ | 界面 `v2.2 · 本地音乐与视频`；`main.APP_VERSION = "2.2.0"` |
 
+## v2.2.1 增量验收（封面缓存内存优化）
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 封面内存缓存有上限 | ✅ | `CoverProvider._mem` 改为按像素预算 LRU（`_LruPixmapCache`，默认 10M px ≈ 40MB）；`test_mem_cache_bounded_by_pixels` |
+| 大图不把小图全挤掉、最近用优先保留 | ✅ | 按像素（非条目数）淘汰，命中 `move_to_end`；`test_lru_evicts_least_recently_used`、`test_lru_hit_marks_recent` |
+| 单张超预算不崩 | ✅ | `test_oversized_pixmap_still_returned`（200px 图远超预算仍正常返回） |
+| 量化对比 | ✅ | 探针 `build/probe_memory.py`：5000 首列表 + 切 300 首，改前 **123MB 无上限** → 改后 **38MB 封顶**（条目 5600 → 247） |
+| 不影响现有功能 | ✅ | 全量回归 22 进程 **335 项全绿**；`ruff check .` 干净 |
+
+**根因**：`track_list.set_tracks` 是 QListWidget 全量渲染（`setItemWidget` 逐行），每首一张 40px 封面；「正在播放」页每次切歌再请求一张 280px 大图（约 49 倍像素）。旧缓存是无上限 dict，大图随切歌单调累积、永不回收。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap
@@ -15,6 +16,45 @@ from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPai
 from app.metadata import extract_picture
 
 CACHE_PX = 240  # 磁盘缓存封面边长
+# 内存缓存像素预算：40px 封面 1600px/张、280px 大图 78400px/张（约 49 倍）。
+# 10M px ≈ 40MB(ARGB32)，能放下整个 5000 首列表 + 一批「正在播放」大图，且不会无上限增长。
+CACHE_MAX_PIXELS = 10_000_000
+
+
+class _LruPixmapCache:
+    """按像素预算的 LRU 缓存：大图一张顶几十张小图，按像素而非条目数淘汰。"""
+
+    def __init__(self, max_pixels: int = CACHE_MAX_PIXELS):
+        self._max = max_pixels
+        self._items: "OrderedDict[tuple, tuple[QPixmap, int]]" = OrderedDict()
+        self._pixels = 0
+
+    def get(self, key):
+        hit = self._items.get(key)
+        if hit is None:
+            return None
+        self._items.move_to_end(key)
+        return hit[0]
+
+    def put(self, key, pixmap: QPixmap) -> None:
+        px = pixmap.width() * pixmap.height()
+        if px <= 0:
+            return
+        self._items[key] = (pixmap, px)
+        self._items.move_to_end(key)
+        self._pixels += px
+        # 淘汰最久未用，直到回到预算内；至少保留一张，避免刚请求的图被立刻扔掉
+        while self._pixels > self._max and len(self._items) > 1:
+            _, (_, evicted) = self._items.popitem(last=False)
+            self._pixels -= evicted
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    @property
+    def pixels(self) -> int:
+        """当前缓存的总像素（测试/探针用）。"""
+        return self._pixels
 
 
 def _hue_of(track_id: str) -> int:
@@ -51,9 +91,9 @@ def _rounded(pixmap: QPixmap, radius: int) -> QPixmap:
 
 
 class CoverProvider:
-    def __init__(self, covers_dir: str):
+    def __init__(self, covers_dir: str, max_pixels: int = CACHE_MAX_PIXELS):
         self._dir = covers_dir
-        self._mem: dict[tuple, QPixmap] = {}
+        self._mem = _LruPixmapCache(max_pixels)
 
     def _placeholder(self, track_id: str, px: int, radius: int) -> QPixmap:
         hue = _hue_of(track_id)
@@ -73,7 +113,7 @@ class CoverProvider:
         pixmap = QPixmap.fromImage(img)
         if radius:
             pixmap = _rounded(pixmap, radius)
-        self._mem[(track_id, px, radius)] = pixmap
+        self._mem.put((track_id, px, radius), pixmap)
         return pixmap
 
     def _disk_path(self, track_id: str) -> str:
@@ -94,7 +134,7 @@ class CoverProvider:
                 pixmap = QPixmap.fromImage(_square_scaled(img, size))
                 if radius:
                     pixmap = _rounded(pixmap, radius)
-                self._mem[key] = pixmap
+                self._mem.put(key, pixmap)
                 return pixmap
 
         # 2) 从音频文件提取内嵌封面
@@ -113,7 +153,7 @@ class CoverProvider:
                 pixmap = QPixmap.fromImage(_square_scaled(img, size))
                 if radius:
                     pixmap = _rounded(pixmap, radius)
-                self._mem[key] = pixmap
+                self._mem.put(key, pixmap)
                 return pixmap
 
         # 3) 占位图
