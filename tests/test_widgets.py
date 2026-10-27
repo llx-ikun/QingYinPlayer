@@ -108,6 +108,113 @@ class TestPlayerBarLayout(unittest.TestCase):
         self.assertLessEqual(16 + fb.sizeHint().width(), left,
                              "浮动条右端应不超过播放栏左缩进，避免压封面")
 
+    def test_player_bar_fits_min_window_with_long_title(self):
+        """长标题/长艺人名不得把最小宽度顶爆（v2.1.5 复查发现 1185 > 1100）。
+
+        根因：ElidedLabel 继承 QLabel 的 minimumSizeHint（按完整文本算宽度），
+        一首「Blazing Heart (英文版)」+ 长艺人名就足以把播放栏撑到 1185px，
+        超过窗口最小宽 1100 → 信息列被挤空、布局反复重算导致抖动。
+        """
+        from PySide6.QtGui import QPixmap
+        from ui.player_bar import PlayerBar
+        pb = PlayerBar()
+        cover = QPixmap(48, 48)
+        pb.update_track("Blazing Heart (英文版) - 原神-灼火之心 特别收录版",
+                        "Chrissy Costanza/HOYO-MiX/上海爱乐乐团", cover)
+        self.assertLessEqual(pb.minimumSizeHint().width(), 1100,
+                             "长标题下 PlayerBar 最小宽度仍不得超过 1100")
+
+    def test_time_labels_snug_to_slider(self):
+        """左端时间右对齐、右端时间左对齐，两侧留白才对称。"""
+        from PySide6.QtCore import Qt
+        from ui.player_bar import PlayerBar
+        pb = PlayerBar()
+        self.assertTrue(pb.time_cur.alignment() & Qt.AlignmentFlag.AlignRight)
+        self.assertFalse(pb.time_cur.alignment() & Qt.AlignmentFlag.AlignLeft)
+        self.assertTrue(pb.time_total.alignment() & Qt.AlignmentFlag.AlignLeft)
+        self.assertFalse(pb.time_total.alignment() & Qt.AlignmentFlag.AlignRight)
+        self.assertEqual(pb.time_cur.objectName(), "TimeLabel")
+        self.assertEqual(pb.time_total.objectName(), "TimeLabel")
+
+
+class TestSliderKnob(unittest.TestCase):
+    """进度/音量手柄必须是**有色实心**圆钮。
+
+    旧版 QSS 用白心 + 1px 灰边：浅色主题下白钮压在白色底上完全隐形，
+    用户截图里根本看不到进度手柄在哪。这组用例直接采样像素，防止再退化。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def _knob_pixels(self, theme_name: str, object_name: str, value: int):
+        """返回左端手柄区的像素列表（value=0 时钮在最左，已播放段为空，
+        所以这一带出现的饱和蓝只可能来自钮芯本身）。"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QSlider
+        from ui.theme import apply_theme
+
+        apply_theme(self.app, theme_name)
+        s = QSlider(Qt.Orientation.Horizontal)
+        s.setObjectName(object_name)
+        s.setRange(0, 100)
+        s.setValue(value)
+        s.resize(160, 20)
+        s.show()
+        self.app.processEvents()
+        img = s.grab().toImage()
+        s.close()
+        k = img.width() / 160.0          # 设备像素比
+        return [img.pixelColor(x, y)
+                for x in range(0, int(20 * k) + 1)
+                for y in range(0, img.height())]
+
+    @staticmethod
+    def _is_saturated_blue(c) -> bool:
+        """蓝通道主导且明显发蓝（#3b82f6 / #2f74ea / #6c8cff / #829fff 都算）。"""
+        return c.blue() > 200 and (c.blue() - c.red()) > 60
+
+    def test_handle_visible_on_light(self):
+        pixels = self._knob_pixels("light", "SeekSlider", 0)
+        self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
+                        "进度手柄应绘制为强调色实心圆，不能在浅色底上隐形")
+
+    def test_handle_visible_on_dark(self):
+        pixels = self._knob_pixels("dark", "SeekSlider", 0)
+        self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
+                        "深色主题下进度手柄同样必须是强调色实心圆")
+
+    def test_volume_handle_visible_on_light(self):
+        pixels = self._knob_pixels("light", "VolumeSlider", 0)
+        self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
+                        "音量手柄同样不能是白心白环（会隐形）")
+
+    def test_handle_round_not_square(self):
+        """手柄必须是圆：四角像素不能是钮芯色（方块的特征是角落被填满）。
+
+        QSS 里 `margin` 给的盒高不足时，Qt 会把圆压成圆角方块 —— 踩过。
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QSlider
+        from ui.theme import apply_theme
+
+        apply_theme(self.app, "light")
+        s = QSlider(Qt.Orientation.Horizontal)
+        s.setObjectName("SeekSlider")
+        s.setRange(0, 100)
+        s.setValue(0)
+        s.resize(160, 20)
+        s.show()
+        self.app.processEvents()
+        img = s.grab().toImage()
+        s.close()
+
+        # 手柄外接框左上角 (1,1) 若为钮芯色 → 说明是方块
+        corner = img.pixelColor(1, 1)
+        self.assertFalse(self._is_saturated_blue(corner),
+                         "手柄四角不应被钮芯色填满（否则是方块而非圆）")
+
 
 class TestTrackListLayout(unittest.TestCase):
     """列表页头 / 列头 / 排序控件（v2.1.4）。"""

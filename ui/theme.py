@@ -141,6 +141,8 @@ QLabel#Dim {{ color: {t.TEXT_DIM}; }}
 QLabel#Logo {{ font-size: 15px; font-weight: bold; color: {t.TEXT}; }}
 QLabel#TrackTitle {{ font-size: 13px; font-weight: bold; color: {t.TEXT}; }}
 QLabel#TrackSub {{ color: {t.TEXT_DIM}; font-size: 12px; }}
+/* 进度条两端时间：左端右对齐、右端左对齐，让时间紧贴滑块、两侧留白对称 */
+QLabel#TimeLabel {{ color: {t.TEXT_DIM}; font-size: 12px; padding: 0px; }}
 QLabel#Badge {{
     background: {t.SURFACE_HOVER}; color: {t.TEXT_DIM}; border-radius: 8px;
     padding: 1px 8px; font-size: 11px;
@@ -235,6 +237,7 @@ QPushButton#NavItem[active="true"] {{
 /* 播放控制按钮 */
 QPushButton#PlayCircle {{
     background: {t.ACCENT};
+    border: none;
     border-radius: 20px;
     min-width: 40px; max-width: 40px;
     min-height: 40px; max-height: 40px;
@@ -336,28 +339,50 @@ QComboBox#SortCombo QAbstractItemView {{
 QComboBox#SortCombo QAbstractItemView::item {{ padding: 5px 8px; border-radius: 6px; }}
 
 /* ---------- 滑块 ---------- */
+/* 3px 细轨 + 强调色圆钮 + SURFACE 色外环。
+   三个必须同时满足，否则钮会退化成「圆角方块」或直接隐形：
+   ① 钮芯必须是**有色实心**——白心白环在白底上完全看不见（旧版就是这样，
+      用户截图里根本找不到进度手柄）；
+   ② `border-radius` = (width + 2×border) / 2，取整到手柄总高的一半；
+   ③ `margin` 决定手柄盒高 = 轨道高 + 2×|margin|，必须 ≥ 手柄总高，
+      否则 Qt 会把圆压成方块（seek 总高 14 → margin -6；音量总高 12 → -5）。 */
 QSlider::groove:horizontal {{
-    height: 4px;
+    height: 3px;
     background: {t.BORDER};
-    border-radius: 2px;
+    border-radius: 1.5px;
 }}
 QSlider::sub-page:horizontal {{
     background: {t.ACCENT};
-    border-radius: 2px;
+    border-radius: 1.5px;
 }}
 QSlider::add-page:horizontal {{
     background: {t.BORDER};
-    border-radius: 2px;
+    border-radius: 1.5px;
 }}
 QSlider::handle:horizontal {{
-    background: #ffffff;
-    width: 12px;
-    height: 12px;
-    margin: -4px 0px;
-    border-radius: 6px;
-    border: 1px solid {t.BORDER};
+    background: {t.ACCENT};
+    width: 10px;
+    height: 10px;
+    margin: -6px 0px;
+    border-radius: 7px;
+    border: 2px solid {t.SURFACE};
 }}
-QSlider::handle:horizontal:hover {{ background: {t.ACCENT_HOVER}; }}
+QSlider::handle:horizontal:hover {{
+    background: {t.ACCENT_HOVER};
+}}
+/* 进度条手柄（主交互）与音量手柄（次要）尺寸分档 */
+QSlider#SeekSlider::handle:horizontal {{
+    width: 10px;
+    height: 10px;
+    margin: -6px 0px;
+    border-radius: 7px;
+}}
+QSlider#VolumeSlider::handle:horizontal {{
+    width: 8px;
+    height: 8px;
+    margin: -5px 0px;
+    border-radius: 6px;
+}}
 
 /* ---------- 滚动条 ---------- */
 QScrollBar:vertical {{

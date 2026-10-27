@@ -39,6 +39,18 @@ class ElidedLabel(QLabel):
         """未被省略的完整文本。"""
         return self._full
 
+    def minimumSizeHint(self):  # noqa: N802
+        """最小宽度不随文本增长。
+
+        QLabel 默认的 minimumSizeHint 会按完整文本算宽度：一首长标题（如
+        「Blazing Heart (英文版)」+ 长艺人名）就能把 PlayerBar 的最小宽度顶到
+        1185px，超过窗口最小宽 1100 → 信息列被挤到 0、布局在约束边界反复重算、
+        窗口抖动（v2.1.3 那类症状）。本控件本来就负责省略，最小宽度给 0 才对。
+        """
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
+
     def _schedule_elide(self) -> None:
         if self._elide_timer is None:
             t = QTimer(self)

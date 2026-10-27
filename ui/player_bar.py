@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -99,11 +101,11 @@ class PlayerBar(QWidget):
 
         # ---- 中：控制 + 进度（双行） ----
         center = QVBoxLayout()
-        center.setSpacing(2)
+        center.setSpacing(6)   # 控制行与进度行之间留呼吸（原来 2px 几乎贴住）
         center.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         buttons = QHBoxLayout()
-        buttons.setSpacing(6)
+        buttons.setSpacing(4)
         self.mode_btn = QPushButton()
         self.mode_btn.setObjectName("ControlBtn")
         self.mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -122,8 +124,13 @@ class PlayerBar(QWidget):
         self.play_btn.setObjectName("PlayCircle")
         self.play_btn.setToolTip("播放 / 暂停（空格）")
         self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        ic.bind_icon(self.play_btn, "play", 18, "on_accent")
+        ic.bind_icon(self.play_btn, "play", 20, "on_accent")
         self.play_btn.clicked.connect(self.play_clicked.emit)
+        # 强调色柔和投影：让主操作键从浅色底上「浮」起来（QSS 无 box-shadow）
+        self._play_glow = QGraphicsDropShadowEffect(self.play_btn)
+        self._play_glow.setBlurRadius(16)
+        self._play_glow.setOffset(0, 3)
+        self.play_btn.setGraphicsEffect(self._play_glow)
         buttons.addWidget(self.play_btn)
 
         self.next_btn = QPushButton()
@@ -138,11 +145,15 @@ class PlayerBar(QWidget):
         progress = QHBoxLayout()
         progress.setSpacing(8)
         self.time_cur = QLabel("0:00")
-        self.time_cur.setObjectName("Dim")
-        self.time_cur.setFixedWidth(36)
+        self.time_cur.setObjectName("TimeLabel")
+        self.time_cur.setFixedWidth(38)
+        # 左端右对齐、右端左对齐：时间紧贴滑块，两侧留白对称
+        self.time_cur.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progress.addWidget(self.time_cur)
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.seek_slider.setObjectName("SeekSlider")
         self.seek_slider.setFixedWidth(200)
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setTracking(False)  # 拖动中不触发 seek，release 时才跳转
@@ -152,8 +163,10 @@ class PlayerBar(QWidget):
         progress.addWidget(self.seek_slider)
 
         self.time_total = QLabel("0:00")
-        self.time_total.setObjectName("Dim")
-        self.time_total.setFixedWidth(36)
+        self.time_total.setObjectName("TimeLabel")
+        self.time_total.setFixedWidth(38)
+        self.time_total.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         progress.addWidget(self.time_total)
         center.addLayout(progress)
         root.addLayout(center, 3)
@@ -170,6 +183,7 @@ class PlayerBar(QWidget):
         vol_col.addWidget(self.mute_btn)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setObjectName("VolumeSlider")
         self.volume_slider.setFixedWidth(70)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
@@ -202,6 +216,17 @@ class PlayerBar(QWidget):
         self.set_mode(MODE_LOOP)
         self.update_volume(0.7, False)
         self.update_position(0, 0)
+        self.refresh_theme()
+
+    # ---------- 主题 ----------
+
+    def refresh_theme(self) -> None:
+        """主题切换后重染播放键投影（QGraphicsDropShadowEffect 不吃 QSS）。"""
+        from ui import theme as ui_theme
+
+        color = QColor(ui_theme.current_theme().ACCENT)
+        color.setAlpha(110 if ui_theme.current_theme().name == "light" else 130)
+        self._play_glow.setColor(color)
 
     # ---------- 内部小部件 ----------
 

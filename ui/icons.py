@@ -31,30 +31,34 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
 
     if kind == "play":
         path = QPainterPath()
-        path.moveTo(u * 0.30, u * 0.22)
+        path.moveTo(u * 0.30, u * 0.20)
         path.lineTo(u * 0.80, u * 0.50)
-        path.lineTo(u * 0.30, u * 0.78)
+        path.lineTo(u * 0.30, u * 0.80)
         path.closeSubpath()
         p.drawPath(path)
     elif kind == "pause":
-        p.drawRoundedRect(QRectF(u * 0.28, u * 0.22, u * 0.14, u * 0.56), u * 0.03, u * 0.03)
-        p.drawRoundedRect(QRectF(u * 0.58, u * 0.22, u * 0.14, u * 0.56), u * 0.03, u * 0.03)
+        # 加宽竖线（0.16 宽 / 间距 0.14），40px 圆内更饱满，不再显得空
+        p.drawRoundedRect(QRectF(u * 0.27, u * 0.21, u * 0.16, u * 0.58), u * 0.04, u * 0.04)
+        p.drawRoundedRect(QRectF(u * 0.57, u * 0.21, u * 0.16, u * 0.58), u * 0.04, u * 0.04)
     elif kind == "prev":
+        # ⏮ = 竖线在左 + 三角朝左（「退回上一首」）。此前 prev/next 画反了：
+        # prev 画成 ▶|（前进形状）、next 画成 |◀，按钮语义与图形相反。
+        p.drawLine(QPointF(u * 0.24, u * 0.30), QPointF(u * 0.24, u * 0.70))
         path = QPainterPath()
-        path.moveTo(u * 0.30, u * 0.26)
-        path.lineTo(u * 0.72, u * 0.50)
-        path.lineTo(u * 0.30, u * 0.74)
+        path.moveTo(u * 0.72, u * 0.29)
+        path.lineTo(u * 0.31, u * 0.50)
+        path.lineTo(u * 0.72, u * 0.71)
         path.closeSubpath()
         p.drawPath(path)
-        p.drawLine(QPointF(u * 0.76, u * 0.26), QPointF(u * 0.76, u * 0.74))
     elif kind == "next":
+        # ⏭ = 三角朝右 + 竖线在右
         path = QPainterPath()
-        path.moveTo(u * 0.70, u * 0.26)
-        path.lineTo(u * 0.28, u * 0.50)
-        path.lineTo(u * 0.70, u * 0.74)
+        path.moveTo(u * 0.28, u * 0.29)
+        path.lineTo(u * 0.69, u * 0.50)
+        path.lineTo(u * 0.28, u * 0.71)
         path.closeSubpath()
         p.drawPath(path)
-        p.drawLine(QPointF(u * 0.24, u * 0.26), QPointF(u * 0.24, u * 0.74))
+        p.drawLine(QPointF(u * 0.76, u * 0.30), QPointF(u * 0.76, u * 0.70))
     elif kind == "volume":
         p.drawPolygon([QPointF(u * 0.20, u * 0.38), QPointF(u * 0.34, u * 0.38),
                        QPointF(u * 0.46, u * 0.26), QPointF(u * 0.46, u * 0.74),
@@ -68,23 +72,58 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         p.drawLine(QPointF(u * 0.56, u * 0.40), QPointF(u * 0.82, u * 0.62))
         p.drawLine(QPointF(u * 0.82, u * 0.40), QPointF(u * 0.56, u * 0.62))
     elif kind == "loop":
-        p.drawArc(QRectF(m, m, u - 2 * m, u - 2 * m), 40 * 16, 300 * 16)
-        # 箭头
-        p.drawLine(QPointF(u * 0.78, u * 0.16), QPointF(u * 0.88, u * 0.28))
-        p.drawLine(QPointF(u * 0.88, u * 0.28), QPointF(u * 0.70, u * 0.32))
+        # 列表循环：上下两条横线 + 两端反向箭头（通用 repeat 图形）。
+        # 旧版是「一段 300° 圆弧 + 两条斜线当箭头」，16px 下看起来像刷新按钮，
+        # 与「循环播放」语义不符，已重画。
+        p.drawLine(QPointF(u * 0.24, u * 0.33), QPointF(u * 0.64, u * 0.33))
+        path = QPainterPath()
+        path.moveTo(u * 0.64, u * 0.22)
+        path.lineTo(u * 0.80, u * 0.33)
+        path.lineTo(u * 0.64, u * 0.44)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(u * 0.76, u * 0.67), QPointF(u * 0.36, u * 0.67))
+        path = QPainterPath()
+        path.moveTo(u * 0.36, u * 0.56)
+        path.lineTo(u * 0.20, u * 0.67)
+        path.lineTo(u * 0.36, u * 0.78)
+        path.closeSubpath()
+        p.drawPath(path)
     elif kind == "repeat_one":
-        p.drawArc(QRectF(m, m, u - 2 * m, u - 2 * m), 40 * 16, 300 * 16)
-        p.drawLine(QPointF(u * 0.78, u * 0.16), QPointF(u * 0.88, u * 0.28))
-        p.drawLine(QPointF(u * 0.88, u * 0.28), QPointF(u * 0.70, u * 0.32))
-        p.drawText(QRectF(u * 0.30, u * 0.30, u * 0.40, u * 0.40), int(Qt.AlignmentFlag.AlignCenter), "1")
+        # 单曲循环：同 repeat，中间加一个「1」。
+        p.drawLine(QPointF(u * 0.24, u * 0.26), QPointF(u * 0.64, u * 0.26))
+        path = QPainterPath()
+        path.moveTo(u * 0.64, u * 0.15)
+        path.lineTo(u * 0.80, u * 0.26)
+        path.lineTo(u * 0.64, u * 0.37)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(u * 0.76, u * 0.74), QPointF(u * 0.36, u * 0.74))
+        path = QPainterPath()
+        path.moveTo(u * 0.36, u * 0.63)
+        path.lineTo(u * 0.20, u * 0.74)
+        path.lineTo(u * 0.36, u * 0.85)
+        path.closeSubpath()
+        p.drawPath(path)
+        # 「1」用矢量画（text 在 16px 下依赖字体、易歪）：竖笔 + 左上小旗
+        p.drawLine(QPointF(u * 0.50, u * 0.36), QPointF(u * 0.50, u * 0.66))
+        p.drawLine(QPointF(u * 0.42, u * 0.43), QPointF(u * 0.50, u * 0.36))
     elif kind == "shuffle":
-        p.drawLine(QPointF(u * 0.18, u * 0.72), QPointF(u * 0.42, u * 0.42))
-        p.drawLine(QPointF(u * 0.42, u * 0.42), QPointF(u * 0.78, u * 0.78))
-        p.drawLine(QPointF(u * 0.24, u * 0.26), QPointF(u * 0.80, u * 0.66))
-        p.drawLine(QPointF(u * 0.18, u * 0.72), QPointF(u * 0.18, u * 0.58))
-        p.drawLine(QPointF(u * 0.18, u * 0.86), QPointF(u * 0.18, u * 0.72))
-        p.drawLine(QPointF(u * 0.82, u * 0.14), QPointF(u * 0.82, u * 0.28))
-        p.drawLine(QPointF(u * 0.82, u * 0.42), QPointF(u * 0.82, u * 0.56))
+        # 随机播放：两条交叉的「车道」+ 右端箭头（通用 shuffle 图形）。
+        # 旧版是 7 段互不相连的碎线，16px 下完全读不出形状。
+        for y0, y1 in ((0.32, 0.68), (0.68, 0.32)):
+            path = QPainterPath()
+            path.moveTo(u * 0.18, u * y0)
+            path.lineTo(u * 0.40, u * y0)
+            path.lineTo(u * 0.66, u * y1)
+            path.lineTo(u * 0.74, u * y1)
+            p.drawPath(path)
+            arrow = QPainterPath()
+            arrow.moveTo(u * 0.72, u * (y1 - 0.09))
+            arrow.lineTo(u * 0.86, u * y1)
+            arrow.lineTo(u * 0.72, u * (y1 + 0.09))
+            arrow.closeSubpath()
+            p.drawPath(arrow)
     elif kind == "sequential":
         # 列表顺序图标：三条线 + 右向小三角
         p.drawLine(QPointF(u * 0.16, u * 0.28), QPointF(u * 0.58, u * 0.28))

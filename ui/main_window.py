@@ -681,6 +681,7 @@ class MainWindow(QMainWindow):
         self.store.save()
         self.float_bar.set_theme_icon(name == "dark")
         self.title_bar.refresh_icons()
+        self.player_bar.refresh_theme()
         # 主题切换会改变按钮字号/内边距 → 浮动条宽度要重新按 sizeHint 算一次
         self._position_float_bar()
         # 主题切换后重刷列表（封面占位/均衡器条颜色等随主题变化）
