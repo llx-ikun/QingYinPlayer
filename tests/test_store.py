@@ -168,7 +168,7 @@ class TestStore(unittest.TestCase):
         """旧 data.json 无 theme/nickname/favorites：无损升级。"""
         self._store()
         s2 = LibraryStore(self.db)
-        self.assertEqual(s2.settings.theme, "dark")
+        self.assertEqual(s2.settings.theme, "columbina")
         self.assertEqual(s2.settings.nickname, "音乐爱好者")
 
     def test_appearance_settings_roundtrip(self):

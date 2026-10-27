@@ -254,6 +254,29 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         path.lineTo(u * 0.62, u * 0.66)
         path.closeSubpath()
         p.drawPath(path)
+    elif kind == "feather":
+        # 羽毛（「星月」主题钮）：**实心羽片 + 镂空羽轴 + 两侧羽枝缺口**。
+        # 首版是「羽轴 + 8 条细羽枝」（纯线条），出验收表后发现 16px 下糊成一小团
+        # 灰点，和相邻的 settings（细横线）撞气质 —— 主题钮是最常被点到的按钮，
+        # 必须靠实心轮廓才站得住（同 gear 的教训）。
+        p.save()
+        p.translate(u * 0.5, u * 0.5)
+        p.rotate(-42)  # 羽尖朝右上，和界面里其他斜向元素同方向
+        blade = QPainterPath()
+        blade.moveTo(-u * 0.32, 0)
+        blade.cubicTo(-u * 0.20, -u * 0.23, u * 0.10, -u * 0.23, u * 0.32, -u * 0.03)
+        blade.cubicTo(u * 0.12, u * 0.20, -u * 0.16, u * 0.22, -u * 0.32, 0)
+        blade.closeSubpath()
+        cuts = QPainterPath()
+        cuts.addRect(QRectF(-u * 0.38, -u * 0.028, u * 0.74, u * 0.056))  # 羽轴细缝
+        for i in range(3):  # 羽枝缺口：越靠羽尖越短，缺口必须切穿羽片边缘
+            cx = -u * 0.16 + i * u * 0.16
+            ln = u * (0.28 - i * 0.06)
+            cuts.addRect(QRectF(cx, u * 0.02, u * 0.04, ln))
+            cuts.addRect(QRectF(cx, -u * 0.02 - ln, u * 0.04, ln))
+        p.setBrush(color)
+        p.fillPath(blade.subtracted(cuts), color)
+        p.restore()
     elif kind == "gear":
         # 齿轮：实心 + 锯齿外轮廓 + 中心镂空圆孔。
         # 为什么不用「圆环 + 8 条短射线」：那样在 16px 下与 sun（实心圆点 + 细长

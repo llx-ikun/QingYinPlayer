@@ -227,7 +227,7 @@ class Settings:
     last_track_id: str | None = None
     last_position_ms: int = 0
     last_view: str = PLAYLIST_LIBRARY   # 上次所在视图（library / playlist id）
-    theme: str = "dark"                 # v2.0：主题（dark / light）
+    theme: str = "columbina"            # v2.3：主题（columbina 星月 / dark / light）
     nickname: str = "音乐爱好者"         # v2.0：侧边栏用户卡片昵称
     online_lyrics: bool = True          # v2.2：本地无歌词时联网补（LRCLIB）
     accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
@@ -282,7 +282,7 @@ class Settings:
         s.last_track_id = d.get("last_track_id")
         s.last_position_ms = int(d.get("last_position_ms", 0))
         s.last_view = d.get("last_view", PLAYLIST_LIBRARY)
-        s.theme = d.get("theme") or "dark"
+        s.theme = d.get("theme") or "columbina"
         s.nickname = d.get("nickname") or "音乐爱好者"
         s.online_lyrics = bool(d.get("online_lyrics", True))
         s.accent_color = d.get("accent_color") or ""

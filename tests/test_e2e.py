@@ -465,10 +465,12 @@ class TestE2EV2(unittest.TestCase):
 
     def test_theme_switch_applies_and_persists(self):
         from PySide6.QtWidgets import QApplication
-        from ui.theme import DARK, LIGHT
+        from ui.theme import COLUMBINA, DARK, LIGHT
         app = QApplication.instance()
         self._import()
-        self.assertEqual(self.store.settings.theme, "dark")
+        # v2.3：新装默认「星月」主题
+        self.assertEqual(self.store.settings.theme, "columbina")
+        self.assertIn(COLUMBINA.ACCENT, app.styleSheet())
         self.window._apply_theme("light")
         self.assertEqual(self.store.settings.theme, "light")
         self.assertIn(LIGHT.ACCENT, app.styleSheet())  # 浅色强调色进入 QSS
@@ -485,20 +487,38 @@ class TestE2EV2(unittest.TestCase):
             window2.close()
 
     def test_float_bar_theme_toggle(self):
+        from ui.theme import THEME_NEXT
         self._import()
+        fb = self.window.float_bar
+        # v2.3 三态循环：星月 → 深色 → 浅色 → 星月。
+        # 按钮图标与提示都指向「点下去会切到哪个」，初始目标是深色。
+        self.assertEqual(self.store.settings.theme, "columbina")
+        self.assertEqual(fb.theme_toggle._kind, "moon")
+        self.assertIn("切换到深色主题", fb.theme_toggle.toolTip())
+        self.assertFalse(fb.theme_toggle.isChecked())
+
+        self.window._toggle_theme()
+        self.assertEqual(self.store.settings.theme, "dark")
+        self.assertEqual(fb.theme_toggle._kind, "sun")
+        self.assertIn("切换到浅色主题", fb.theme_toggle.toolTip())
+        self.assertFalse(fb.theme_toggle.isChecked())
+
         self.window._toggle_theme()
         self.assertEqual(self.store.settings.theme, "light")
-        self.assertIn("切换到深色主题", self.window.float_bar.theme_toggle.toolTip())
-        # v2.2.2 布局：左列主题圆钮 + 齿轮设置，右侧导入音乐 / 数据目录两个独立按钮
-        fb = self.window.float_bar
-        self.assertTrue(fb.theme_toggle.isCheckable())
+        self.assertIn("切换到星月主题", fb.theme_toggle.toolTip())
         self.assertTrue(fb.theme_toggle.isChecked())  # 浅色主题 = 开关打开
+
+        self.window._toggle_theme()
+        self.assertEqual(self.store.settings.theme, "columbina")  # 闭环回到起点
+        self.assertEqual(fb.theme_toggle._kind, "moon")
+        self.assertFalse(fb.theme_toggle.isChecked())
+
+        # v2.2.2 布局：左列主题圆钮 + 齿轮设置，右侧导入音乐 / 数据目录两个独立按钮
+        self.assertTrue(fb.theme_toggle.isCheckable())
         self.assertEqual(fb.settings_btn._kind, "gear")
         self.assertEqual(fb.import_btn.text(), "导入音乐")
         self.assertEqual(fb.dir_btn.text(), "数据目录")
-        self.window._toggle_theme()
-        self.assertEqual(self.store.settings.theme, "dark")
-        self.assertFalse(self.window.float_bar.theme_toggle.isChecked())  # 深色主题 = 开关关闭
+        self.assertEqual(THEME_NEXT["columbina"], "dark")  # 循环表不写反
 
     # ---------- 我喜欢 ----------
 
@@ -943,12 +963,14 @@ class TestE2EAppearance(unittest.TestCase):
                          "外观设置要落盘，重启后保持")
 
     def test_reset_accent_returns_to_theme_default(self):
-        from ui.theme import DARK, current_theme
+        from ui.theme import THEMES, current_theme
 
+        theme_name = self.store.settings.theme
         self.window._on_settings_accent("#ff7a45")
         self.window._on_settings_accent("")
         self.assertEqual(self.store.settings.accent_color, "")
-        self.assertEqual(current_theme().ACCENT, DARK.ACCENT)
+        # v2.3 起默认主题是「星月」，默认强调色不能再写死 DARK
+        self.assertEqual(current_theme().ACCENT, THEMES[theme_name].ACCENT)
 
     def test_accent_survives_theme_switch(self):
         """切主题不该把手选的颜色丢掉——只有"跟随主题"才回到默认色。"""

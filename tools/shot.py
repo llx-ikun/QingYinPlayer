@@ -145,7 +145,7 @@ def _play_first_video(window) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="./shots")
-    parser.add_argument("--theme", default=None, choices=["dark", "light"])
+    parser.add_argument("--theme", default=None, choices=["columbina", "dark", "light"])
     parser.add_argument("--accent", default="", help="自定义强调色，如 #ff7a45（默认跟随主题）")
     parser.add_argument("--font-scale", type=float, default=1.0, dest="font_scale")
     parser.add_argument("--tag", default="", help="文件名后缀，便于同主题多套外观对比")
@@ -160,7 +160,7 @@ def main() -> int:
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    theme = args.theme or "dark"
+    theme = args.theme or "columbina"
     states = [args.state] if args.state else \
         ["library", "playing", "lyrics", "queue", "settings", "maximized", "empty",
          "video", "video_fullscreen"]

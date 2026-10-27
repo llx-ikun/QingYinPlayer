@@ -37,6 +37,9 @@ class Theme:
     DANGER: str
     HEART: str            # 爱心红
     ON_ACCENT: str        # 强调色上的文字/图标
+    # 非空时窗口底用 BG → BG_ALT 的斜向渐变（默认空 = 纯色 BG）。
+    # 给「星月」主题做夜空层次用：纯色深紫太容易糊成一块黑。
+    BG_ALT: str = ""
 
 
 DARK = Theme(
@@ -57,8 +60,29 @@ LIGHT = Theme(
     ACCENT_SOFT="#e7f0fe", DANGER="#e14a4a", HEART="#ec4141", ON_ACCENT="#ffffff",
 )
 
-THEMES = {"dark": DARK, "light": LIGHT}
-DEFAULT_THEME = "dark"
+COLUMBINA = Theme(
+    name="columbina",
+    # 「星月」主题：取自《原神》「空月之歌」哥伦比娅的**视觉语言**——
+    # 深紫夜空的底、冰蓝与月白的冷光、莓红的点缀。
+    # 只复刻配色与气质，不嵌入任何官方立绘（版权素材不随程序分发）。
+    # ON_ACCENT 用近黑：冰蓝 #7ec8e8 很亮，白字对比只有 1.9:1，必须压深。
+    # BG_ALT 让窗口底从深紫斜向过渡到墨蓝，避免整屏糊成一块黑。
+    BG="#130e26", SURFACE="#1c1632", SURFACE_HOVER="#251d3f", SURFACE_ACTIVE="#2f264c",
+    BORDER="#3a2f56", TEXT="#f3eefc", TEXT_DIM="#a196bd",
+    ACCENT="#7ec8e8", ACCENT_HOVER="#9ad9f3", ACCENT_DIM="#4a7f99",
+    ACCENT_SOFT="#2c2546", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
+    BG_ALT="#0b1526",
+)
+
+THEMES = {"columbina": COLUMBINA, "dark": DARK, "light": LIGHT}
+
+# 主题钮的循环顺序（点一下切到下一个）
+THEME_ORDER = ("columbina", "dark", "light")
+THEME_NEXT = {"columbina": "dark", "dark": "light", "light": "columbina"}
+# 每个主题自己的代表图标；切换按钮显示的是「下一个主题」的图标
+THEME_ICON = {"columbina": "feather", "dark": "moon", "light": "sun"}
+THEME_LABEL = {"columbina": "星月", "dark": "深色", "light": "浅色"}
+DEFAULT_THEME = "columbina"      # v2.3：新装默认「星月」主题
 
 FONT_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif'
 
@@ -223,6 +247,14 @@ def _refresh(app) -> Theme:
     return _current
 
 
+def _bg_fill(t: Theme) -> str:
+    """窗口底填充：主题给了 BG_ALT 就用斜向渐变，否则纯色。"""
+    if t.BG_ALT:
+        return (f"qlineargradient(x1:0, y1:0, x2:0.65, y2:1, "
+                f"stop:0 {t.BG}, stop:1 {t.BG_ALT})")
+    return t.BG
+
+
 def build_stylesheet(theme: Theme | None = None, font_scale: float = FONT_SCALE_DEFAULT,
                      scrim: float | None = None) -> str:
     """生成 QSS。
@@ -243,7 +275,7 @@ def build_stylesheet(theme: Theme | None = None, font_scale: float = FONT_SCALE_
 QMainWindow, QDialog {{ background: {t.BG}; }}
 
 /* ---------- 无边框窗口根容器（圆角由 mask 硬裁剪） ---------- */
-QWidget#WindowRoot {{ background: {t.BG}; border: 1px solid {t.BORDER}; border-radius: 10px; }}
+QWidget#WindowRoot {{ background: {_bg_fill(t)}; border: 1px solid {t.BORDER}; border-radius: 10px; }}
 QWidget#WindowRoot[is_maximized="true"] {{ border-radius: 0px; border: none; }}
 
 /* ---------- 标题栏（通栏） ---------- */
@@ -631,7 +663,7 @@ QTabBar::tab:selected {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; border-
    ① 窗口根底色不能透：否则把「背景不透明度」调低时，透出来的是桌面而不是
       主题底色，看着像窗口漏了；
    ② 对话框/菜单/输入框是独立顶层窗口或浮层，半透明会直接看到桌面内容。 */
-QWidget#WindowRoot {{ background: {t.BG}; }}
+QWidget#WindowRoot {{ background: {_bg_fill(t)}; }}
 QDialog#SettingsDialog, QDialog#QueuePanel, QMenu, QToolTip, QMessageBox,
 QLineEdit, QTextEdit, QComboBox, QComboBox QAbstractItemView,
 QLabel#Toast {{ background: {t.SURFACE}; }}

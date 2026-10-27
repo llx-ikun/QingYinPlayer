@@ -131,13 +131,20 @@ class FloatBar(QWidget):
         right_wrap.addStretch(1)
         row.addLayout(right_wrap, 1)
 
-        self.set_theme_icon(True)
+        self.set_theme_icon("columbina")
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(_FLOAT_W, _CIRCLE * 2 + _GAP_V)
 
-    def set_theme_icon(self, is_dark: bool) -> None:
-        """深色主题下显示太阳（点它切到浅色），反之显示月亮；checked = 当前为浅色。"""
-        self.theme_toggle.set_kind("sun" if is_dark else "moon")
-        self.theme_toggle.setToolTip("切换到浅色主题" if is_dark else "切换到深色主题")
-        self.theme_toggle.setChecked(not is_dark)
+    def set_theme_icon(self, theme_name: str) -> None:
+        """主题钮：图标与提示都指向「点下去会切到哪个主题」。
+
+        三态循环 星月 → 深色 → 浅色 → 星月，所以按钮上画的不是当前主题，
+        而是下一个目标（羽毛=星月 / 月亮=深色 / 太阳=浅色）。
+        """
+        from ui.theme import THEME_ICON, THEME_LABEL, THEME_NEXT
+
+        nxt = THEME_NEXT.get(theme_name, "columbina")
+        self.theme_toggle.set_kind(THEME_ICON[nxt])
+        self.theme_toggle.setToolTip(f"切换到{THEME_LABEL[nxt]}主题")
+        self.theme_toggle.setChecked(theme_name == "light")

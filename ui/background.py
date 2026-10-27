@@ -12,15 +12,19 @@
 from __future__ import annotations
 
 import os
+import random
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QImage, QLinearGradient, QPainter, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from app.models import BackgroundConfig
 
 # 图片背景的缓存上限：换歌/切页会反复刷新，只缓存最近一张，避免吃内存
 _PIXMAP_CACHE: dict[tuple, QPixmap] = {}
+
+# 主题装饰的星点用固定种子生成 —— 每次重绘位置必须一致，否则窗口一缩放星星就乱跳
+_DECOR_SEED = 20261027
 
 
 def load_background_pixmap(path: str) -> QPixmap | None:
@@ -78,6 +82,53 @@ def prepare_pixmap(path: str, width: int, height: int, blur: int) -> QPixmap | N
     return result
 
 
+def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str) -> None:
+    """画「星月」主题的底层装饰：右下角一枚极淡的月牙 + 固定星点。
+
+    为什么不用官方立绘：那是版权素材，不该随程序分发。这里只用角色的
+    **视觉语言**（月牙、星点、冰蓝冷光）重现同样的气质，且透明度压到 3%~10%，
+    只在最底层当氛围，不抢内容的注意力。
+    """
+    w, h = rect.width(), rect.height()
+    if w <= 0 or h <= 0:
+        return
+    painter.setPen(Qt.PenStyle.NoPen)
+
+    # 星点：位置/大小/亮度都由固定种子决定，窗口缩放时不会乱跳
+    rnd = random.Random(_DECOR_SEED)
+    star = QColor(color)
+    for _ in range(56):
+        x, y = rnd.uniform(0, 1) * w, rnd.uniform(0, 1) * h
+        r = rnd.uniform(0.6, 1.9)
+        star.setAlpha(rnd.randint(22, 72))
+        painter.setBrush(star)
+        painter.drawEllipse(QPointF(x, y), r, r)
+
+    # 月牙位置的三次试错值得记下来：
+    #   ① 贴右下角 → 被 84px 播放栏压成一道残弧，横穿音量条，像渲染脏点；
+    #   ② 右上角裁出画面 → 弧的缺口被切掉，只剩一大块淡圆盘，像污渍；
+    #   ③ 现在这版：**完整月牙**、细一点、放在右半区竖向 56% 处。
+    #      形状完整才读得出是月亮，alpha 压到 18 又不会抢列表里的字。
+    diameter = min(w, h) * 0.40
+    cx, cy = w * 0.88, h * 0.56
+    left = cx - diameter * 0.5
+    top = cy - diameter * 0.5
+    outer = QRectF(left, top, diameter, diameter)
+    path = QPainterPath()
+    path.arcMoveTo(outer, 75)
+    path.arcTo(outer, 75, 210)
+    # 内弧半径更大 → 月牙更细，不再是胖圆环
+    inner = QRectF(left + diameter * 0.30, top + diameter * 0.10,
+                   diameter * 0.82, diameter * 0.94)
+    path.arcTo(inner, 285, -210)
+    path.closeSubpath()
+
+    moon_color = QColor(color)
+    moon_color.setAlpha(18)
+    painter.setBrush(moon_color)
+    painter.drawPath(path)
+
+
 class BackgroundLayer(QWidget):
     """铺满窗口底层的背景画布。鼠标穿透，不影响任何交互。"""
 
@@ -88,8 +139,18 @@ class BackgroundLayer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._config = BackgroundConfig()
         self._pixmap: QPixmap | None = None
+        self._decor = ""                       # 主题装饰名（目前只有 "moon"）
+        self._decor_color = "#7ec8e8"
 
     # ---------- 对外 ----------
+
+    def set_decor(self, name: str, color: str = "#7ec8e8") -> None:
+        """主题装饰。只在**没有自定义背景**时绘制，以免和用户选的背景打架。"""
+        if (name, color) == (self._decor, self._decor_color):
+            return
+        self._decor = name
+        self._decor_color = color
+        self.update()
 
     def set_config(self, config: BackgroundConfig) -> None:
         self._config = config
@@ -119,7 +180,15 @@ class BackgroundLayer(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         cfg = self._config
-        if cfg.type == "none" or self.width() <= 0 or self.height() <= 0:
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        if cfg.type == "none":
+            # 没有自定义背景时，主题可以放自己的底层装饰（星月）
+            if self._decor == "moon":
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                _paint_theme_decor(painter, QRectF(self.rect()), self._decor_color)
+                painter.end()
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

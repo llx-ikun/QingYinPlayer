@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from app.library import import_background
 from app.models import BackgroundConfig
 from app.paths import bgs_dir
+from ui import theme as ui_theme
 from ui.widgets import ChevronComboBox
 
 # 预设强调色：覆盖"冷暖各一支"，避免用户以为只能蓝
@@ -110,7 +111,7 @@ class _Swatch(QWidget):
 
 
 class SettingsDialog(QDialog):
-    theme_changed = Signal(str)          # "dark" / "light"
+    theme_changed = Signal(str)          # columbina / dark / light
     nickname_changed = Signal(str)
     online_lyrics_changed = Signal(bool)
     accent_changed = Signal(str)         # "#rrggbb"，"" = 跟随主题默认
@@ -125,7 +126,7 @@ class SettingsDialog(QDialog):
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
         self.setMinimumWidth(430)
-        self._theme_name = theme_name if theme_name in ("dark", "light") else "dark"
+        self._theme_name = theme_name if theme_name in ui_theme.THEMES else ui_theme.DEFAULT_THEME
         self._accent = (accent_color or "").lower()
         self._font_scale = font_scale
         self._loading = False
@@ -172,14 +173,17 @@ class SettingsDialog(QDialog):
 
         theme_row = QHBoxLayout()
         theme_row.setSpacing(16)
-        self.dark_radio = QRadioButton("深色")
-        self.light_radio = QRadioButton("浅色")
-        (self.dark_radio if self._theme_name == "dark" else self.light_radio).setChecked(True)
-        self.dark_radio.toggled.connect(lambda checked: checked and self._on_theme("dark"))
-        self.light_radio.toggled.connect(lambda checked: checked and self._on_theme("light"))
         theme_row.addWidget(QLabel("主题"))
-        theme_row.addWidget(self.dark_radio)
-        theme_row.addWidget(self.light_radio)
+        self.theme_radios: dict[str, QRadioButton] = {}
+        for tid in ui_theme.THEME_ORDER:
+            radio = QRadioButton(ui_theme.THEME_LABEL[tid])
+            radio.setChecked(tid == self._theme_name)
+            radio.toggled.connect(lambda checked, t=tid: checked and self._on_theme(t))
+            theme_row.addWidget(radio)
+            self.theme_radios[tid] = radio
+        # 兼容旧引用
+        self.dark_radio = self.theme_radios["dark"]
+        self.light_radio = self.theme_radios["light"]
         theme_row.addStretch(1)
         root.addLayout(theme_row)
 

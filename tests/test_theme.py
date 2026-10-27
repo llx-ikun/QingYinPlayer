@@ -36,7 +36,7 @@ def _contrast(fg: str, bg: str) -> float:
 
 class TestPaletteFormat(unittest.TestCase):
     def test_all_themes_registered(self):
-        self.assertEqual(set(THEMES), {"dark", "light"})
+        self.assertEqual(set(THEMES), {"columbina", "dark", "light"})
 
     def test_every_field_is_hex_rgb(self):
         for theme in THEMES.values():
@@ -193,6 +193,40 @@ class TestFontScale(unittest.TestCase):
             r"font-size:\s*(\d+)px", build_stylesheet(DARK, font_scale=FONT_SCALE_MIN))]
         self.assertTrue(sizes)
         self.assertGreaterEqual(min(sizes), 9)
+
+
+class TestThemeCycle(unittest.TestCase):
+    """v2.3「星月」主题接入后，主题是**三态循环**而不是深浅二态。
+
+    这里钉住三件容易改坏的事：默认主题、循环闭环、每个主题都有图标与中文名。
+    改漏任何一个，主题钮都会出现「点了没反应」或「图标与目标主题对不上」。
+    """
+
+    def test_default_is_columbina(self):
+        from ui.theme import DEFAULT_THEME
+        self.assertEqual(DEFAULT_THEME, "columbina")
+
+    def test_cycle_covers_all_themes_and_closes(self):
+        from ui.theme import THEME_NEXT, THEME_ORDER, THEMES
+        self.assertEqual(set(THEME_ORDER), set(THEMES))
+        seen, cur = [], THEME_ORDER[0]
+        for _ in range(len(THEME_ORDER)):
+            seen.append(cur)
+            cur = THEME_NEXT[cur]
+        self.assertEqual(cur, THEME_ORDER[0], "循环没有闭环")
+        self.assertEqual(set(seen), set(THEMES), "循环遗漏了某个主题")
+
+    def test_every_theme_has_icon_and_label(self):
+        from ui.theme import THEME_ICON, THEME_LABEL, THEMES
+        self.assertEqual(set(THEME_ICON), set(THEMES))
+        self.assertEqual(set(THEME_LABEL), set(THEMES))
+
+    def test_bg_gradient_only_for_columbina(self):
+        """渐变底只给星月主题；深浅两色主题必须仍是纯色（否则 QSS 里多出无谓渐变）。"""
+        from ui.theme import THEMES, build_stylesheet
+        self.assertIn("qlineargradient", build_stylesheet(THEMES["columbina"]))
+        for name in ("dark", "light"):
+            self.assertNotIn("qlineargradient", build_stylesheet(THEMES[name]), name)
 
 
 if __name__ == "__main__":

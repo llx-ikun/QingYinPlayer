@@ -149,7 +149,7 @@ class TestStoreCompatibility(unittest.TestCase):
         track = store.get_track("abc")
         self.assertIsNotNone(track)
         self.assertFalse(track.is_video)
-        self.assertEqual(store.settings.theme, "dark")
+        self.assertEqual(store.settings.theme, "columbina")
         self.assertEqual(store.settings.nickname, "音乐爱好者")
 
     def test_video_track_roundtrip(self):

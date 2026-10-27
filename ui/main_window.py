@@ -175,7 +175,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.2.3 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.3.0 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -758,7 +758,9 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, name: str) -> None:
         self.store.settings.theme = name
         self._apply_appearance()
-        self._toast("已切换到浅色主题" if name == "light" else "已切换到深色主题", 2000)
+        # 文案跟主题表走：三态循环后不能再写「浅色 else 深色」
+        label = ui_theme.THEME_LABEL.get(name, name)
+        self._toast(f"已切换到{label}主题", 2000)
 
     def _apply_appearance(self, save: bool = True) -> None:
         """把 settings 里的主题/强调色/字号一次性应用到整个界面（v2.2）。
@@ -776,7 +778,7 @@ class MainWindow(QMainWindow):
                                 scrim=self._bg_scrim)
         if save:
             self.store.save()
-        self.float_bar.set_theme_icon(ui_theme.current_theme().name == "dark")
+        self.float_bar.set_theme_icon(ui_theme.current_theme().name)
         self.title_bar.refresh_icons()
         self.player_bar.refresh_theme()
         # 字号/内边距变化会改变浮动条 sizeHint → 必须重新量一次宽度并定位
@@ -802,7 +804,11 @@ class MainWindow(QMainWindow):
         self._toast(f"字号已调整为 {round(scale * 100)}%", 2000)
 
     def _toggle_theme(self) -> None:
-        self._apply_theme("light" if ui_theme.current_theme().name == "dark" else "dark")
+        # 三态循环：星月 → 深色 → 浅色 → 星月
+        order = ui_theme.THEME_ORDER
+        cur = ui_theme.current_theme().name
+        idx = order.index(cur) if cur in order else -1
+        self._apply_theme(order[(idx + 1) % len(order)])
 
     def _open_data_dir(self) -> None:
         from app.paths import app_data_dir
@@ -1048,6 +1054,12 @@ class MainWindow(QMainWindow):
 
     def _apply_background_config(self, config) -> None:
         self.background.set_config(config)
+        # 「星月」主题自带底层装饰（淡月牙 + 星点）；用户一旦设了自定义背景就让位
+        theme = ui_theme.current_theme()
+        self.background.set_decor(
+            "moon" if theme.name == "columbina" and config.type == "none" else "",
+            theme.ACCENT,
+        )
         self._layout_background()
         self.background.lower()      # 任何 raise_() 之后都压回最底层
 

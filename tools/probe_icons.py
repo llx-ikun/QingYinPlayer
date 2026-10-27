@@ -21,7 +21,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from ui.icons import _paint  # noqa: E402
 
-KINDS = ["gear", "settings", "sun", "moon", "folder", "plus"]
+# 顺序按「界面上相邻关系」排：齿轮紧挨主题钮，主题三态（羽毛/月亮/太阳）连成一排，
+# 这样 16px 那一行能直接看出相邻图标会不会撞形。
+KINDS = ["gear", "settings", "feather", "moon", "sun", "folder", "plus"]
 BIG, SMALL, ZOOM = 72, 16, 8
 PAD = 14
 LABEL_H = 16

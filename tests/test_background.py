@@ -214,5 +214,44 @@ class TestScrimStylesheet(unittest.TestCase):
         self.assertNotIn("rgba(", build_stylesheet(DARK))
 
 
+class TestThemeDecor(unittest.TestCase):
+    """v2.3「星月」主题的底层装饰：淡月牙 + 星点。
+
+    只验证「该画时画了、不该画时什么都没画」，好不好看交给真实平台截图。
+    注意不能用 grab()：它先铺不透明白底，测不出「透明」与「极淡」。
+    """
+
+    def _non_black_samples(self, decor: str) -> int:
+        from PySide6.QtGui import QColor, QImage
+        from ui.background import BackgroundLayer
+
+        layer = BackgroundLayer()
+        layer.resize(420, 300)
+        layer.set_config(BackgroundConfig())
+        layer.set_decor(decor, "#7ec8e8")
+        img = QImage(420, 300, QImage.Format.Format_ARGB32)
+        img.fill(QColor("#000000"))
+        layer.render(img)
+        count = 0
+        for x in range(0, 420, 3):
+            for y in range(0, 300, 3):
+                if img.pixelColor(x, y).lightness() > 2:
+                    count += 1
+        return count
+
+    def test_decor_paints_when_enabled(self):
+        self.assertGreater(self._non_black_samples("moon"), 8, "星月装饰没有画出来")
+
+    def test_no_decor_paints_nothing(self):
+        self.assertEqual(self._non_black_samples(""), 0, "没有装饰时不该画任何东西")
+
+    def test_decor_does_not_count_as_custom_background(self):
+        from ui.background import BackgroundLayer
+        layer = BackgroundLayer()
+        layer.set_config(BackgroundConfig())
+        layer.set_decor("moon", "#7ec8e8")
+        self.assertFalse(layer.is_active(), "主题装饰不算自定义背景，不该触发面板半透明")
+
+
 if __name__ == "__main__":
     unittest.main()

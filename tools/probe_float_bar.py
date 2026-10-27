@@ -30,7 +30,7 @@ PAD = 12
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="shots/float_bar.png")
-    ap.add_argument("--theme", default="light", choices=["light", "dark"])
+    ap.add_argument("--theme", default="columbina", choices=["columbina", "dark", "light"])
     ap.add_argument("--scale", type=int, default=4, help="放大倍数（最近邻，看边缘是否锐利）")
     ap.add_argument("--hover", default="", choices=["", "import", "dir", "settings", "theme"],
                     help="模拟某个按钮的悬停外观（直接灌底色，不触发真实 :hover）")
@@ -51,7 +51,7 @@ def main() -> int:
     host.resize(300, 108)
     host.setStyleSheet(f"QWidget#ProbeCanvas {{ background: {t.BG}; }}")
     bar = FloatBar(host)
-    bar.set_theme_icon(args.theme == "dark")   # 太阳=当前深色，月亮=当前浅色
+    bar.set_theme_icon(args.theme)   # 图标指向「点下去会切到哪个主题」
     bar.adjustSize()                           # 先定尺寸，再按真实高度居中（顺序反了会把齿轮切掉）
     bar.move(PAD, (host.height() - bar.height()) // 2)
     host.show()

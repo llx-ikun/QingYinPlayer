@@ -616,3 +616,92 @@ class Settings:              # 新增
   - 证据：`test_same_image_reused`、`test_background_off_restores_opaque`
 - [x] 全量回归全绿、`ruff check .` 干净、双 EXE 重建。
   - 证据：`run_tests.py` 21 进程；`ruff check .` → All checks passed
+
+## 15. v2.3 「星月」默认主题（2026-10-27）
+
+### 15.1 需求与边界
+
+用户给了一张《原神》「空月之歌」角色立绘，原话：「用图案中的角色元素新做一个所有背景的
+默认主题」。落实为三条：
+
+| 项 | 结论 |
+|---|---|
+| 复刻什么 | **视觉语言**：深紫夜空基底、冰蓝月光强调色、莓红点缀、星点/月牙/羽毛元素 |
+| 不复刻什么 | **不嵌入官方立绘**。版权素材不能随 EXE 分发，也不该成为界面默认背景 |
+| 默认值 | 新装默认主题改为 `columbina`（「星月」），深色/浅色保留，主题钮改为**三态循环** |
+
+### 15.2 配色：一个主题 = 一张色卡
+
+```python
+COLUMBINA = Theme(
+    name="columbina",
+    BG="#130e26", BG_ALT="#0b1526",          # 深紫夜空 → 更深的蓝紫
+    SURFACE="#1c1632", SURFACE_HOVER="#251d3f", SURFACE_ACTIVE="#2f264c",
+    BORDER="#3a2f56", TEXT="#f3eefc", TEXT_DIM="#a196bd",
+    ACCENT="#7ec8e8", ACCENT_HOVER="#9ad9f3", ACCENT_DIM="#4a7f99",
+    ACCENT_SOFT="#2c2546", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
+)
+```
+
+- **首版偏黑**：`BG #0e0a18` 与 `SURFACE #181226` 只差一点，整窗糊成一块黑，层次全无。
+  修法两条：① 整套面板色提亮拉开；② 新增 `Theme.BG_ALT`，非空时窗口底走
+  `qlineargradient(x1:0,y1:0,x2:0.65,y2:1)`，纯色底变斜向渐变，深度感来自光而不是靠深色
+- 对比度实测：`TEXT/SURFACE=16.0`、`ACCENT/SURFACE=9.8`、`ON_ACCENT/ACCENT=9.8`、
+  `TEXT_DIM/SURFACE=6.3`（全部 ≥4.5，已固化在 `test_theme` 的对比度断言里）
+- `ON_ACCENT` 用深色而非白色：冰蓝偏亮，白字对比度仅 ~2.1:1
+
+### 15.3 装饰层：星点 + 月牙
+
+```python
+def _paint_theme_decor(painter, rect, color):
+    rnd = random.Random(_DECOR_SEED)     # 固定种子，缩放时星点不乱跳
+    for _ in range(56): ...              # 半径 0.6~1.9px，alpha 22~72
+    # 月牙：直径 = min(w,h)*0.40，圆心 (0.88w, 0.56h)，alpha 18
+```
+
+- 只在 **`columbina` + 背景类型为 none** 时画（用户自己设了背景就不叠加，否则是脏图）
+- 画在 `BackgroundLayer.paintEvent` 里，**不参与 `is_active()`**：装饰不算自定义背景，
+  所以不会触发面板转半透明（`test_theme_decor_is_not_custom_background`）
+- alpha 上限刻意压到 72/18：装饰是氛围，不能跟歌词和封面抢注意力
+- **月牙位置试了三版**（截图对比才看出来的问题）：
+  ① 贴右下角 → 被 84px 播放栏压成一道残弧横穿音量条，像渲染脏点；
+  ② 右上角故意裁出画面 → 月牙缺口被切掉，只剩一大块淡圆盘，像污渍；
+  ③ 现在：**完整细月牙**放在右半区竖向 56% 处。形状完整才读得出是月亮，
+  alpha 18 又不抢列表里的字
+- `feather` 图标也返工过一次：首版是「羽轴 + 8 条细羽枝」的纯线条画法，
+  16px 下糊成一小团灰点、和相邻 `settings`（细横线）撞气质；改为
+  「实心羽片 + 镂空羽轴 + 两侧羽枝缺口」，靠实心轮廓站住（同 `gear` 的教训）
+
+### 15.4 三态主题循环
+
+```python
+THEME_ORDER = ("columbina", "dark", "light")
+THEME_NEXT  = {"columbina": "dark", "dark": "light", "light": "columbina"}
+THEME_ICON  = {"columbina": "feather", "dark": "moon", "light": "sun"}
+THEME_LABEL = {"columbina": "星月", "dark": "深色", "light": "浅色"}
+DEFAULT_THEME = "columbina"
+```
+
+- 浮动条主题钮的**图标与 tooltip 都指向「点下去会切到哪个」**，不是当前主题
+  （羽毛=星月 / 月亮=深色 / 太阳=浅色）；`isChecked` 只在浅色时为真，保留原语义
+- 新增手绘 `feather` 图标（实心羽片 + 镂空羽轴 + 羽枝缺口），与相邻的 `settings` /
+  `gear` 不同形：实心块 vs 细横线 vs 锯齿环，16px 下不会混
+- 设置对话框原来是两个 radio（深色/浅色），改为按 `THEME_ORDER` 生成三个，
+  `dark_radio` / `light_radio` 保留为别名不破坏旧引用
+- toast 文案改由 `THEME_LABEL` 生成：原来写死「浅色 else 深色」，第三态会错报
+
+### 15.5 验收标准（v2.3 增量）
+
+- [x] 默认主题是「星月」，新装与旧数据都落到 `columbina`。
+  - 证据：`test_default_is_columbina`、`test_legacy_data_without_new_settings`
+- [x] 主题三态循环闭环、每个主题都有图标与中文名。
+  - 证据：`TestThemeCycle` 4 项（含「循环覆盖全部且闭环」「循环表不写反」）
+- [x] 装饰该画时画了、不该画时一个像素都不画；装饰不算自定义背景。
+  - 证据：`TestThemeDecor` 3 项（`render(QImage)` 采样，**不用 `grab()`** —— 它先铺
+    不透明白底，测不出「透明」与「极淡」）
+- [x] 主题切换 / 持久化 / 浮动条按钮语义全部跟随三态。
+  - 证据：e2e `test_theme_switch_applies_and_persists`、`test_float_bar_theme_toggle`
+- [x] 视觉验收：整窗截图（星月/深色/浅色）+ 图标验收表含羽毛与齿轮对照。
+  - 证据：`shots/columbina-library-v230sky3.png`、`shots/columbina-maximized-v230final.png`、
+    `shots/icons_v230.png`（7 个图标 72px 原图 + 16px 最近邻放大 8×，浅/深两版，
+    顺序按界面相邻关系排：gear / settings / feather / moon / sun / folder / plus）
