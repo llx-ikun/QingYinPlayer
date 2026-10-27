@@ -354,9 +354,12 @@ QLabel#Toast {{
 /* ---------- 用户卡片 / 图标导航 ---------- */
 QWidget#UserCard {{ border-radius: 10px; }}
 QWidget#UserCard:hover {{ background: {t.SURFACE_HOVER}; }}
+/* 侧栏图标导航：与浮动条左列的圆钮**同尺寸同形状**（38px 正圆）。
+   两者在竖直方向上下呼应，左缘都从侧栏内容左边（x=12）起，读起来是一条竖线。
+   注意 border-radius 必须 = 直径/2，38 的钮写 19；小于这个值会得到圆角方块。 */
 QPushButton#IconNav {{
-    background: {t.SURFACE_HOVER}; border: none; border-radius: 12px;
-    min-width: 46px; max-width: 46px; min-height: 46px; max-height: 46px;
+    background: {t.SURFACE_HOVER}; border: none; border-radius: 19px;
+    min-width: 38px; max-width: 38px; min-height: 38px; max-height: 38px;
 }}
 QPushButton#IconNav:hover {{ background: {t.SURFACE_ACTIVE}; }}
 QPushButton#IconNav[active="true"] {{ background: {t.ACCENT_SOFT}; }}

@@ -363,7 +363,8 @@ class TestThemeSizes(unittest.TestCase):
         prev = pb.prev_btn.sizeHint()
         self.assertEqual((prev.width(), prev.height()), (34, 34))
         nav = next(iter(Sidebar()._nav_buttons.values())).sizeHint()
-        self.assertEqual((nav.width(), nav.height()), (46, 46))
+        # 侧栏图标导航与浮动条圆钮同尺寸（38 正圆），两者左缘同在 x=12
+        self.assertEqual((nav.width(), nav.height()), (38, 38))
 
     def test_float_bar_fits_player_bar_indent(self):
         """浮动条右端不得超过播放栏左缩进，否则压住封面（且宽度不足会被裁）。"""

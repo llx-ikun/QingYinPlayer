@@ -79,7 +79,7 @@ class Sidebar(QWidget):
         root.addWidget(self.user_card)
         root.addSpacing(6)
 
-        # ---- 图标导航 ----
+        # ---- 图标导航：38px 正圆，与浮动条左列的圆钮同尺寸 ----
         icon_nav = QHBoxLayout()
         icon_nav.setSpacing(8)
         for view_id, kind, tip in (
@@ -90,7 +90,7 @@ class Sidebar(QWidget):
             btn.setObjectName("IconNav")
             btn.setToolTip(tip)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            ic.bind_icon(btn, kind, 20, "dim")
+            ic.bind_icon(btn, kind, 18, "dim")
             btn.setProperty("active", "false")
             btn.clicked.connect(lambda _=False, v=view_id: self.view_requested.emit(v))
             self._nav_buttons[view_id] = btn

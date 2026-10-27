@@ -476,6 +476,18 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 **边界**：只复刻**视觉语言**（配色 / 星月 / 羽毛），**不嵌入官方立绘** —— 版权素材
 不随 EXE 分发。
 
+## v2.3.2 侧栏圆钮与浮动条对齐
+
+| 项 | 变化 | 证据 |
+|---|---|---|
+| 侧栏「我喜欢 / 资料库」两个圆钮 | 46×46 圆角方块（radius 12）→ **38×38 正圆**（radius 19） | `test_icon_buttons_keep_declared_size`（38×38） |
+| 与浮动条左列圆钮 | 同尺寸、**左缘同在 x=12**（侧栏内容左边 = 浮动条 x） | e2e `test_sidebar_nav_aligned_with_float_bar`（逐钮比 width/height/x） |
+| 钮内图标 | 20 → **18**（38 圆内 16 偏小、20 偏挤） | 截图 `shots/columbina-library-nav38.png`、`shots/light-library-nav38.png` |
+| 不影响现有功能 | ✅ | 全量回归全绿；`ruff check .` 干净 |
+
+为什么不再用圆角方块：浮动条就在同一列的窗口底部，两者上下呼应；一个 46 圆角方块 + 一个 38 正圆，
+竖向读下来是「两个不同的东西」。统一成正圆后，左缘成一条竖线。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

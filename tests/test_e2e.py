@@ -520,6 +520,19 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(fb.dir_btn.text(), "数据目录")
         self.assertEqual(THEME_NEXT["columbina"], "dark")  # 循环表不写反
 
+    def test_sidebar_nav_aligned_with_float_bar(self):
+        """侧栏「我喜欢 / 资料库」两个圆钮要与浮动条左列的圆钮同尺寸、左缘同一条竖线。"""
+        from PySide6.QtCore import QPoint
+
+        self._import()
+        nav = next(iter(self.window.sidebar._nav_buttons.values()))
+        bars = (self.window.float_bar.theme_toggle, self.window.float_bar.settings_btn)
+        nav_pt = nav.mapTo(self.window._root, QPoint(0, 0))
+        for bar in bars:
+            self.assertEqual(bar.width(), nav.width(), bar.toolTip())
+            self.assertEqual(bar.height(), nav.height(), bar.toolTip())
+            self.assertEqual(bar.mapTo(self.window._root, QPoint(0, 0)).x(), nav_pt.x())
+
     # ---------- 我喜欢 ----------
 
     def test_row_heart_toggles_favorite(self):

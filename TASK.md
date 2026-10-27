@@ -413,6 +413,12 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
   - 验收：22 进程 **344 项全绿**（+`TestThemeCycle` 4、`TestThemeDecor` 3）；ruff 干净；
     截图 `shots/columbina-library-v230r2.png`、图标表 `shots/icons_v230.png`；版本 2.3.1
 
+- [x] **X5** 侧栏圆钮与浮动条对齐（v2.3.2）：用户圈图要求「圆钮改大并对齐」
+  - `#IconNav` 46×46 / radius 12（圆角方块）→ **38×38 / radius 19（正圆）**，图标 20→18
+  - 与浮动条左列圆钮同尺寸、左缘同在 x=12；加 e2e 断言逐钮比 width/height/x
+  - 验收：全量回归全绿；ruff 干净；截图 `shots/columbina-library-nav38.png`、
+    `shots/light-library-nav38.png`（浅色 + 黄紫渐变背景，复刻用户那张图的条件）
+
 ## v2.1 依赖关系
 
 ```
