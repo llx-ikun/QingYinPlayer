@@ -405,12 +405,13 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
       莓红点缀 / 星月·羽毛）新做一个主题，并设为**所有背景下的默认主题**
   - 边界：**不嵌入官方立绘**（版权素材不随 EXE 分发），只复刻配色与符号
   - `Theme.BG_ALT` + `qlineargradient` 斜向渐变底；56 颗固定种子星点 + 完整细月牙
-    （alpha 18），仅在「星月 + 无自定义背景」时画，且不参与 `is_active()`
+    （alpha 14，直径 0.38·min），仅在「星月 + 无自定义背景」时画，不参与 `is_active()`
   - 主题钮改**三态循环**：星月 → 深色 → 浅色 → 星月；图标/tooltip 都指向「下一个」
   - 返工三次：色卡太黑糊成一块 → 提亮 + 渐变；月牙位置三版（右下被播放栏压成残弧、
-    裁出画面像污渍 → 右半区 56% 处）；羽毛图标首版细线条 16px 糊成灰团 → 改实心羽片
+    裁出画面像污渍 → 右半区竖向 70% 的行下空白带）；羽毛图标首版细线条 16px 糊成
+    灰团 → 改实心羽片
   - 验收：22 进程 **344 项全绿**（+`TestThemeCycle` 4、`TestThemeDecor` 3）；ruff 干净；
-    截图 `shots/columbina-library-v230sky3.png`、图标表 `shots/icons_v230.png`
+    截图 `shots/columbina-library-v230r2.png`、图标表 `shots/icons_v230.png`；版本 2.3.1
 
 ## v2.1 依赖关系
 
