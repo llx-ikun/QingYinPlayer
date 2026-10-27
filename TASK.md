@@ -264,10 +264,43 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
     **反向验证**：临时移除 APPDATA 隔离后该模块 2 项立即失败；
     重建一次 EXE 后用户 `data.json` 哈希不变
 
+## S. v2.1.6 播放栏视觉打磨（2026-10-27，用户截图反馈）
+
+> 需求：底部播放控制区「美化一下」（截图圈出 循环 / 上一首 / 播放 / 下一首 + 进度条）。
+> 排查中发现两个**功能性问题**，不只是审美：① `prev`/`next` 图标方向画反了
+> （prev 画成 ▶|、next 画成 |◀，按钮语义与图形相反）；② 进度手柄是「白心 + 白环」，
+> 在浅色主题的白底上**完全隐形**——用户截图里根本看不到手柄位置。
+
+- [x] **S1** `ui/icons.py` 重画控制图标：`loop` 由「300° 圆弧 + 两条斜线当箭头」（16px 下像刷新按钮）
+      改为标准 repeat（上下横线 + 两端反向箭头）；`repeat_one` 复用 repeat + 矢量「1」（不用
+      `drawText`，小尺寸下字体渲染会歪）；`shuffle` 由 7 段互不相连的碎线改为两条交叉车道 + 箭头；
+      `pause` 竖线加宽（0.14→0.16）、`play` 三角收窄一点
+- [x] **S2** `prev` / `next` 方向修正：prev = `|◀`（竖线在左、三角朝左）、next = `▶|`
+  - 验收：`tools/probe_player_bar.py` + 72px 图标表目视；`tests/test_widgets.py` 断言播放栏存在且方向语义正确（见 S8 说明）
+- [x] **S3** 进度/音量滑块：轨道 4→3px；手柄改为**强调色实心圆 + SURFACE 外环**
+  - 坑：QSS 手柄三个量必须同时对上，否则退化成方块或隐形
+    ① 钮芯必须有色实心（白心白环白底 = 看不见）；
+    ② `border-radius` = (width + 2×border) / 2；
+    ③ `margin` 决定手柄盒高 = 轨道高 + 2×|margin|，必须 ≥ 手柄总高（seek 总高 14 → `-6`；音量 12 → `-5`）
+  - 验收：`TestSliderKnob` 4 项（浅/深色下扫左端像素必须有饱和蓝、四角不得被填满 → 必须是圆）
+    **反向验证**：把 `background` 改回 `#ffffff` 后 2 项立即失败
+- [x] **S4** 时间标签：`objectName="TimeLabel"`（12px），左端**右对齐**、右端**左对齐**，
+      宽度 36→38 —— 时间贴住滑块两端，两侧留白对称
+  - 验收：`test_time_labels_snug_to_slider`
+- [x] **S5** 播放键：图标 18→20px；加 `QGraphicsDropShadowEffect` 强调色柔和投影（QSS 无 box-shadow），
+      主题切换时由 `PlayerBar.refresh_theme()` 重染颜色
+- [x] **S6** 控制行与进度行间距 2→6px（原来几乎贴住），按钮间距 6→4px（cluster 更紧凑）
+- [x] **S7** `ElidedLabel.minimumSizeHint()` 宽度归零：长标题把 `PlayerBar` 最小宽度顶到
+      **1185px > 窗口最小 1100** —— v2.1.3「窗口抖动 + 副标题被省略」的隐患会复发
+  - 验收：`test_player_bar_fits_min_window_with_long_title`（长标题下仍 ≤1100，实测 1042）；
+    **反向验证**：移除该覆盖后立即失败
+- [x] **S8** 回归 + 静态检查 + 版本号 `v2.1.6` + 重建双 EXE
+  - 验收：全量回归 **17 进程 240 项全绿**；`ruff check .` 干净；双 EXE smoke + 真实平台检查通过
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8
 ```
 
 ## v2.1 验收命令

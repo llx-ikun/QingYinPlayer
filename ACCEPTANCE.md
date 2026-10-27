@@ -5,7 +5,7 @@
 - ✅ = 已有自动化测试覆盖且当前全绿
 - 🟡 = 沙箱环境无法验证，需用户在真实 Windows 本机确认（原因见「已知限制」）
 
-全量回归（**234 项 / 17 个独立进程**）：
+全量回归（**240 项 / 17 个独立进程**）：
 
 ```bash
 cd music-player
@@ -29,7 +29,7 @@ env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py
 | 6 | 歌词：LRC 匹配/同步/点击跳转/内嵌/手动绑定 | ✅ | `test_lyrics_sync` 等 3 项 + `test_lyrics.py` 18 项 |
 | 7 | 关闭重开：歌单/设置/上次曲目与位置恢复 | ✅ | `test_restart_restores_state` 等 4 项 |
 | 8 | 文件丢失时友好提示不崩溃 | ✅ | `test_missing_file_errors_and_skips` 等 4 项 |
-| 9 | 单测 + E2E 全绿；交付双 EXE | ✅ | **234 项**全绿（17 进程）+ `dist/` 双产物 + smoke |
+| 9 | 单测 + E2E 全绿；交付双 EXE | ✅ | **240 项**全绿（17 进程）+ `dist/` 双产物 + smoke |
 
 ## 逐条明细
 
@@ -285,6 +285,27 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 **用户库清理与导入（本机 `%APPDATA%\轻音播放器\data.json`，每次改动前均有 `.bak-<时间戳>` 备份）**：
 - 删除指向已清空夹具的失效条目「晴天」（`tests/fixtures/我的音乐/晴天 - 周杰伦.mp3`），同时清空指向它的 `last_track_id` / `last_position_ms`。
 - 导入用户指定的 `C:\Users\西\Music\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac`：标题 `Blazing Heart (英文版)`、艺人 `Chrissy Costanza/HOYO-MiX`、专辑 `原神-灼火之心 Blazing Heart`、时长 **177.98 s**、格式 `flac`、内嵌封面 83483 B、文件大小 **38.2 MB**（`tools/check_media.py` 实测 `LoadedMedia`、无解码错误）。
+
+### v2.1.6 播放栏视觉打磨（2026-10-27）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 循环/单曲循环图标能读作「循环」而非「刷新」 | ✅ | `ui/icons.py` 重画为上下横线 + 两端反向箭头；`tools/probe_player_bar.py` + 72px 图标表目视 |
+| 随机播放图标不再是碎线 | ✅ | 改为两条交叉车道 + 右端箭头（原为 7 段互不相连线段） |
+| **上一首/下一首方向正确** | ✅ | prev = `\|◀`、next = `▶\|`（此前画反：prev 是 ▶\|，语义与图形相反）；图标表逐格目视 |
+| 进度手柄在浅色主题下**可见** | ✅ | `TestSliderKnob::test_handle_visible_on_light` / `..._on_dark`（value=0 时扫手柄区必须存在饱和蓝像素）。**反向验证**：改回 `background:#ffffff` 后 2 项立即失败 |
+| 手柄是**正圆**而非圆角方块 | ✅ | `test_handle_round_not_square`（手柄外接框四角不得被钮芯色填满）；QSS `border-radius = (width+2×border)/2`、`margin` 保证盒高 ≥ 手柄总高 |
+| 时间标签贴住滑块两端、两侧对称 | ✅ | `test_time_labels_snug_to_slider`（左端 AlignRight、右端 AlignLeft、均 `#TimeLabel` 12px） |
+| 播放键有柔和投影、随主题重染 | ✅ | `QGraphicsDropShadowEffect` + `PlayerBar.refresh_theme()`（`main_window._apply_theme` 调用）；截图中蓝色圆下方可见光晕 |
+| 控制行与进度行有呼吸空间 | ✅ | 间距 2→6px；截图确认不再贴边 |
+| 长标题不得顶爆播放栏最小宽度 | ✅ | `test_player_bar_fits_min_window_with_long_title`（实测 **1042 ≤ 1100**，修复前 1185）。**反向验证**：移除 `ElidedLabel.minimumSizeHint` 覆盖后立即失败 |
+| 不影响现有功能 | ✅ | 全量回归 **17 进程 240 项全绿**；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
+
+**修复的 2 个功能性缺陷（不是审美问题）**：
+
+1. **上一首/下一首图标方向画反**：`_paint("prev")` 的三角朝右、竖线在右（▶|），`next` 恰好相反。按钮语义与图形相反，用户点「上一首」看到的是「前进」符号 —— 一直存在，靠 72px 图标验收表才发现。
+2. **进度手柄在浅色主题下隐形**：手柄是 `background:#ffffff` + `1px solid BORDER`，浅色主题底色也是白 → 只剩一圈极淡灰边，等于看不见手柄在哪。改为强调色实心圆 + SURFACE 外环。
 
 ## v2.0 修复的缺陷
 
