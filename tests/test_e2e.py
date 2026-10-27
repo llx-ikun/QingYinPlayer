@@ -489,13 +489,13 @@ class TestE2EV2(unittest.TestCase):
         self.window._toggle_theme()
         self.assertEqual(self.store.settings.theme, "light")
         self.assertIn("切换到深色主题", self.window.float_bar.theme_toggle.toolTip())
-        # 浮动条改造：主题为开关式切换按钮，其余为图标+文字
+        # v2.2.2 布局：左列主题圆钮 + 齿轮设置，右侧导入音乐 / 数据目录两个独立按钮
         fb = self.window.float_bar
         self.assertTrue(fb.theme_toggle.isCheckable())
         self.assertTrue(fb.theme_toggle.isChecked())  # 浅色主题 = 开关打开
-        self.assertEqual(fb.np_btn.text(), "正在播放")
+        self.assertEqual(fb.settings_btn._kind, "gear")
+        self.assertEqual(fb.import_btn.text(), "导入音乐")
         self.assertEqual(fb.dir_btn.text(), "数据目录")
-        self.assertEqual(fb.settings_btn.text(), "设置")
         self.window._toggle_theme()
         self.assertEqual(self.store.settings.theme, "dark")
         self.assertFalse(self.window.float_bar.theme_toggle.isChecked())  # 深色主题 = 开关关闭

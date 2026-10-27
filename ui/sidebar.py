@@ -28,7 +28,6 @@ SIDEBAR_WIDTH = 248
 
 
 class Sidebar(QWidget):
-    import_menu_requested = Signal()                 # 点击导入按钮（调用方弹菜单）
     view_requested = Signal(str)                     # library / recent / favorites / playlist_id
     create_playlist_requested = Signal()
     playlist_action = Signal(str, str)               # (playlist_id, "rename" | "delete")
@@ -134,14 +133,6 @@ class Sidebar(QWidget):
         self.playlist_list.itemClicked.connect(self._on_pl_clicked)
         self.playlist_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self.playlist_list, 1)
-
-        # ---- 导入 ----
-        import_btn = QPushButton("  导入音乐")
-        import_btn.setObjectName("Primary")
-        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        ic.bind_icon(import_btn, "plus", 16, "on_accent")
-        import_btn.clicked.connect(self.import_menu_requested.emit)
-        root.addWidget(import_btn)
 
         self.set_active_view(PLAYLIST_LIBRARY)
 

@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.2.1 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.2.2 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -202,7 +202,6 @@ class MainWindow(QMainWindow):
         self.sidebar.view_requested.connect(self.set_view)
         self.sidebar.create_playlist_requested.connect(self._create_playlist)
         self.sidebar.playlist_action.connect(self._playlist_action)
-        self.sidebar.import_menu_requested.connect(self._show_import_menu)
         self.sidebar.nickname_change_requested.connect(self._change_nickname)
 
         # 曲目列表
@@ -239,7 +238,7 @@ class MainWindow(QMainWindow):
 
         # 浮动工具条
         self.float_bar.theme_clicked.connect(self._toggle_theme)
-        self.float_bar.now_playing_clicked.connect(lambda: self._show_page(1))
+        self.float_bar.import_clicked.connect(self._show_import_menu)
         self.float_bar.data_dir_clicked.connect(self._open_data_dir)
         self.float_bar.settings_clicked.connect(self._show_settings)
 

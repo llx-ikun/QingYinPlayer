@@ -32,7 +32,7 @@ def main() -> int:
     ap.add_argument("--out", default="shots/float_bar.png")
     ap.add_argument("--theme", default="light", choices=["light", "dark"])
     ap.add_argument("--scale", type=int, default=4, help="放大倍数（最近邻，看边缘是否锐利）")
-    ap.add_argument("--hover", default="", choices=["", "np", "dir", "settings", "theme"],
+    ap.add_argument("--hover", default="", choices=["", "import", "dir", "settings", "theme"],
                     help="模拟某个按钮的悬停外观（直接灌底色，不触发真实 :hover）")
     args = ap.parse_args()
 
@@ -48,24 +48,25 @@ def main() -> int:
     # 把托盘/按钮自己的底色一起刷掉，渲染出来会变成「只有描边没有填充」。
     host = QWidget()
     host.setObjectName("ProbeCanvas")
-    host.resize(300, 92)
+    host.resize(300, 108)
     host.setStyleSheet(f"QWidget#ProbeCanvas {{ background: {t.BG}; }}")
     bar = FloatBar(host)
     bar.set_theme_icon(args.theme == "dark")   # 太阳=当前深色，月亮=当前浅色
-    bar.move(PAD, (92 - bar.height()) // 2)
+    bar.adjustSize()                           # 先定尺寸，再按真实高度居中（顺序反了会把齿轮切掉）
+    bar.move(PAD, (host.height() - bar.height()) // 2)
     host.show()
     app.processEvents()
-    bar.adjustSize()
 
     # 悬停态**无法**在脚本里真触发：Qt 6.12 的 QSS :hover 取的是 State_MouseOver，
     # 手工 setAttribute(WA_UnderMouse) 不会进样式选项（最小用例已验证），
     # 沙箱里挪真实指针也不投递事件。所以这里退一步：直接把悬停底色灌给按钮，
     # 用来检查胶囊的圆角/左右留白/是否溢出卡片边界 —— 也就是只在意外观，不验交互。
     if args.hover:
-        target = {"np": bar.np_btn, "dir": bar.dir_btn, "settings": bar.settings_btn,
+        target = {"import": bar.import_btn, "dir": bar.dir_btn, "settings": bar.settings_btn,
                   "theme": bar.theme_toggle}[args.hover]
-        fill = t.SURFACE if target is bar.theme_toggle else t.SURFACE_ACTIVE
-        radius = 17 if target is bar.theme_toggle else 10
+        is_circle = target in (bar.theme_toggle, bar.settings_btn)
+        fill = t.SURFACE if is_circle else t.SURFACE_ACTIVE
+        radius = 17 if is_circle else 12
         target.setStyleSheet(
             f"background: {fill}; border: none; border-radius: {radius}px;"
             f" color: {t.TEXT}; padding: 0px 4px;"

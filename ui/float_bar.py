@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """左下浮动工具条。
 
-布局（v2.1.8）：
-    上排：圆形主题开关（单独一行）
-    下排：一个「分段托盘」内嵌 正在播放 / 数据目录 / 设置
+布局（v2.2.2）：
+    左列：主题圆钮（上）+ 齿轮设置圆钮（下），竖排
+    右侧：导入音乐 / 数据目录 两个**独立**按钮并排（不再共用分段托盘）
 整条宽度固定为侧边栏内容宽度（248 - 左右 12 边距 = 224），右缘与侧边栏内容右边界
-对齐，不再跨进内容区（v2.1.7 的 288px 条会把「设置」压到侧边栏竖线外面）。
-把主题圆钮提到单独一行，是为了让下排托盘只占 224px 就能放下三个入口。
+对齐，不跨进内容区。
+
+为什么把「正在播放」从浮动条移除：列表页头已有一个等价入口（`TrackList.np_btn`，
+同样切到正在播放页），且点击播放栏封面也能切页，所以这里不再是唯一入口。
+空出来的横向空间给「导入音乐」，让主操作离手更近。
 """
 from __future__ import annotations
 
@@ -16,9 +19,13 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 from ui import icons as ic
 
 _FLOAT_W = 224        # 与侧边栏内容宽度对齐（侧栏 248 - 左右各 12 边距）
-_CIRCLE = 34          # 顶部主题圆钮直径
-_TRAY_H = 34          # 托盘高度
-_BTN_H = 28           # 托盘内按钮高度
+_CIRCLE = 34          # 左列圆钮直径
+_BTN_W = 88           # 右侧独立按钮宽
+_BTN_H = 34           # 右侧独立按钮高（与圆钮同高，横向读成一行）
+_GAP_V = 6            # 左列两个圆钮的竖向间距
+_GAP_H = 8            # 左右两列的水平间距
+_GAP_BTN = 6          # 右侧两个按钮的水平间距
+# 34 + 8 + 88 + 6 + 88 = 224，刚好铺满整条宽度，不需要 stretch
 
 
 class _HoverIconButton(QPushButton):
@@ -50,74 +57,82 @@ class _HoverIconButton(QPushButton):
 
 
 class _IconTextButton(_HoverIconButton):
-    """托盘内的图标 + 文字入口，三个等分托盘宽度。"""
+    """图标 + 文字按钮：右侧的独立入口，固定宽高。"""
 
     def __init__(self, kind: str, text: str, parent=None) -> None:
         super().__init__(kind, text, parent)
         self.setObjectName("FloatTextBtn")
         self.setToolTip(text)
-        self.setFixedHeight(_BTN_H)
+        self.setFixedSize(_BTN_W, _BTN_H)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(_BTN_W, _BTN_H)
 
 
-class _ThemeToggle(_HoverIconButton):
-    """纯图标圆形开关。"""
+class _CircleButton(_HoverIconButton):
+    """纯图标圆形按钮（主题 / 设置）。"""
 
-    def __init__(self, parent=None) -> None:
-        super().__init__("sun", "", parent)
-        self.setObjectName("ThemeToggle")
-        self.setCheckable(True)
+    def __init__(self, kind: str, tooltip: str = "", parent=None) -> None:
+        super().__init__(kind, "", parent)
+        self.setObjectName("CircleBtn")
+        self.setToolTip(tooltip)
         self.setFixedSize(_CIRCLE, _CIRCLE)
 
 
 class FloatBar(QWidget):
     theme_clicked = Signal()
-    now_playing_clicked = Signal()
+    import_clicked = Signal()
     data_dir_clicked = Signal()
     settings_clicked = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFixedWidth(_FLOAT_W)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(5)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
 
-        # 上排：主题开关单独一行，左对齐在托盘左端上方
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(0)
-        self.theme_toggle = _ThemeToggle()
+        # ---- 左列：主题（上）+ 设置齿轮（下），竖排 ----
+        left = QVBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(_GAP_V)
+
+        self.theme_toggle = _CircleButton("sun")
+        self.theme_toggle.setCheckable(True)
         self.theme_toggle.clicked.connect(self.theme_clicked.emit)
-        top.addWidget(self.theme_toggle)
-        top.addStretch(1)
-        root.addLayout(top)
+        left.addWidget(self.theme_toggle)
 
-        # 下排：分段托盘（三个入口等分，撑满整条宽度）
-        self.tray = QWidget()
-        self.tray.setObjectName("FloatTray")
-        self.tray.setFixedHeight(_TRAY_H)
-        tray_lay = QHBoxLayout(self.tray)
-        tray_lay.setContentsMargins(3, 2, 3, 2)
-        tray_lay.setSpacing(2)
+        self.settings_btn = _CircleButton("gear", "设置")
+        self.settings_btn.clicked.connect(self.settings_clicked.emit)
+        left.addWidget(self.settings_btn)
+        left.addStretch(1)
+        row.addLayout(left)
+        row.addSpacing(_GAP_H)
 
-        self.np_btn = _IconTextButton("note", "正在播放")
-        self.np_btn.clicked.connect(self.now_playing_clicked.emit)
-        tray_lay.addWidget(self.np_btn, 1)
+        # ---- 右侧：导入音乐 / 数据目录，两个独立按钮并排，与主题钮同一行 ----
+        right_wrap = QVBoxLayout()
+        right_wrap.setContentsMargins(0, 0, 0, 0)
+        right_wrap.setSpacing(0)
+        right = QHBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(_GAP_BTN)
+
+        self.import_btn = _IconTextButton("plus", "导入音乐")
+        self.import_btn.clicked.connect(self.import_clicked.emit)
+        right.addWidget(self.import_btn)
 
         self.dir_btn = _IconTextButton("folder", "数据目录")
         self.dir_btn.clicked.connect(self.data_dir_clicked.emit)
-        tray_lay.addWidget(self.dir_btn, 1)
+        right.addWidget(self.dir_btn)
 
-        self.settings_btn = _IconTextButton("settings", "设置")
-        self.settings_btn.clicked.connect(self.settings_clicked.emit)
-        tray_lay.addWidget(self.settings_btn, 1)
-
-        root.addWidget(self.tray)
+        right_wrap.addLayout(right)
+        right_wrap.addStretch(1)
+        row.addLayout(right_wrap, 1)
 
         self.set_theme_icon(True)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(_FLOAT_W, _CIRCLE + 5 + _TRAY_H)
+        return QSize(_FLOAT_W, _CIRCLE * 2 + _GAP_V)
 
     def set_theme_icon(self, is_dark: bool) -> None:
         """深色主题下显示太阳（点它切到浅色），反之显示月亮；checked = 当前为浅色。"""

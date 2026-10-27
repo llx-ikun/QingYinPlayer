@@ -254,6 +254,31 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         path.lineTo(u * 0.62, u * 0.66)
         path.closeSubpath()
         p.drawPath(path)
+    elif kind == "gear":
+        # 齿轮：实心 + 锯齿外轮廓 + 中心镂空圆孔。
+        # 为什么不用「圆环 + 8 条短射线」：那样在 16px 下与 sun（实心圆点 + 细长
+        # 射线）几乎无法区分，而齿轮就排在主题钮正下方，用户会以为两个都是换主题的。
+        # 靠「宽齿的锯齿轮廓」而不是「细线」来识别，小尺寸下才站得住。
+        import math
+        teeth = 8
+        r_root, r_tip = 0.29, 0.45
+        step = 2 * math.pi / teeth
+        outline = QPainterPath()
+        for i in range(teeth):
+            a0 = i * step
+            # 齿根 → 上升沿 → 齿顶平台 → 下降沿，回到齿根
+            for frac, r in ((0.0, r_root), (0.16, r_tip), (0.44, r_tip), (0.60, r_root)):
+                ang = a0 + frac * step
+                x, y = 0.5 + r * math.cos(ang), 0.5 + r * math.sin(ang)
+                if outline.elementCount() == 0:
+                    outline.moveTo(u * x, u * y)
+                else:
+                    outline.lineTo(u * x, u * y)
+        outline.closeSubpath()
+        hole = QPainterPath()
+        hole.addEllipse(QRectF(u * 0.36, u * 0.36, u * 0.28, u * 0.28))
+        p.setBrush(color)
+        p.fillPath(outline.subtracted(hole), color)
     elif kind == "settings":
         for y, kx in ((0.28, 0.64), (0.50, 0.36), (0.72, 0.70)):
             p.drawLine(QPointF(u * 0.16, u * y), QPointF(u * 0.84, u * y))

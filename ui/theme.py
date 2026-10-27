@@ -345,7 +345,7 @@ QPushButton:disabled {{ color: {t.BORDER}; }}
    使声明尺寸普遍虚胖 20px（34→54、40→60、46→66、36→58）。
    后果：播放键 border-radius 不再是圆、行内按钮撑歪列对齐、浮动条超宽被裁。 */
 QPushButton#TitleBtn, QPushButton#ControlBtn, QPushButton#PlayCircle,
-QPushButton#IconNav, QPushButton#ThemeToggle {{ padding: 0px; }}
+QPushButton#IconNav, QPushButton#CircleBtn {{ padding: 0px; }}
 QPushButton#Primary {{
     background: {t.ACCENT};
     color: {t.ON_ACCENT};
@@ -408,29 +408,23 @@ QPushButton#RowBtn {{
 }}
 QPushButton#RowBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
 QPushButton#RowBtn[active="true"] {{ color: {t.HEART}; }}
-/* 浮动工具条：圆形主题开关 + 分段托盘。
-   托盘是「浮起的一张卡片」（SURFACE + 细边），内部按钮透明、悬停时才凹下一层
-   —— 三个入口读成一组并列工具，而不是三个各自独立的输入框。
-   主题按钮与托盘同底色同高度，两者读成同一族；且不按 checked 变色（图标本身
-   已表明会切到什么主题，再加一圈强调色边框只会抢走内容注意力）。
+/* 浮动工具条：左侧圆形图标钮（主题 / 设置齿轮）+ 右侧两个独立按钮。
+   圆钮同底色同尺寸，读成同一族；不按 checked 变色（图标本身已表明会切到什么
+   主题，再加一圈强调色边框只会抢走内容注意力）。
    注意：`border-radius` 不得超过控件短边的一半（QSS 里超了 Qt 会直接不圆，
-   退化成直角方块 —— 旧版 #FloatTextBtn radius 16 配 28px 高就踩了这个坑）。 */
-QPushButton#ThemeToggle {{
+   退化成直角方块 —— 旧版 #FloatTextBtn radius 16 配 28px 高就踩了这个坑）。
+   现在按钮高 34，radius 12 合规。 */
+QPushButton#CircleBtn {{
     background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 17px;
     color: {t.TEXT_DIM};
 }}
-QPushButton#ThemeToggle:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
-QPushButton#ThemeToggle:pressed {{ background: {t.SURFACE_ACTIVE}; }}
-QWidget#FloatTray {{
-    background: {t.SURFACE};
-    border: 1px solid {t.BORDER};
-    border-radius: 12px;
-}}
+QPushButton#CircleBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
+QPushButton#CircleBtn:pressed {{ background: {t.SURFACE_ACTIVE}; }}
 QPushButton#FloatTextBtn {{
-    background: transparent; border: none; border-radius: 10px;
+    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 12px;
     padding: 0px 4px; color: {t.TEXT_DIM}; font-size: 11px;
 }}
-QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_ACTIVE}; color: {t.TEXT}; }}
+QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; border-color: {t.ACCENT}; }}
 QPushButton#FloatTextBtn:pressed {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; }}
 
 /* 右下角版本号：极低存在感的一行小字，贴着播放栏右下角 */

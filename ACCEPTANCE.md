@@ -419,6 +419,24 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 
 **根因**：`track_list.set_tracks` 是 QListWidget 全量渲染（`setItemWidget` 逐行），每首一张 40px 封面；「正在播放」页每次切歌再请求一张 280px 大图（约 49 倍像素）。旧缓存是无上限 dict，大图随切歌单调累积、永不回收。
 
+## v2.2.2 增量验收（左下工具条重排：齿轮设置 + 独立按钮）
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 设置改成齿轮图标 | ✅ | 新增手绘 `gear`（锯齿外轮廓 + 中心镂空孔，`fillPath(subtracted)`）；`test_settings_uses_gear_icon` |
+| 齿轮放在主题按钮下方 | ✅ | FloatBar 左列竖排：主题 34 → 间距 6 → 齿轮 34；`test_left_column_has_two_circle_buttons` |
+| 导入音乐 / 数据目录放右边、做成单独按钮 | ✅ | 右侧两个 `#FloatTextBtn` 各 88×34 并排，不再有 `#FloatTray` 分段托盘；`test_import_and_dir_are_separate_buttons` |
+| 侧栏里的「导入音乐」大按钮移除 | ✅ | `sidebar.py` 删除按钮与 `import_menu_requested` 信号；连线改到 `float_bar.import_clicked` |
+| 整条仍收在侧栏内容宽度内 | ✅ | 224 = 34 + 8 + 88 + 6 + 88，右缘 236；`test_width_matches_sidebar_content`、`test_float_bar_fits_player_bar_indent` |
+| 圆钮正圆、按钮圆角合规 | ✅ | 圆钮 radius 17 配 34 高；按钮 radius 12 配 34 高（均 ≤ 短边一半）；`test_theme_toggle_is_a_circle`、`test_text_button_radius_within_half_height` |
+| 齿轮 16px 下读得出来、不与太阳混淆 | ✅ | 图标验收表 `shots/icons_v222b.png`（72px 原图 + 16px 最近邻放大 8×，浅/深两版） |
+| 不影响现有功能 | ✅ | 22 进程 **337 项全绿**；`ruff check .` 干净 |
+
+**两处关键取舍**：
+
+1. **齿轮首版作废**：最初画「空心圆环 + 8 条短射线」，出图标验收表后发现与 `sun`（实心圆点 + 细长射线）在小尺寸下几乎同形 —— 而齿轮就排在主题钮正下方，用户会以为两个都是换主题的。改为「实心 + 宽齿锯齿轮廓 + 中心镂空孔」，靠形状而非线宽区分，16px 放大后锯齿清晰。
+2. **移除浮动条里的「正在播放」**：列表页头本就有等价按钮（`TrackList.np_btn`），点播放栏封面也能回正在播放页，它不再是唯一入口；腾出的横向空间给「导入音乐」，让最高频操作离手更近。
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

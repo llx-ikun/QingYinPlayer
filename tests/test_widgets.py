@@ -112,9 +112,9 @@ class TestPlayerBarLayout(unittest.TestCase):
         self.assertLessEqual(12 + fb.sizeHint().width(),
                              pb.layout().contentsMargins().left(),
                              "浮动条右端不得超过播放栏左缩进，避免压封面")
-        # 主题圆钮必须在托盘上方（提到上排，整条才能收进侧栏宽度）
-        self.assertLess(fb.theme_toggle.geometry().top(), fb.tray.geometry().top(),
-                        "主题按钮应位于托盘上方")
+        # 设置齿轮必须在主题圆钮下方（v2.2.2 布局：左列竖排两个圆钮）
+        self.assertLess(fb.theme_toggle.geometry().top(), fb.settings_btn.geometry().top(),
+                        "设置齿轮应位于主题按钮下方")
 
     def test_player_bar_fits_min_window_with_long_title(self):
         """长标题/长艺人名不得把最小宽度顶爆（v2.1.5 复查发现 1185 > 1100）。
@@ -375,8 +375,9 @@ class TestThemeSizes(unittest.TestCase):
         self.assertLessEqual(12 + fb.sizeHint().width(),
                              pb.layout().contentsMargins().left())
         # 每个文字按钮都得有正宽度，不能因父控件过窄被裁掉
-        for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
-            self.assertGreater(btn.sizeHint().width(), 40, btn.text())
+        for btn in (fb.import_btn, fb.dir_btn):
+            self.assertGreater(btn.sizeHint().width(), 70, btn.text())
+            self.assertGreaterEqual(btn.width(), 70, btn.text())
 
     def test_sidebar_nickname_not_truncated(self):
         """昵称列不能被徽标卡死：「音乐爱好者」曾只显示「音乐爱…」。"""
@@ -392,12 +393,13 @@ class TestThemeSizes(unittest.TestCase):
 
 
 class TestFloatBarStyle(unittest.TestCase):
-    """浮动工具条的视觉契约（v2.1.7）。
+    """浮动工具条的视觉契约。
 
     v2.1.2 起左下角一直是「三个孤立直角方块」：`#FloatTextBtn` 的
     border-radius 写了 16px，而按钮只有 28px 高 —— **超过短边一半时 Qt 直接
-    退化成直角**（不圆、也不报错），三层之间也没有容器，看起来像三个输入框。
-    这组用例钉住「一个托盘 + 圆角胶囊 + 悬停可辨」三件事。
+    退化成直角**（不圆、也不报错）。v2.2.2 又按需求改为「左列两个圆钮 +
+    右侧两个独立按钮」，这组用例钉住：圆钮是正圆、按钮圆角合规、悬停可辨、
+    「设置」确实在「主题」下方且用齿轮图标。
     """
 
     @classmethod
@@ -434,13 +436,43 @@ class TestFloatBarStyle(unittest.TestCase):
                 return float(m.group(1))
         raise AssertionError(f"{selector} 没有声明 border-radius")
 
-    def test_entries_share_one_tray(self):
-        """三个入口必须在同一个托盘容器里（否则又退回三个孤立方块）。"""
+    def test_left_column_has_two_circle_buttons(self):
+        """左列竖排：主题在上、设置齿轮在下，且都是正圆图标钮。"""
         from ui.float_bar import FloatBar
         fb = FloatBar()
-        self.assertTrue(hasattr(fb, "tray"), "浮动条缺托盘容器")
-        for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
-            self.assertIs(btn.parent(), fb.tray, f"{btn.text()} 不在托盘内")
+        fb.adjustSize()
+        self.assertLess(fb.theme_toggle.geometry().top(), fb.settings_btn.geometry().top(),
+                        "设置齿轮应在主题按钮下方")
+        self.assertEqual(fb.theme_toggle.width(), fb.settings_btn.width())
+        self.assertEqual(fb.theme_toggle.width(), fb.theme_toggle.height(), "主题钮应为正圆")
+        self.assertEqual(fb.settings_btn.width(), fb.settings_btn.height(), "设置钮应为正圆")
+
+    def test_settings_uses_gear_icon(self):
+        """「设置」必须是齿轮图标，不是旧的三条推子线。"""
+        from ui.float_bar import FloatBar
+        fb = FloatBar()
+        self.assertEqual(fb.settings_btn._kind, "gear", "设置钮应使用 gear 图标")
+        self.assertEqual(fb.settings_btn.toolTip(), "设置")
+        # 齿轮与其他图标同尺寸渲染（都是 14px）
+        self.assertEqual(fb.settings_btn.iconSize().width(), 14)
+
+    def test_import_and_dir_are_separate_buttons(self):
+        """导入音乐 / 数据目录是各自独立的按钮，不再共用分段托盘。"""
+        from ui.float_bar import FloatBar
+        fb = FloatBar()
+        fb.adjustSize()
+        self.assertFalse(hasattr(fb, "tray"), "不应再有分段托盘容器")
+        self.assertEqual(fb.import_btn.text(), "导入音乐")
+        self.assertEqual(fb.dir_btn.text(), "数据目录")
+        # 两者是不同的控件，且都直接挂在浮动条上（没有中间托盘容器）
+        self.assertIsNot(fb.import_btn, fb.dir_btn)
+        for btn in (fb.import_btn, fb.dir_btn):
+            self.assertIs(btn.parent(), fb, f"{btn.text()} 应直接挂在浮动条上")
+        # 并排在右半部分：导入在左、数据目录在右，且都位于圆钮右侧
+        self.assertLess(fb.import_btn.geometry().left(), fb.dir_btn.geometry().left())
+        self.assertGreater(fb.import_btn.geometry().left(),
+                           fb.theme_toggle.geometry().right(),
+                           "导入按钮应在左侧圆钮列的右边")
 
     def test_width_matches_sidebar_content(self):
         """整条宽度必须等于侧边栏内容宽度，右缘才能与内容右边界对齐。"""
@@ -458,7 +490,7 @@ class TestFloatBarStyle(unittest.TestCase):
         from ui.theme import THEMES, build_stylesheet
         radius = self._radius(build_stylesheet(THEMES["light"]), "QPushButton#FloatTextBtn")
         fb = FloatBar()   # 必须持住引用，否则 children() 迭代中 C++ 对象就没了
-        for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
+        for btn in (fb.import_btn, fb.dir_btn):
             # 用 minimumHeight 而不是 sizeHint：按钮高度由 setFixedHeight 钉死，
             # sizeHint 仍会按图标+文字的默认意图算（26px），量到的不是渲染高度。
             half = btn.minimumHeight() / 2
@@ -466,29 +498,29 @@ class TestFloatBarStyle(unittest.TestCase):
                                  f"radius {radius}px > 半高 {half}px，会被渲染成直角")
 
     def test_theme_toggle_is_a_circle(self):
-        """主题按钮是正圆：radius 必须接近半径（差 1px 内仍算圆）。"""
+        """圆钮是正圆：radius 必须接近半径（差 1px 内仍算圆）。"""
         from ui.float_bar import FloatBar
         from ui.theme import THEMES, build_stylesheet
         fb = FloatBar()
-        radius = self._radius(build_stylesheet(THEMES["light"]), "QPushButton#ThemeToggle")
+        radius = self._radius(build_stylesheet(THEMES["light"]), "QPushButton#CircleBtn")
         side = fb.theme_toggle.minimumHeight()
         self.assertGreaterEqual(radius, side / 2 - 1, "radius 太小，圆会变成圆角方块")
-        # 与托盘同高才读成同一族
-        self.assertEqual(side, fb.tray.minimumHeight())
+        # 两个圆钮同尺寸，读成同一族
+        self.assertEqual(side, fb.settings_btn.minimumHeight())
 
     def test_hover_fill_is_distinguishable(self):
-        """悬停底色与托盘底色必须拉开差距 —— 否则鼠标划过去毫无反馈。"""
+        """悬停底色与底座底色必须拉开差距 —— 否则鼠标划过去毫无反馈。"""
         from ui.theme import THEMES
 
         def rgb(c: str) -> tuple[int, int, int]:
             return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
 
         for name, t in THEMES.items():
-            tray, hover = rgb(t.SURFACE), rgb(t.SURFACE_ACTIVE)
-            delta = max(abs(a - b) for a, b in zip(tray, hover, strict=True))
+            base, hover = rgb(t.SURFACE), rgb(t.SURFACE_ACTIVE)
+            delta = max(abs(a - b) for a, b in zip(base, hover, strict=True))
             self.assertGreaterEqual(
                 delta, 12,
-                f"{name} 主题悬停色 {t.SURFACE_ACTIVE} 与托盘 {t.SURFACE} 差异过小（{delta}）")
+                f"{name} 主题悬停色 {t.SURFACE_ACTIVE} 与底座 {t.SURFACE} 差异过小（{delta}）")
 
 
 class TestTrackListAlignment(unittest.TestCase):
