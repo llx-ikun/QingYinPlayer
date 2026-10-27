@@ -525,3 +525,94 @@ offscreen 模式字体库为空、中文全方块，**不能用于审图**。改
   - 证据：11 个独立进程全绿（既有 122 + 新增 35 = **157 项**）；`ruff check .` → All checks passed
 - [x] 真实平台视频页/音乐模式/全屏验证通过，双 EXE 重建并完成冒烟检查。
   - 证据：`shots/dark-video.png`、`shots/light-video.png`、`shots/dark-video_fullscreen.png`（真实 windows 平台，中文字体正常）；真实音频输出与拖拽手感待用户本机确认（沙箱无音频渲染）
+
+## 14. v2.2 歌词联网补全 + 外观自定义（2026-10-27）
+
+### 14.1 需求确认
+
+用户原话：「可以识别歌曲歌词，对于自定义背景更多内容可自定义」。逐项澄清后确认：
+
+| 问题 | 结论 |
+|---|---|
+| 歌词从哪来 | **联网匹配**：本地没有时按「歌名+艺人」从 LRCLIB 拉取并缓存，之后离线可用 |
+| 背景类型 | **图片 + 纯色 + 渐变**三种都支持 |
+| 还可调什么 | 背景不透明度 / 模糊 / 暗化、字体大小、强调色、**按页面分别设置** |
+
+### 14.2 歌词：五级来源与身份门槛
+
+```
+手动绑定 .lrc → 同目录同名 .lrc → 内嵌歌词 → 本地缓存 lyrics_cache/<id>.lrc → 联网
+```
+
+- 前四级同步完成；第五级走 `LyricsFetchWorker`（QThread），不阻塞 UI
+- 同一首只请求一次（`_online_attempted`）；失败也不重试，避免每次切歌都打网络
+- 结果回来时比对 `current_track.id`，用户已切歌就只写缓存、不动面板
+- **匹配宁缺勿滥**：候选必须带「身份信号」（歌名/艺人包含，或时长差 ≤3s），
+  否则丢弃；`instrumental` 直接跳过。配错歌词比没歌词更糟
+- 可关闭（`Settings.online_lyrics`），关闭后一次请求都不发
+
+### 14.3 外观：一个色值 + 一档字号
+
+- `derive_accent(base, accent)`：按底色亮暗算 hover（深底提亮 / 浅底压暗）、
+  dim（压暗 30%）、soft（往 SURFACE 混 13%）、on_accent（白字对比度 ≥3:1 才用白）
+- 硬约束（已固化为断言）：hover/dim 与主色通道差 ≥12；任意色的 `ON_ACCENT`
+  对主色 ≥3:1；非法色值回落主题默认
+- 字号：`build_stylesheet(font_scale=)` 用正则把全部 `font-size: Npx` 乘以系数，
+  夹取 0.85~1.30、单处不低于 9px（固定行高 52 / 播放栏 84 不会再长）
+
+### 14.4 背景：铺满 + 面板半透明
+
+- `BackgroundLayer`：`_root` 的第一个子控件（天然最底层）、鼠标穿透、内缩 1px
+  让圆角描边可见；图片 `KeepAspectRatioByExpanding` + 居中裁切；模糊用
+  「降采样→平滑升采样」近似高斯（`QGraphicsBlurEffect` 太慢且边缘发黑）
+- 有背景时 `build_stylesheet(scrim=0.78)`：
+  1. 全局把 SURFACE 换成 `rgba(...,0.78)`、BG 换成 `rgba(...,0.33)`（页面底色要更透，
+     否则深色主题下页头/列头变成压在图上的一条黑带）
+  2. **末尾追加不透明覆盖**：`#WindowRoot` 用回原 BG（否则降低背景不透明度时
+     透出的是桌面）、对话框/菜单/输入框/Toast 用回原 SURFACE（它们是独立顶层窗口）
+- 按页面：`Settings.bg_all / bg_library / bg_now`，`bg_config(page)` 在 `inherit`
+  为真时回退到 `bg_all`；切页调 `_refresh_background()`，只有「有没有背景」翻转时
+  才重建整张 QSS
+- 图片导入即复制进 `%APPDATA%/轻音播放器/bgs/`（`import_background`），原图删了不失效
+
+### 14.5 数据模型增量
+
+```python
+@dataclass
+class BackgroundConfig:
+    type: str = "none"        # none | color | gradient | image
+    color: str = "#3b82f6"    # 纯色 / 渐变起始
+    color2: str = "#8b5cf6"   # 渐变终止
+    image: str = ""           # 已复制到 bgs/ 的路径
+    opacity: float = 1.0      # 0.2~1.0
+    blur: int = 0             # 0~60
+    dim: float = 0.0          # 0~0.7
+    inherit: bool = True      # 仅分页面时有意义
+
+class Settings:              # 新增
+    online_lyrics: bool = True
+    accent_color: str = ""            # "" = 跟随主题
+    font_scale: float = 1.0
+    bg_all / bg_library / bg_now: BackgroundConfig
+```
+
+### 14.6 验收标准（v2.2 增量）
+
+- [x] 本地无歌词时自动联网补，命中后缓存、之后离线可看。
+  - 证据：`tests/test_lyrics_online.py`（25 项，全程注入 fetch 不联网）；
+    e2e `test_online_lyrics_fetched_once_then_cached`（清内存缓存后仍显示）
+- [x] 本地已有歌词时一次网络都不打；可关闭联网。
+  - 证据：e2e `test_local_lyrics_win_over_online`、`test_online_lyrics_respects_setting_and_skips_video`
+- [x] 不配错歌：无身份信号的候选一律丢弃。
+  - 证据：`test_rejects_unrelated_song`、`test_skips_instrumental`、`test_skips_hit_without_any_lyrics`
+- [x] 强调色可自定义且处处生效（QSS / 图标 / 均衡器条 / 播放键投影）。
+  - 证据：`test_accent_applies_and_persists`；截图 `shots/dark-library-orange.png`
+- [x] 字号四档，任意档位布局不破。
+  - 证据：`test_font_scale_rebuilds_qss_and_keeps_layout`（`PlayerBar.minimumSizeHint ≤ 1100`）；截图 `shots/light-library-big.png`
+- [x] 背景支持图片/纯色/渐变，可调不透明度/模糊/暗化，可按页面分别设置。
+  - 证据：`tests/test_background.py`（16 项）+ e2e 背景 6 项；截图
+    `shots/dark-library-bggradient.png`、`shots/dark-library-bgimage.png`、`shots/light-library-bgcolor.png`
+- [x] 背景不会因为原图被删而失效；关掉背景完全还原。
+  - 证据：`test_same_image_reused`、`test_background_off_restores_opaque`
+- [x] 全量回归全绿、`ruff check .` 干净、双 EXE 重建。
+  - 证据：`run_tests.py` 21 进程；`ruff check .` → All checks passed

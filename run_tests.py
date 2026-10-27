@@ -23,6 +23,10 @@ MODULES = [
     "tests.test_store",
     # v2.1.9 受管理曲库：导入即复制 / 去重 / 同名冲突 / 扫描器落库
     "tests.test_library",
+    # v2.2 联网歌词：URL 构造 / 脏数据 / 选曲打分 / 缓存读写 / 后台线程（不联网）
+    "tests.test_lyrics_online",
+    # v2.2 自定义背景：图片导入 / 铺满裁切 / 模糊近似 / 半透明样式表
+    "tests.test_background",
     "tests.test_queue",
     "tests.test_player",
     # v2.1.4 列表排序：预设归一化 + 各维度升降序（纯逻辑）
@@ -37,6 +41,11 @@ MODULES = [
     # 调用随机 hang）。逐类独立进程即可规避。
     "tests.test_e2e.TestE2E",
     "tests.test_e2e.TestE2EV2",
+    # v2.2 联网补歌词接线：TestE2EV2 已 21 项，再加 5 项会突破 QMediaPlayer
+    # 累积阈值（offscreen 下 C++ 死锁），必须单独成进程。
+    "tests.test_e2e.TestE2ELyricsOnline",
+    # v2.2 外观自定义（强调色 / 字号）：同样单独成进程
+    "tests.test_e2e.TestE2EAppearance",
     # v2.1 视频：后端纯逻辑单测
     "tests.test_video",
     # 应用图标规范回归（PNG-in-ICO 的 planes/bitcount 必须为 0）

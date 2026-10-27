@@ -122,3 +122,28 @@ def import_into_library(src: str, library_dir: str) -> tuple[str, bool]:
                 os.remove(tmp)
     _copy_sidecar_lrc(src, dest)
     return dest, True
+
+
+def import_background(src: str, bgs_dir: str) -> str:
+    """把自定义背景图复制进数据目录，返回副本路径（v2.2）。
+
+    与音乐不同，这里**不做内容去重**：同一张图换个名字选两次就是两份，
+    但代价只是一个图片文件；反过来做去重会引入"删一个影响另一个"的麻烦。
+    文件名加指纹前缀，避免两个不同目录的同名图片互相覆盖。
+    """
+    os.makedirs(bgs_dir, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(src))
+    stem = safe_stem(stem) or "bg"
+    sig = file_signature(src)
+    dest = os.path.join(bgs_dir, f"{stem}_{sig[:8]}{ext.lower()}")
+    if os.path.exists(dest):
+        return dest                      # 同一张图重复选择：直接复用
+    tmp = dest + ".part"
+    try:
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+    return dest

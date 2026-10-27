@@ -47,15 +47,17 @@ from PySide6.QtWidgets import (
 from app.covers import CoverProvider
 from app.filesize import file_size
 from app.lyrics import LyricLine, lyrics_from_text
+from app.lyrics_online import LyricsFetchWorker, read_cache, write_cache
 from app.metadata import read_track
 from app.library import is_in_library
-from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, Track
+from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, BackgroundConfig, Track
 from app.paths import covers_dir, data_file, library_dir
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
 from app.sorting import default_sort_for, preset_by_id, sort_tracks
 from app.store import LibraryStore
 from ui import theme as ui_theme
+from ui.background import BackgroundLayer
 from ui.dialogs import ImportProgressDialog
 from ui.float_bar import FloatBar
 from ui.player_bar import PlayerBar
@@ -65,6 +67,9 @@ from ui.title_bar import TitleBar
 from ui.track_list import TrackList
 from ui.now_playing import NowPlayingPage
 from ui.video_view import VideoFullscreenOverlay
+
+# 联网检索中给用户的提示：既解释「为什么现在没歌词」，也暗示等一下会出现
+ONLINE_PENDING_HINT = "正在联网匹配歌词…"
 
 # 排序预设集中在 app/sorting.py（维度 + 方向 + 文案），此文件只负责应用
 
@@ -96,6 +101,11 @@ class MainWindow(QMainWindow):
         self._displayed: list[Track] = []
         self._scanner: ScannerWorker | None = None
         self._lyrics_cache: dict[str, tuple[list[LyricLine], list[str]]] = {}
+        # 联网补歌词（v2.2）：同一首只试一次；worker 自己持引用，结束后清掉
+        self._lyrics_workers: dict[str, LyricsFetchWorker] = {}
+        self._online_attempted: set[str] = set()
+        # 当前是否处于「自定义背景」模式（面板半透明）；None = 无背景
+        self._bg_scrim: float | None = None
         # 视图历史：初始视图即历史第 0 项——否则从初始视图导航后
         # 「后退」永远回不到起点（set_view 同视图不记录，restore 路径
         # 不会把初始视图补进历史）
@@ -108,7 +118,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._connect_signals()
-        ui_theme.apply_theme(QApplication.instance() or self, self.store.settings.theme)
+        self._apply_appearance(save=False)
         self._restore_state()
         app = QApplication.instance()
         if app is not None:
@@ -121,6 +131,10 @@ class MainWindow(QMainWindow):
         self._root.setObjectName("WindowRoot")
         self._root.setMouseTracking(True)
         self.setCentralWidget(self._root)
+
+        # 自定义背景层（v2.2）：最先创建 => 天然处于最底层，被后续控件盖住。
+        # 手动定位而不是进布局：它要铺满整个窗口根容器（含标题栏/播放栏下方）。
+        self.background = BackgroundLayer(self._root)
 
         outer = QVBoxLayout(self._root)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -158,7 +172,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.1.9 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.2 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -346,6 +360,7 @@ class MainWindow(QMainWindow):
     def _show_page(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
         self.track_list.set_now_playing_active(index == 1)
+        self._refresh_background()          # 两页可以各自一套背景（v2.2）
         if index == 1 and self.player.current_track:
             track = self.player.current_track
             self.now_playing.set_track(
@@ -478,6 +493,9 @@ class MainWindow(QMainWindow):
             self.now_playing.set_synced(synced)
         elif plain:
             self.now_playing.set_plain(plain)
+        elif self._start_online_lyrics(track) or track.id in self._lyrics_workers:
+            # 已经发起、结果还没回来：先告诉用户「在找」，别让人以为这首没歌词
+            self.now_playing.set_empty(ONLINE_PENDING_HINT)
         else:
             self.now_playing.set_empty()
 
@@ -500,7 +518,48 @@ class MainWindow(QMainWindow):
             meta = None
         if meta is not None and meta.lyrics_text:
             return lyrics_from_text(meta.lyrics_text)
+        # 4) 上次联网匹配的缓存（v2.2）——命中即完全离线可用
+        cached_text = read_cache(track.id)
+        if cached_text:
+            return lyrics_from_text(cached_text)
+        # 5) 联网兜底不在这里做：网络请求是异步的，交给 _start_online_lyrics
         return [], []
+
+    def _start_online_lyrics(self, track: Track) -> bool:
+        """本地无歌词时发起一次联网检索。返回 True 表示「已经去要了」。
+
+        三条不发的理由：设置里关了、视频文件（歌词无意义）、本地已试过一次
+        （失败也不重试，避免每切一次歌曲就打一次网络）。
+        """
+        if track.is_video or track.id in self._online_attempted:
+            return False
+        if not self.store.settings.online_lyrics:
+            return False
+        if not (track.display_title or track.artist):
+            return False
+        self._online_attempted.add(track.id)
+        worker = LyricsFetchWorker(track.id, track.display_title, track.artist,
+                                   track.duration_ms, self)
+        worker.found.connect(self._on_online_lyrics)
+        worker.finished.connect(lambda tid=track.id: self._lyrics_workers.pop(tid, None))
+        self._lyrics_workers[track.id] = worker
+        worker.start()
+        return True
+
+    def _on_online_lyrics(self, track_id: str, text: str) -> None:
+        synced, plain = lyrics_from_text(text)
+        if not synced and not plain:
+            return
+        self._lyrics_cache[track_id] = (synced, plain)
+        write_cache(track_id, text)
+        current = self.player.current_track
+        if current is None or current.id != track_id:
+            return                      # 用户已经切走了，别串到当前这首歌上
+        if synced:
+            self.now_playing.set_synced(synced)
+        else:
+            self.now_playing.set_plain(plain)
+        self._toast("已联网匹配到歌词", 2500)
 
     # ---------- 歌单管理 ----------
 
@@ -695,17 +754,50 @@ class MainWindow(QMainWindow):
     # ---------- 主题 / 设置 / 数据目录 ----------
 
     def _apply_theme(self, name: str) -> None:
-        ui_theme.apply_theme(QApplication.instance() or self, name)
         self.store.settings.theme = name
-        self.store.save()
-        self.float_bar.set_theme_icon(name == "dark")
+        self._apply_appearance()
+        self._toast("已切换到浅色主题" if name == "light" else "已切换到深色主题", 2000)
+
+    def _apply_appearance(self, save: bool = True) -> None:
+        """把 settings 里的主题/强调色/字号一次性应用到整个界面（v2.2）。
+
+        汇总成一个入口的理由：三者的收尾动作完全一样（重刷图标、均衡器条、
+        浮动条定位、列表重绘）。分开写迟早会漏掉其中一步，表现为"换了颜色但
+        某个角落还是旧的"。
+        """
+        s = self.store.settings
+        config = s.bg_config(self._current_bg_page())
+        # 背景开着时面板必须半透明，否则自定义背景被完全盖住（"设了没反应"）
+        self._bg_scrim = ui_theme.BG_SCRIM if config.type != "none" else None
+        ui_theme.set_appearance(QApplication.instance() or self, s.theme,
+                                accent=s.accent_color, font_scale=s.font_scale,
+                                scrim=self._bg_scrim)
+        if save:
+            self.store.save()
+        self.float_bar.set_theme_icon(ui_theme.current_theme().name == "dark")
         self.title_bar.refresh_icons()
         self.player_bar.refresh_theme()
-        # 主题切换会改变按钮字号/内边距 → 浮动条宽度要重新按 sizeHint 算一次
+        # 字号/内边距变化会改变浮动条 sizeHint → 必须重新量一次宽度并定位
         self._position_float_bar()
-        # 主题切换后重刷列表（封面占位/均衡器条颜色等随主题变化）
+        # 封面占位、均衡器条颜色等随主题变化 → 重刷列表
         self.refresh_list()
-        self._toast("已切换到浅色主题" if name == "light" else "已切换到深色主题", 2000)
+        self._apply_background_config(config)
+
+    def _on_settings_accent(self, color: str) -> None:
+        color = (color or "").strip().lower()
+        if color == self.store.settings.accent_color:
+            return
+        self.store.settings.accent_color = color
+        self._apply_appearance()
+        self._toast("已恢复主题默认强调色" if not color else "已更新强调色", 2000)
+
+    def _on_settings_font_scale(self, scale: float) -> None:
+        scale = ui_theme.clamp_font_scale(scale)
+        if abs(scale - self.store.settings.font_scale) < 1e-3:
+            return
+        self.store.settings.font_scale = scale
+        self._apply_appearance()
+        self._toast(f"字号已调整为 {round(scale * 100)}%", 2000)
 
     def _toggle_theme(self) -> None:
         self._apply_theme("light" if ui_theme.current_theme().name == "dark" else "dark")
@@ -717,11 +809,34 @@ class MainWindow(QMainWindow):
             self._toast("无法打开数据目录", 4000)
 
     def _show_settings(self) -> None:
-        dialog = SettingsDialog(self.store.settings.theme, self.store.settings.nickname,
-                                stats_for(self.store), self)
+        s = self.store.settings
+        dialog = SettingsDialog(s.theme, s.nickname, stats_for(self.store), self,
+                                online_lyrics=s.online_lyrics,
+                                accent_color=s.accent_color,
+                                font_scale=s.font_scale,
+                                bg_configs={"all": s.bg_all, "library": s.bg_library,
+                                            "now_playing": s.bg_now},
+                                bg_scope=self._current_bg_page())
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
+        dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
+        dialog.accent_changed.connect(self._on_settings_accent)
+        dialog.font_scale_changed.connect(self._on_settings_font_scale)
+        dialog.background_changed.connect(self._on_settings_background)
         dialog.exec()
+
+    def _on_settings_online_lyrics(self, enabled: bool) -> None:
+        if self.store.settings.online_lyrics == enabled:
+            return
+        self.store.settings.online_lyrics = enabled
+        self.store.save()
+        if enabled:
+            # 刚打开开关：把「试过但没结果」的记录清掉，让当前这首立刻重试
+            self._online_attempted.clear()
+            track = self.player.current_track
+            if track is not None and self._lyrics_cache.get(track.id) == ([], []):
+                self._load_lyrics(track)
+        self._toast("已开启联网补歌词" if enabled else "已关闭联网补歌词", 2500)
 
     def _on_settings_nickname(self, name: str) -> None:
         name = name.strip()
@@ -892,6 +1007,7 @@ class MainWindow(QMainWindow):
         self._update_mask()
         self._position_toast()
         self._position_float_bar()
+        self._layout_background()
 
     def _position_float_bar(self) -> None:
         # 左下角，右缘对齐侧边栏内容右边界（248 - 12 = 236），不再跨进内容区；
@@ -915,6 +1031,46 @@ class MainWindow(QMainWindow):
         lbl.move(self._root.width() - lbl.width() - 14,
                  self._root.height() - lbl.height() - 4)
         lbl.raise_()
+
+    # ---------- 自定义背景（v2.2） ----------
+
+    def _current_bg_page(self) -> str:
+        """当前页的作用域名：列表页 / 正在播放页各自可以有一套背景。"""
+        return "now_playing" if self.stack.currentIndex() == 1 else "library"
+
+    def _layout_background(self) -> None:
+        """背景层铺满窗口根容器；内缩 1px，让 QSS 的圆角描边不被盖掉。"""
+        rect = self._root.rect()
+        self.background.setGeometry(rect.x() + 1, rect.y() + 1,
+                                    max(0, rect.width() - 2), max(0, rect.height() - 2))
+
+    def _apply_background_config(self, config) -> None:
+        self.background.set_config(config)
+        self._layout_background()
+        self.background.lower()      # 任何 raise_() 之后都压回最底层
+
+    def _refresh_background(self) -> None:
+        """换页/换设置后更新背景。
+
+        背景「有没有开」会决定面板是否半透明，而那是整张 QSS 的事 ——
+        只在开关状态真的翻转时才重建样式表，避免每次切页都重刷全身。
+        """
+        config = self.store.settings.bg_config(self._current_bg_page())
+        want_scrim = ui_theme.BG_SCRIM if config.type != "none" else None
+        if want_scrim != self._bg_scrim:
+            self._apply_appearance()      # 会顺带把 config 应用上
+        else:
+            self._apply_background_config(config)
+
+    def _on_settings_background(self, scope: str, config) -> None:
+        """设置对话框改背景：写到指定作用域（all / library / now_playing）。
+
+        存的是**副本**：对话框后续还会就地改它自己那份配置，共享引用会让
+        「没保存的改动」悄悄进到设置里。
+        """
+        self.store.settings.set_bg_config(scope, BackgroundConfig.from_dict(config.to_dict()))
+        self.store.save()
+        self._refresh_background()
 
     def _update_mask(self) -> None:
         if self.isMaximized() or not self.isVisible():
@@ -999,8 +1155,10 @@ class MainWindow(QMainWindow):
     def _toast(self, text: str, ms: int = 3000) -> None:
         self._toast_label.setText(text)
         self._toast_label.adjustSize()
-        self._position_toast()
+        # 必须先 show 再定位：_position_toast 对「不可见」直接早退，
+        # 原来顺序反了 → toast 永远停在 (0,0)，贴在窗口左上角压住标题栏。
         self._toast_label.show()
+        self._position_toast()
         self._toast_label.raise_()
         self._toast_timer.start(ms)
 
@@ -1023,6 +1181,10 @@ class MainWindow(QMainWindow):
         if self._scanner is not None and self._scanner.isRunning():
             self._scanner.cancel()
             self._scanner.wait(3000)
+        # 联网抓歌词的线程必须等它自己收尾，否则析构中线程还在跑会告警/崩
+        for worker in list(self._lyrics_workers.values()):
+            worker.wait(2000)
+        self._lyrics_workers.clear()
         self.player.stop()
         self.store.save()
         super().closeEvent(event)

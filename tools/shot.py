@@ -23,8 +23,32 @@ sys.path.insert(0, ROOT)
 DESKTOP_BG = "#dcdcdc"
 
 
+def parse_bg_spec(spec: str):
+    """解析 --bg 简写：`type=gradient;color=#1e3a8a;color2=#7c3aed;blur=10;dim=0.3`"""
+    from app.models import BackgroundConfig
+
+    cfg = BackgroundConfig()
+    for chunk in (spec or "").split(";"):
+        if not chunk.strip() or "=" not in chunk:
+            continue
+        key, _, value = chunk.partition("=")
+        key, value = key.strip(), value.strip()
+        if key == "type":
+            cfg.type = value
+        elif key in ("color", "color2", "image"):
+            setattr(cfg, key, value)
+        elif key == "blur":
+            cfg.blur = int(float(value))
+        elif key == "dim":
+            cfg.dim = float(value)
+        elif key == "opacity":
+            cfg.opacity = float(value)
+    return cfg
+
+
 def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "dark",
-                  with_video: bool = False) -> None:
+                  with_video: bool = False, accent: str = "",
+                  font_scale: float = 1.0, bg_spec: str = "") -> None:
     """在隔离 APPDATA 中构造演示数据。"""
     os.environ["APPDATA"] = appdata
     os.makedirs(appdata, exist_ok=True)
@@ -58,6 +82,10 @@ def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "dark",
         if os.path.isfile(video_path):
             store.add_or_update(read_track(video_path), video_path)
     store.settings.theme = theme
+    store.settings.accent_color = accent
+    store.settings.font_scale = font_scale
+    if bg_spec:
+        store.settings.bg_all = parse_bg_spec(bg_spec)
     store.save()
 
 
@@ -118,6 +146,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="./shots")
     parser.add_argument("--theme", default=None, choices=["dark", "light"])
+    parser.add_argument("--accent", default="", help="自定义强调色，如 #ff7a45（默认跟随主题）")
+    parser.add_argument("--font-scale", type=float, default=1.0, dest="font_scale")
+    parser.add_argument("--tag", default="", help="文件名后缀，便于同主题多套外观对比")
+    parser.add_argument("--settings-tab", type=int, default=0, dest="settings_tab",
+                        help="设置对话框默认显示第几页（0 外观 / 1 背景 / 2 歌词与统计）")
+    parser.add_argument("--bg", default="",
+                        help="自定义背景：type=gradient;color=#1e3a8a;color2=#7c3aed;"
+                             "blur=10;dim=0.3;opacity=1（type 可为 color/gradient/image）")
     parser.add_argument("--state", default=None,
                         choices=["library", "playing", "lyrics", "queue", "settings", "empty",
                                  "maximized", "video", "video_fullscreen"])
@@ -134,7 +170,6 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("轻音播放器")
 
-    from ui import theme as ui_theme
     from ui.main_window import MainWindow
 
     shots = []
@@ -142,13 +177,17 @@ def main() -> int:
         with_tracks = state != "empty"
         with_video = state in ("video", "video_fullscreen")
         appdata = tempfile.mkdtemp(prefix="qy_shot_")
-        _prepare_data(appdata, with_tracks=with_tracks, theme=theme, with_video=with_video)
+        _prepare_data(appdata, with_tracks=with_tracks, theme=theme, with_video=with_video,
+                      accent=args.accent, font_scale=args.font_scale,
+                      bg_spec=args.bg)
         window = MainWindow()
         window.resize(1280, 800)
         window.show()
-        ui_theme.apply_theme(app, theme)
+        # 走应用自己的外观入口：它会把「有没有背景 => 面板要不要半透明」一起算上。
+        # 直接调 set_appearance 会漏掉 scrim，导致截图里背景被面板完全盖住。
+        window._apply_appearance(save=False)
 
-        name = f"{theme}-{state}.png"
+        name = f"{theme}-{state}{('-' + args.tag) if args.tag else ''}.png"
         path = os.path.join(args.out, name)
 
         if state == "playing":
@@ -194,8 +233,15 @@ def main() -> int:
             continue
         elif state == "settings":
             from ui.settings_dialog import SettingsDialog, stats_for
-            dialog = SettingsDialog(window.store.settings.theme, window.store.settings.nickname,
-                                    stats_for(window.store), window)
+            settings = window.store.settings
+            dialog = SettingsDialog(
+                settings.theme, settings.nickname, stats_for(window.store), window,
+                online_lyrics=settings.online_lyrics,
+                accent_color=settings.accent_color,
+                font_scale=settings.font_scale,
+                bg_configs={"all": settings.bg_all, "library": settings.bg_library,
+                            "now_playing": settings.bg_now})
+            dialog.tabs.setCurrentIndex(args.settings_tab)
             dialog.show()
             _capture_to_desktop_bg(dialog, path)
             dialog.close()

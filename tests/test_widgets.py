@@ -599,6 +599,20 @@ class TestLyricsThemeColor(unittest.TestCase):
             THEMES["light"].TEXT_DIM.lower(),
         )
 
+    def test_empty_hint_restores_default(self):
+        """临时提示（如「正在联网匹配歌词…」）之后，空状态文案必须能复原。
+
+        曾写成「只有传了 hint 才 setText」：联网提示会永久留在面板上，
+        下一首没歌词的歌也显示「正在联网匹配…」，看起来像卡死了。
+        """
+        from ui.lyrics_panel import EMPTY_HINT, LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_empty("正在联网匹配歌词…")
+        self.assertEqual(panel.empty_label.text(), "正在联网匹配歌词…")
+        panel.set_empty()
+        self.assertEqual(panel.empty_label.text(), EMPTY_HINT)
+
 
 if __name__ == "__main__":
     unittest.main()

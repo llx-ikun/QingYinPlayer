@@ -98,5 +98,102 @@ class TestContrast(unittest.TestCase):
         self.assertGreater(_luminance(LIGHT.ACCENT_SOFT), 0.8)
 
 
+class TestAccentOverride(unittest.TestCase):
+    """自定义强调色（v2.2）：一个色值派生出整套色阶，且必须守住可读性下限。
+
+    设计取舍：只让用户选**一个**色值，hover/dim/soft/on_accent 全部由它算出来。
+    让用户手调四个色值既难用又会自相矛盾（浅 hover + 深 dim 混在一起根本没法看）。
+    """
+
+    def test_derived_theme_keeps_other_tokens(self):
+        from ui.theme import derive_accent
+
+        custom = derive_accent(DARK, "#ff7a45")
+        self.assertEqual(custom.name, DARK.name)
+        self.assertEqual(custom.BG, DARK.BG)
+        self.assertEqual(custom.TEXT, DARK.TEXT)
+        self.assertEqual(custom.ACCENT, "#ff7a45")
+
+    def test_hover_and_dim_are_distinguishable(self):
+        """hover/dim 与主色必须肉眼可分（通道差 ≥ 12，回归浮动条同款阈值）。"""
+        from ui.theme import _rgb, derive_accent
+
+        for base in (DARK, LIGHT):
+            for accent in ("#6c8cff", "#ff7a45", "#22c55e", "#e11d48", "#0ea5e9"):
+                custom = derive_accent(base, accent)
+                for field in ("ACCENT_HOVER", "ACCENT_DIM"):
+                    a, b = _rgb(custom.ACCENT), _rgb(getattr(custom, field))
+                    self.assertGreaterEqual(
+                        max(abs(a[i] - b[i]) for i in range(3)), 12,
+                        f"{base.name}/{accent}: {field} 与 ACCENT 差异过小")
+
+    def test_on_accent_contrast_for_any_accent(self):
+        """任意强调色上，ON_ACCENT 都必须有 ≥3:1 对比度（播放键图标靠它可见）。"""
+        from ui.theme import derive_accent
+
+        for base in (DARK, LIGHT):
+            for accent in ("#6c8cff", "#ff7a45", "#22c55e", "#e11d48",
+                           "#0ea5e9", "#facc15", "#111827", "#f8fafc"):
+                custom = derive_accent(base, accent)
+                self.assertGreaterEqual(
+                    _contrast(custom.ON_ACCENT, custom.ACCENT), 3.0,
+                    f"{base.name}/{accent}: ON_ACCENT={custom.ON_ACCENT}")
+
+    def test_invalid_accent_falls_back_to_theme_default(self):
+        """脏数据（空/非 hex/三位缩写）不能炸，回退到主题原色。"""
+        from ui.theme import derive_accent
+
+        for bad in ("", None, "red", "#12", "#1234567", "javascript:alert(1)"):
+            self.assertEqual(derive_accent(DARK, bad).ACCENT, DARK.ACCENT, repr(bad))
+
+    def test_soft_is_a_tint_between_surface_and_accent(self):
+        from ui.theme import derive_accent, luminance
+
+        light = derive_accent(LIGHT, "#ff7a45")
+        self.assertGreater(luminance(light.SURFACE), luminance(light.ACCENT_SOFT))
+        self.assertGreater(luminance(light.ACCENT_SOFT), 0.8)
+
+
+class TestFontScale(unittest.TestCase):
+    """字号缩放（v2.2）：改的是 QSS 里的 font-size，不重排布局。"""
+
+    def test_scale_one_keeps_original_sizes(self):
+        from ui.theme import build_stylesheet
+
+        self.assertEqual(build_stylesheet(DARK, font_scale=1.0), build_stylesheet(DARK))
+
+    def test_scaling_multiplies_every_font_size(self):
+        import re
+
+        from ui.theme import build_stylesheet
+
+        base = [int(n) for n in re.findall(r"font-size:\s*(\d+)px", build_stylesheet(DARK))]
+        big = [int(n) for n in re.findall(
+            r"font-size:\s*(\d+)px", build_stylesheet(DARK, font_scale=1.25))]
+        self.assertEqual(len(base), len(big))
+        for a, b in zip(base, big, strict=True):
+            self.assertEqual(b, max(9, round(a * 1.25)), f"{a} → {b}")
+
+    def test_scale_is_clamped_to_safe_range(self):
+        """0.5 / 3.0 这种离谱值要夹到安全区间：布局没有为极端字号做准备。"""
+        from ui.theme import FONT_SCALE_MAX, FONT_SCALE_MIN, clamp_font_scale
+
+        self.assertEqual(clamp_font_scale(0.2), FONT_SCALE_MIN)
+        self.assertEqual(clamp_font_scale(9.0), FONT_SCALE_MAX)
+        self.assertEqual(clamp_font_scale("bad"), 1.0)
+        self.assertEqual(clamp_font_scale(1.15), 1.15)
+
+    def test_no_font_shrinks_below_readable_floor(self):
+        """缩到最小档时 10px 的徽标会变 9px，不能更小。"""
+        import re
+
+        from ui.theme import FONT_SCALE_MIN, build_stylesheet
+
+        sizes = [int(n) for n in re.findall(
+            r"font-size:\s*(\d+)px", build_stylesheet(DARK, font_scale=FONT_SCALE_MIN))]
+        self.assertTrue(sizes)
+        self.assertGreaterEqual(min(sizes), 9)
+
+
 if __name__ == "__main__":
     unittest.main()

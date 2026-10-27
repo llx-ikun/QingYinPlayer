@@ -171,6 +171,37 @@ class TestStore(unittest.TestCase):
         self.assertEqual(s2.settings.theme, "dark")
         self.assertEqual(s2.settings.nickname, "音乐爱好者")
 
+    def test_appearance_settings_roundtrip(self):
+        """v2.2 外观：强调色 + 字号缩放要能存能读。"""
+        s = self._store()
+        s.set_setting("accent_color", "#ff7a45")
+        s.set_setting("font_scale", 1.15)
+        s.save()
+        s2 = LibraryStore(self.db)
+        self.assertEqual(s2.settings.accent_color, "#ff7a45")
+        self.assertAlmostEqual(s2.settings.font_scale, 1.15)
+
+    def test_legacy_data_gets_default_appearance(self):
+        """老 data.json 没有外观字段：跟随主题默认（空强调色 + 100% 字号）。"""
+        s = self._store()
+        s.save()
+        s2 = LibraryStore(self.db)
+        self.assertEqual(s2.settings.accent_color, "")
+        self.assertAlmostEqual(s2.settings.font_scale, 1.0)
+
+    def test_bad_font_scale_in_json_falls_back(self):
+        """脏数据（字符串/None）不能让整个设置炸掉。"""
+        import json
+
+        s = self._store()
+        s.save()
+        with open(self.db, encoding="utf-8") as f:
+            data = json.load(f)
+        data["settings"]["font_scale"] = "很大"
+        with open(self.db, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        self.assertAlmostEqual(LibraryStore(self.db).settings.font_scale, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

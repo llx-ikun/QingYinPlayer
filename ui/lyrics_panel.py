@@ -9,6 +9,9 @@ from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QVBoxLayout,
 from app.lyrics import LyricLine, lyric_index_at
 from ui.theme import ACCENT, current_theme
 
+# 空状态默认文案：`set_empty(hint)` 传入临时文案后，下一次不带参数要能复原
+EMPTY_HINT = "暂无歌词\n支持同名 .lrc 文件与内嵌歌词"
+
 
 def _normal_color() -> QColor:
     """歌词常态色随主题走。
@@ -37,7 +40,7 @@ class LyricsPanel(QWidget):
         self.list.itemClicked.connect(self._on_clicked)
         root.addWidget(self.list, 1)
 
-        self.empty_label = QLabel("暂无歌词\n支持同名 .lrc 文件与内嵌歌词")
+        self.empty_label = QLabel(EMPTY_HINT)
         self.empty_label.setObjectName("Dim")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.empty_label)
@@ -87,8 +90,7 @@ class LyricsPanel(QWidget):
         self._plain = []
         self._current_index = -1
         self.list.clear()
-        if hint:
-            self.empty_label.setText(hint)
+        self.empty_label.setText(hint or EMPTY_HINT)
         self._refresh_visibility()
 
     def update_position(self, position_ms: int) -> None:

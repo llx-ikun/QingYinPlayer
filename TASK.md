@@ -72,7 +72,16 @@
 ## J. 文档与交付（依赖 I）
 
 - [ ] **J1** 文档：`README.md`（新功能/快捷键）、`DESIGN.md §12` 勾选完成态、`ACCEPTANCE.md` v2.0 增量对照、`交付报告.md` 追加章节
-- [ ] **J2** `env -u PYTHONPATH .venv/Scripts/python.exe build.py` 重建双产物（smoke + 真实平台检查）
+- [ ] **J2** `env -u PYTHONPATH .venv/Scripts/python.exe build.py
+# v2.2 外观视觉验收（真实平台出图，不是 offscreen）
+env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out ./shots --theme dark \
+    --state library --bg "type=gradient;color=#1e3a8a;color2=#7c3aed" --tag bggradient
+env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out ./shots --theme dark \
+    --state library --bg "type=image;image=<某张图>;blur=16;dim=0.45" --tag bgimage
+env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out ./shots --theme light \
+    --accent "#22c55e" --font-scale 1.28 --tag big --state library
+env -u PYTHONPATH .venv/Scripts/python.exe tools/shot.py --out ./shots --theme dark \
+    --state settings --settings-tab 1 --tag bg` 重建双产物（smoke + 真实平台检查）
 - [ ] **J3** git：`feat/ui-v2` 合并 `main`（Conventional Commits: `feat(ui): ...`）+ 更新工作区记忆
 
 ## 依赖关系
@@ -345,10 +354,32 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
 - [x] **V6** 新增 `tests/test_library.py`（9 项）+ e2e `test_import_copies_files_into_library`
 - [x] **V7** 版本号 `v2.1.9`、全量回归、`ruff check .`、重建双 EXE
 
+## v2.2 任务（歌词联网补全 + 外观自定义：强调色 / 字号 / 背景）
+
+- [x] **W1** 新增 `app/lyrics_online.py`：LRCLIB 检索（URL 构造 / 脏数据解析 /
+      身份门槛打分 / 断网降级）+ 缓存读写（`<track_id>.lrc`，`.part` 原子落盘）
+      + `LyricsFetchWorker`（QThread，后台抓、成功发 `found`）
+- [x] **W2** 歌词解析扩成 5 级：手动绑定 → 同名 `.lrc` → 内嵌 → 本地缓存 → 联网兜底
+      （联网异步；同一首只试一次；结果回来时若已切歌不串词）
+- [x] **W3** `Settings.online_lyrics` 开关 + 设置页勾选框；关闭时不发任何请求
+- [x] **W4** `ui/theme.py` 外观引擎：`derive_accent`（一个色值派生 hover/dim/soft/on_accent）、
+      `clamp_font_scale` + QSS 字号乘法、`set_appearance` 统一入口、`build_stylesheet(scrim=)`
+- [x] **W5** `Settings.accent_color` / `font_scale`；`_apply_appearance()` 成为主窗口唯一外观入口
+- [x] **W6** `ui/background.py`：`BackgroundLayer`（纯色/渐变/图片，铺满裁切、模糊近似、暗化、
+      不透明度）+ 面板半透明 + 浮层不透明兜底
+- [x] **W7** `BackgroundConfig` + 三份配置（全部/列表页/正在播放页），`bg_config(page)` 回退规则；
+      切页 `_refresh_background()`；`import_background()` 把图片复制进 `bgs/`
+- [x] **W8** 设置对话框改三页签（外观 / 背景 / 歌词与统计）：色板 + 自定义色、字号四档、
+      背景类型/作用页面/跟随开关/颜色/图片/三个滑块
+- [x] **W9** 测试与交付：新增 `test_lyrics_online`(25) / `test_background`(16) /
+      `TestE2ELyricsOnline`(5) / `TestE2EAppearance`(14，含 toast 居中)，`test_theme` +9、`test_store` +3；
+      全量回归 **22 进程 331 项全绿**、`ruff check .` 干净、`tools/shot.py` 视觉验收、
+      双 EXE 重建（55.6MB / 2.4MB，smoke + 8s 存活）、版本号 `v2.2`（`APP_VERSION=2.2.0`）
+
 ## v2.1 依赖关系
 
 ```
-K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → U1 → U2 → U3 → U4 → U5 → U6 → V1 → V2 → V3 → V4 → V5 → V6 → V7
+K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → U1 → U2 → U3 → U4 → U5 → U6 → V1 → V2 → V3 → V4 → V5 → V6 → V7 → W1 → W2 → W3 → W4 → W5 → W6 → W7 → W8 → W9
 ```
 
 ## v2.1 验收命令

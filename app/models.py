@@ -23,6 +23,9 @@ VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m
 # 导入扫描用的全部媒体扩展名
 MEDIA_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
 
+# 自定义背景的四种形态（v2.2）
+BG_TYPES = ("none", "color", "gradient", "image")
+
 # 视频扩展名（不带点），用于按 fmt 派生 is_video
 VIDEO_FORMATS = frozenset(ext.lstrip(".") for ext in VIDEO_EXTENSIONS)
 
@@ -159,6 +162,64 @@ class Playlist:
 
 
 @dataclass
+class BackgroundConfig:
+    """一页的自定义背景（v2.2）。
+
+    为什么不是「4 个独立设置」而是一个配置对象：背景的四种形态（纯色/渐变/图片）
+    各用其中一部分字段，把 type 和它的参数绑在一起才不会出现「选了纯色但还带着
+    昨天的图片路径」这种自相矛盾的状态。
+    """
+
+    type: str = "none"          # none | color | gradient | image
+    color: str = "#3b82f6"      # 纯色 / 渐变起始色
+    color2: str = "#8b5cf6"     # 渐变终止色
+    image: str = ""             # 图片路径（导入时复制进数据目录 bgs/）
+    opacity: float = 1.0        # 背景层不透明度 0.2~1.0
+    blur: int = 0               # 高斯模糊半径 px（0 = 不模糊）
+    dim: float = 0.0            # 暗化 0~0.7（把背景压暗，保证前景文字可读）
+    inherit: bool = True        # True = 跟随「全部页面」的设置（仅分页面时有意义）
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "color": self.color,
+            "color2": self.color2,
+            "image": self.image,
+            "opacity": self.opacity,
+            "blur": self.blur,
+            "dim": self.dim,
+            "inherit": self.inherit,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BackgroundConfig":
+        cfg = cls()
+        if not isinstance(d, dict):
+            return cfg
+        bg_type = str(d.get("type") or "none")
+        cfg.type = bg_type if bg_type in BG_TYPES else "none"
+        for key in ("color", "color2"):
+            value = d.get(key)
+            if isinstance(value, str) and value:
+                setattr(cfg, key, value)
+        cfg.image = str(d.get("image") or "")
+        try:
+            cfg.opacity = max(0.2, min(1.0, float(d.get("opacity", 1.0))))
+        except (TypeError, ValueError):
+            cfg.opacity = 1.0
+        try:
+            cfg.blur = max(0, min(60, int(d.get("blur", 0))))
+        except (TypeError, ValueError):
+            cfg.blur = 0
+        try:
+            cfg.dim = max(0.0, min(0.7, float(d.get("dim", 0.0))))
+        except (TypeError, ValueError):
+            cfg.dim = 0.0
+        cfg.inherit = bool(d.get("inherit", True))
+        return cfg
+
+
+@dataclass
 class Settings:
     volume: float = 0.7
     muted: bool = False
@@ -168,6 +229,29 @@ class Settings:
     last_view: str = PLAYLIST_LIBRARY   # 上次所在视图（library / playlist id）
     theme: str = "dark"                 # v2.0：主题（dark / light）
     nickname: str = "音乐爱好者"         # v2.0：侧边栏用户卡片昵称
+    online_lyrics: bool = True          # v2.2：本地无歌词时联网补（LRCLIB）
+    accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
+    font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
+    # v2.2 自定义背景：三个作用域（全部 / 列表页 / 正在播放页）
+    bg_all: BackgroundConfig = field(default_factory=BackgroundConfig)
+    bg_library: BackgroundConfig = field(default_factory=BackgroundConfig)
+    bg_now: BackgroundConfig = field(default_factory=BackgroundConfig)
+
+    def bg_config(self, page: str) -> BackgroundConfig:
+        """取某一页实际生效的背景：本页没单独设过就退回「全部页面」。"""
+        per_page = {"library": self.bg_library, "now_playing": self.bg_now}
+        cfg = per_page.get(page)
+        if cfg is not None and not cfg.inherit:
+            return cfg
+        return self.bg_all
+
+    def set_bg_config(self, scope: str, cfg: BackgroundConfig) -> None:
+        if scope == "library":
+            self.bg_library = cfg
+        elif scope == "now_playing":
+            self.bg_now = cfg
+        else:
+            self.bg_all = cfg
 
     def to_dict(self) -> dict:
         return {
@@ -179,6 +263,14 @@ class Settings:
             "last_view": self.last_view,
             "theme": self.theme,
             "nickname": self.nickname,
+            "online_lyrics": self.online_lyrics,
+            "accent_color": self.accent_color,
+            "font_scale": self.font_scale,
+            "bg": {
+                "all": self.bg_all.to_dict(),
+                "library": self.bg_library.to_dict(),
+                "now_playing": self.bg_now.to_dict(),
+            },
         }
 
     @classmethod
@@ -192,4 +284,15 @@ class Settings:
         s.last_view = d.get("last_view", PLAYLIST_LIBRARY)
         s.theme = d.get("theme") or "dark"
         s.nickname = d.get("nickname") or "音乐爱好者"
+        s.online_lyrics = bool(d.get("online_lyrics", True))
+        s.accent_color = d.get("accent_color") or ""
+        try:
+            s.font_scale = float(d.get("font_scale", 1.0))
+        except (TypeError, ValueError):
+            s.font_scale = 1.0
+        bg = d.get("bg") or {}
+        if isinstance(bg, dict):
+            s.bg_all = BackgroundConfig.from_dict(bg.get("all") or {})
+            s.bg_library = BackgroundConfig.from_dict(bg.get("library") or {})
+            s.bg_now = BackgroundConfig.from_dict(bg.get("now_playing") or {})
         return s

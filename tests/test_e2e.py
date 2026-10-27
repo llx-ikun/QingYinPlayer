@@ -760,5 +760,354 @@ class TestE2EV2(unittest.TestCase):
         self.assertGreater(total, 0)
 
 
+class TestE2ELyricsOnline(unittest.TestCase):
+    """v2.2 联网补歌词接线：本地优先、只请求一次、结果落缓存、切歌不串词。
+
+    为什么单独成类而不是塞进 TestE2EV2：同一进程内每建一次 MainWindow 就多一个
+    QMediaPlayer，累积到 ~15-20 个后 offscreen 下 Qt 多媒体后端会 C++ 层死锁
+    （调用随机 hang）。TestE2EV2 已经 21 项，再加 5 项实测会在
+    test_theme_switch_applies_and_persists 处卡满 600s。逐类独立进程即可规避。
+
+    一律不联网：`ui.main_window.LyricsFetchWorker` 换成只记一笔的假线程；
+    真解析/打分/缓存逻辑在 tests/test_lyrics_online.py 里覆盖。
+    """
+
+    def setUp(self):
+        _fresh_appdata()
+        from ui.main_window import MainWindow
+        self.window = MainWindow()
+        self.window.show()
+        self.store = self.window.store
+
+    def tearDown(self):
+        self.window.player.stop()
+        self.window.close()
+
+    def _import(self):
+        self.window._start_import([MUSIC_DIR])
+        self.assertTrue(_spin(lambda: self.window._scanner is None))
+
+    @staticmethod
+    def _fake_worker(starts):
+        from PySide6.QtCore import QObject, Signal
+
+        class FakeWorker(QObject):
+            found = Signal(str, str)
+            finished = Signal()
+
+            def __init__(self, track_id, title, artist, duration_ms=0, parent=None):
+                super().__init__(parent)
+                self.track_id = track_id
+                self.title = title
+                self.artist = artist
+
+            def start(self):
+                starts.append(self.track_id)
+
+            # 假线程也要长得像 QThread，否则 closeEvent 里的 wait() 会炸
+            def isRunning(self):  # noqa: N802
+                return False
+
+            def wait(self, *args):
+                return True
+
+            def quit(self):
+                pass
+
+        return FakeWorker
+
+    @staticmethod
+    def _bare_track(title="晴天", artist="周杰伦"):
+        """造一首「磁盘上不存在、本地肯定没有歌词」的曲目，不写库。"""
+        from app.models import Track, make_track_id
+
+        tmp = tempfile.mkdtemp(prefix="qy_online_")
+        _tmp_dirs.append(tmp)
+        path = os.path.join(tmp, "no-lyrics.mp3")
+        return Track(id=make_track_id(path), path=path, title=title,
+                     artist=artist, duration_ms=269_000)
+
+    def test_local_lyrics_win_over_online(self):
+        """本地已有 .lrc 时一次网络都不该打——联网只是兜底。"""
+        import ui.main_window as mw
+        from app.lyrics_online import read_cache
+
+        self._import()
+        track = next(t for t in self.store.all_tracks()
+                     if os.path.isfile(os.path.splitext(t.path)[0] + ".lrc"))
+        starts = []
+        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+            self.window._load_lyrics(track)
+        self.assertEqual(starts, [])
+        self.assertIsNone(read_cache(track.id))
+        self.assertGreater(self.window.now_playing.lyrics.list.count(), 0,
+                           "本地 .lrc 应该直接渲染出歌词行")
+
+    def test_online_lyrics_fetched_once_then_cached(self):
+        """无本地歌词 → 只请求一次；结果写进缓存，之后完全离线可用。"""
+        import ui.main_window as mw
+        from app.lyrics_online import read_cache
+
+        track = self._bare_track()
+        starts = []
+        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+            self.window._load_lyrics(track)
+            self.window._load_lyrics(track)      # 同一首再进一次不该重复打网络
+        self.assertEqual(starts, [track.id])
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
+                         "正在联网匹配歌词…")
+
+        # 假装后台线程抓到了歌词
+        self.window._on_online_lyrics(track.id, "[00:01.00]故事的小黄花")
+        self.assertEqual(read_cache(track.id), "[00:01.00]故事的小黄花")
+        synced, _ = self.window._lyrics_cache[track.id]
+        self.assertEqual([line.text for line in synced], ["故事的小黄花"])
+
+        # 清掉内存缓存后重新加载：走「本地缓存」这一级，面板能显示歌词
+        self.window._lyrics_cache.pop(track.id)
+        self.window._load_lyrics(track)
+        self.assertEqual(self.window.now_playing.lyrics.list.count(), 1)
+        self.assertEqual(self.window.now_playing.lyrics.list.item(0).text(), "故事的小黄花")
+
+    def test_online_result_ignored_for_other_track(self):
+        """异步结果回来时用户已切歌：不能把歌词串到当前这首上。"""
+        track = self._bare_track()
+        self.window._on_online_lyrics(track.id, "[00:01.00]别的歌的歌词")
+        # 当前没有在播的曲目 → 面板保持空状态（缓存仍会写，但不会显示）
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
+                         "暂无歌词\n支持同名 .lrc 文件与内嵌歌词")
+
+    def test_online_lyrics_respects_setting_and_skips_video(self):
+        import ui.main_window as mw
+
+        starts = []
+        track = self._bare_track()
+        self.store.settings.online_lyrics = False
+        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+            self.assertFalse(self.window._start_online_lyrics(track))
+
+        self.store.settings.online_lyrics = True
+        video = self._bare_track()
+        video.fmt = "mp4"                     # 视频不配歌词
+        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+            self.assertFalse(self.window._start_online_lyrics(video))
+        self.assertEqual(starts, [])
+
+    def test_settings_dialog_online_lyrics_toggle_persists(self):
+        from app.paths import data_file
+        from app.store import LibraryStore
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        self.assertTrue(self.store.settings.online_lyrics)
+        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window,
+                                online_lyrics=True)
+        dialog.online_lyrics_changed.connect(self.window._on_settings_online_lyrics)
+        dialog.online_lyrics_box.setChecked(False)
+        self.assertFalse(self.store.settings.online_lyrics)
+        self.assertFalse(LibraryStore(data_file()).settings.online_lyrics,
+                         "开关必须落盘，重启后仍然生效")
+        dialog.deleteLater()
+
+
+class TestE2EAppearance(unittest.TestCase):
+    """v2.2 外观自定义：强调色 / 字号缩放的应用、持久化与布局安全。
+
+    单独成类同样是规避 QMediaPlayer 累积死锁（见 TestE2ELyricsOnline 说明）。
+    """
+
+    def setUp(self):
+        _fresh_appdata()
+        from ui.main_window import MainWindow
+        self.window = MainWindow()
+        self.window.show()
+        self.store = self.window.store
+
+    def tearDown(self):
+        self.window.player.stop()
+        self.window.close()
+
+    def _import(self):
+        self.window._start_import([MUSIC_DIR])
+        self.assertTrue(_spin(lambda: self.window._scanner is None))
+
+    def test_accent_applies_and_persists(self):
+        from PySide6.QtWidgets import QApplication
+        from app.paths import data_file
+        from app.store import LibraryStore
+
+        self.window._on_settings_accent("#ff7a45")
+        self.assertIn("#ff7a45", QApplication.instance().styleSheet(),
+                      "强调色必须真的进到 QSS 里，否则换了也白换")
+        self.assertEqual(self.store.settings.accent_color, "#ff7a45")
+        self.assertEqual(LibraryStore(data_file()).settings.accent_color, "#ff7a45",
+                         "外观设置要落盘，重启后保持")
+
+    def test_reset_accent_returns_to_theme_default(self):
+        from ui.theme import DARK, current_theme
+
+        self.window._on_settings_accent("#ff7a45")
+        self.window._on_settings_accent("")
+        self.assertEqual(self.store.settings.accent_color, "")
+        self.assertEqual(current_theme().ACCENT, DARK.ACCENT)
+
+    def test_accent_survives_theme_switch(self):
+        """切主题不该把手选的颜色丢掉——只有"跟随主题"才回到默认色。"""
+        from ui.theme import current_theme
+
+        self.window._on_settings_accent("#22c55e")
+        self.window._apply_theme("light")
+        self.assertEqual(current_theme().ACCENT, "#22c55e")
+
+    def test_font_scale_rebuilds_qss_and_keeps_layout(self):
+        """字号放大后 QSS 要真变，且播放栏最小宽度不得突破 1100（窗口最小宽）。"""
+        from PySide6.QtWidgets import QApplication
+
+        self._import()
+        self.window._on_settings_font_scale(1.28)
+        sheet = QApplication.instance().styleSheet()
+        self.assertIn("font-size: 17px", sheet)     # 基础 13px × 1.28 ≈ 17
+        self.assertLessEqual(self.window.player_bar.minimumSizeHint().width(), 1100)
+        geom = self.window.float_bar.geometry()
+        self.assertLessEqual(geom.x() + geom.width(), 236,
+                             "字号变大后浮动条不能越进内容区")
+
+    def test_font_scale_is_clamped(self):
+        from ui.theme import FONT_SCALE_MAX, FONT_SCALE_MIN
+
+        self.window._on_settings_font_scale(9.0)
+        self.assertAlmostEqual(self.store.settings.font_scale, FONT_SCALE_MAX)
+        self.window._on_settings_font_scale(0.1)
+        self.assertAlmostEqual(self.store.settings.font_scale, FONT_SCALE_MIN)
+
+    def test_settings_dialog_reflects_current_appearance(self):
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        self.window._on_settings_accent("#22c55e")
+        self.window._on_settings_font_scale(1.15)
+        dialog = SettingsDialog(
+            self.store.settings.theme, self.store.settings.nickname,
+            stats_for(self.store), self.window,
+            online_lyrics=self.store.settings.online_lyrics,
+            accent_color=self.store.settings.accent_color,
+            font_scale=self.store.settings.font_scale)
+        selected = [s for s in dialog.swatches if s.color == "#22c55e"]
+        self.assertTrue(selected, "预设色板里应有绿色")
+        self.assertTrue(selected[0]._selected, "当前强调色必须标出来")
+        self.assertAlmostEqual(dialog.font_combo.currentData(), 1.15)
+        dialog.deleteLater()
+
+    def test_unknown_font_scale_snaps_to_nearest_option(self):
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window,
+                                font_scale=1.1)      # 1.1 不是任何一档
+        self.assertAlmostEqual(dialog.font_combo.currentData(), 1.15)
+        self.assertEqual(dialog.font_combo.currentText(), "较大")
+        dialog.deleteLater()
+
+    # ---------- 自定义背景（v2.2） ----------
+
+    def test_background_applies_and_persists(self):
+        from PySide6.QtWidgets import QApplication
+        from app.models import BackgroundConfig
+        from app.paths import data_file
+        from app.store import LibraryStore
+        from ui.theme import BG_SCRIM
+
+        config = BackgroundConfig(type="gradient", color="#1e3a8a", color2="#7c3aed",
+                                  blur=4, dim=0.2)
+        self.window._on_settings_background("all", config)
+        self.assertTrue(self.window.background.is_active())
+        self.assertAlmostEqual(self.window._bg_scrim, BG_SCRIM)
+        self.assertIn("rgba(", QApplication.instance().styleSheet(),
+                      "有背景时面板必须半透明，否则背景被盖住")
+        self.assertEqual(LibraryStore(data_file()).settings.bg_all.type, "gradient",
+                         "背景设置要落盘")
+        # 背景层铺满窗口根容器（内缩 1px 留给圆角描边）
+        geom = self.window.background.geometry()
+        self.assertEqual(geom.x(), 1)
+        self.assertEqual(geom.width(), self.window._root.width() - 2)
+
+    def test_background_off_restores_opaque(self):
+        from PySide6.QtWidgets import QApplication
+        from app.models import BackgroundConfig
+
+        self.window._on_settings_background("all", BackgroundConfig(type="color",
+                                                                   color="#123456"))
+        self.window._on_settings_background("all", BackgroundConfig(type="none"))
+        self.assertFalse(self.window.background.is_active())
+        self.assertIsNone(self.window._bg_scrim)
+        self.assertNotIn("rgba(", QApplication.instance().styleSheet(),
+                         "关掉背景后必须回到不透明样式，否则界面会透出桌面")
+
+    def test_background_per_page_override(self):
+        """两页各自一套背景：切页时背景跟着换，没单独设的页跟随「全部页面」。"""
+        from app.models import BackgroundConfig
+
+        self.window._on_settings_background(
+            "all", BackgroundConfig(type="color", color="#111111"))
+        self.window._on_settings_background(
+            "now_playing", BackgroundConfig(type="color", color="#123456", inherit=False))
+
+        self.window._show_page(1)
+        self.assertEqual(self.window.background.config().color, "#123456")
+        self.window._show_page(0)
+        self.assertEqual(self.window.background.config().color, "#111111")
+
+    def test_background_page_without_override_follows_all(self):
+        from app.models import BackgroundConfig
+
+        self.window._on_settings_background(
+            "all", BackgroundConfig(type="gradient", color="#0f172a", color2="#334155"))
+        self.window._show_page(1)      # now_playing 没设过
+        self.assertEqual(self.window.background.config().type, "gradient")
+
+    def test_background_survives_theme_switch(self):
+        from app.models import BackgroundConfig
+
+        self.window._on_settings_background(
+            "all", BackgroundConfig(type="color", color="#123456"))
+        self.window._apply_theme("light")
+        self.assertTrue(self.window.background.is_active())
+        self.assertIsNotNone(self.window._bg_scrim)
+
+
+    def test_toast_is_centered_after_show(self):
+        """toast 必须在窗口水平居中、位于标题栏下方。
+
+        曾经 `_toast()` 先定位再 show()，而 `_position_toast()` 对不可见控件直接
+        早退 → toast 永远停在 (0,0)，压住左上角的搜索框。
+        """
+        self.window._toast("测试提示")
+        label = self.window._toast_label
+        self.assertTrue(label.isVisible())
+        root = self.window._root
+        expected_x = (root.width() - label.width()) // 2
+        self.assertAlmostEqual(label.x(), expected_x, delta=2)
+        self.assertEqual(label.y(), 64)
+        self.assertGreaterEqual(label.x(), 0)
+
+    def test_settings_dialog_background_controls(self):
+        from app.models import BackgroundConfig
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        configs = {"all": BackgroundConfig(type="gradient", color="#1e3a8a",
+                                           color2="#7c3aed"),
+                   "library": BackgroundConfig(),
+                   "now_playing": BackgroundConfig()}
+        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window,
+                                bg_configs=configs, bg_scope="all")
+        self.assertEqual(dialog.bg_type_combo.currentData(), "gradient")
+        # 用 isHidden()：非当前页签的控件本来就不"可见"，isVisibleTo 会误报
+        self.assertTrue(dialog.bg_inherit_box.isHidden(),
+                        "「全部页面」不该显示跟随开关")
+        # 切到「正在播放页」：出现跟随开关，且默认跟随
+        dialog.bg_scope_combo.setCurrentIndex(2)
+        self.assertEqual(dialog._bg_scope, "now_playing")
+        self.assertFalse(dialog.bg_inherit_box.isHidden())
+        self.assertTrue(dialog._current_bg().inherit)
+        dialog.deleteLater()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -351,6 +351,62 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 不影响现有功能 | ✅ | 全量回归 17 进程全绿；`ruff check .` 干净 |
 | 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
 
+## v2.2 增量验收（歌词联网补全 + 外观自定义）
+
+### 歌词
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 本地没有歌词时自动找到歌词 | ✅ | 5 级来源：手动绑定 → 同名 `.lrc` → 内嵌 → 本地缓存 → 联网（LRCLIB）；e2e `test_online_lyrics_fetched_once_then_cached` |
+| 本地已有歌词时不联网 | ✅ | e2e `test_local_lyrics_win_over_online`（假线程记录启动次数 = 0） |
+| 匹配结果离线也能看 | ✅ | 写 `<track_id>.lrc` 到 `lyrics_cache/`；上例清掉内存缓存后重新加载仍显示歌词 |
+| 不配错歌（宁可没有） | ✅ | `pick_best` 身份门槛：无歌名/艺人/时长信号一律丢弃；`test_rejects_unrelated_song`、`test_skips_instrumental` |
+| 同名翻唱/纯音乐不误配 | ✅ | `instrumental` 候选跳过；`test_exact_duration_alone_is_enough`（时长完全一致才算同一录音） |
+| 同一首只请求一次 | ✅ | `_online_attempted` 集合；e2e 连续加载两次只启动一个线程 |
+| 切歌后旧结果不串词 | ✅ | 回调比对 `current_track.id`；e2e `test_online_result_ignored_for_other_track` |
+| 断网/脏数据不影响播放 | ✅ | 任何异常降级为 None；`test_swallows_network_error`、`test_swallows_json_garbage`、`test_tolerates_garbage` |
+| 可以关闭联网 | ✅ | 设置 → 歌词与统计；`test_online_lyrics_respects_setting_and_skips_video`（关闭后不启动线程）、开关落盘 |
+| 视频不抓歌词 | ✅ | `track.is_video` 直接跳过 |
+
+### 外观（强调色 / 字号）
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 强调色可自定义 | ✅ | 6 个预设 + 取色器 + 「随主题」；`test_accent_applies_and_persists`（QSS 里出现该色、落盘、重启保持） |
+| 只选一个色值就够用 | ✅ | `derive_accent` 派生 hover/dim/soft/on_accent；`test_hover_and_dim_are_distinguishable`（通道差 ≥12） |
+| 任何颜色下前景都可读 | ✅ | `ON_ACCENT` 按白字对比度是否 ≥3:1 选白/近黑；`test_on_accent_contrast_for_any_accent`（8 个极端色） |
+| 脏数据不炸 | ✅ | 空/非 hex/三位缩写 → 回落主题默认；`test_invalid_accent_falls_back_to_theme_default` |
+| 切主题不丢自定义色 | ✅ | `set_theme` 重派生；e2e `test_accent_survives_theme_switch` |
+| 字号可调 | ✅ | 四档（较小/标准/较大/特大）；`test_scaling_multiplies_every_font_size`（13→17px 等比例） |
+| 字号不会把布局搞坏 | ✅ | 夹取 0.85~1.30、单处不小于 9px；e2e `test_font_scale_rebuilds_qss_and_keeps_layout`（`PlayerBar.minimumSizeHint ≤ 1100`、浮动条右缘 ≤ 236） |
+
+### 自定义背景
+
+| 需求 | 状态 | 证据 |
+|---|---|---|
+| 支持图片 / 纯色 / 渐变 | ✅ | `BackgroundConfig.type` 四态；`test_paints_each_type_without_crashing`；真实平台出图 3 张 |
+| 背景不透明度可调 | ✅ | 滑块 20%~100%；`test_opacity_controls_strength`（render 到黑图上采样亮度确实不同） |
+| 背景模糊可调 | ✅ | 滑块 0~40（降采样近似高斯）；`test_blur_keeps_size_and_changes_pixels` |
+| 背景暗化可调 | ✅ | 滑块 0%~70%；paintEvent 里叠一层黑（不受不透明度影响） |
+| 图片铺满不变形 | ✅ | `KeepAspectRatioByExpanding` + 居中裁切；`test_output_matches_target_size`、`test_aspect_ratio_not_distorted` |
+| 图片不会因为原图被删而失效 | ✅ | 选图即复制进 `%APPDATA%/轻音播放器/bgs/`；`test_copies_into_data_dir`、`test_same_image_reused` |
+| 按页面分别设置 | ✅ | `bg_all / bg_library / bg_now` + `bg_config(page)` 回退；e2e `test_background_per_page_override`、`test_background_page_without_override_follows_all` |
+| 背景能被看见（不被面板盖住） | ✅ | 有背景时 QSS 面板转 rgba(0.78)；e2e `test_background_applies_and_persists` |
+| 降透明度时不透出桌面 | ✅ | 窗口根底色强制不透明；`test_window_root_stays_opaque` |
+| 对话框/菜单不被半透明污染 | ✅ | 末尾追加不透明覆盖；`test_dialogs_stay_opaque` |
+| 关掉背景完全还原 | ✅ | e2e `test_background_off_restores_opaque`（QSS 里不再有 rgba） |
+| 背景设置落盘 | ✅ | `LibraryStore(data_file()).settings.bg_all`；老数据无 `bg` 字段时用默认值 |
+
+### 质量门
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 全量回归 | ✅ | `run_tests.py` **22 进程全绿**（原 258 项 + 新增 73 项 = **331 项**，`unittest` loader 点数） |
+| 代码风格 | ✅ | `ruff check .` 全通过 |
+| 视觉验收 | ✅ | 真实平台出图：渐变背景 / 模糊图片背景 / 浅色纯色背景 / 设置背景页 / 橙色强调色 / 绿色+特大字号 |
+| 双 EXE 重建 | ✅ | `build.py` onefile **55.6MB** + onedir **2.4MB**；两者 smoke 与真实平台 8s 存活检查均通过；图标仍 14885B（未被 offscreen 污染） |
+| 版本号 | ✅ | 界面 `v2.2 · 本地音乐与视频`；`main.APP_VERSION = "2.2.0"` |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

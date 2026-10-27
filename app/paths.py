@@ -41,3 +41,21 @@ def library_dir() -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+
+def lyrics_cache_dir() -> str:
+    """联网歌词缓存目录：`<track_id>.lrc`，离线后仍可显示（v2.2）。"""
+    path = os.path.join(app_data_dir(), "lyrics_cache")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def bgs_dir() -> str:
+    """自定义背景图片目录（v2.2）。
+
+    选中的图片会被**复制**进来：用户把原图删了/挪走后背景不能变成一块黑，
+    而且换盘路径漂移会导致设置里存着一个失效路径。
+    """
+    path = os.path.join(app_data_dir(), "bgs")
+    os.makedirs(path, exist_ok=True)
+    return path
+
