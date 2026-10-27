@@ -307,6 +307,21 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 1. **上一首/下一首图标方向画反**：`_paint("prev")` 的三角朝右、竖线在右（▶|），`next` 恰好相反。按钮语义与图形相反，用户点「上一首」看到的是「前进」符号 —— 一直存在，靠 72px 图标验收表才发现。
 2. **进度手柄在浅色主题下隐形**：手柄是 `background:#ffffff` + `1px solid BORDER`，浅色主题底色也是白 → 只剩一圈极淡灰边，等于看不见手柄在哪。改为强调色实心圆 + SURFACE 外环。
 
+### v2.1.7 左下浮动工具条美化（2026-10-27）
+
+| 验收项 | 状态 | 证据 |
+|-------|------|------|
+| 三个入口读成**一组工具**而非三个输入框 | ✅ | 结构改为 `QWidget#FloatTray` 分段托盘内嵌三个透明入口；`test_entries_share_one_tray`（三者 parent 均为 tray） |
+| 圆角**不再是直角** | ✅ | 根因是 `border-radius:16px` 配 28px 高（超短边一半 Qt 静默退化）。现按钮 10 / 托盘 12 / 主题钮 17；`test_text_button_radius_within_half_height`（10 ≤ 半高 15）。**反向验证**：改回 16px 立即失败 |
+| 主题按钮是正圆且与托盘同高 | ✅ | `test_theme_toggle_is_a_circle`（17 ≥ 18−1，两者均 36px）；截图中与托盘上下沿齐平 |
+| 两主题下主题按钮**不再长得不一样** | ✅ | 去掉 `:checked` 强调色边框（图标已表明目标主题），底座统一 `SURFACE` + `BORDER` |
+| 悬停有可辨反馈 | ✅ | `test_hover_fill_is_distinguishable`（通道差 ≥ 12，实测浅 28 / 深 20）；`tools/probe_float_bar.py --hover dir` 预览胶囊几何 |
+| 悬停时图标跟着点亮 | ✅ | `_HoverIconButton.enter/leaveEvent` 重绑颜色角色（QSS `color` 染不动 QIcon） |
+| 三个入口空隙均匀 | ✅ | 等内边距 9px + 内容宽（原强制等宽 78px 使「设置」两侧空出一截）；截图 4 倍目视 |
+| 浮动条不压播放栏封面、内容不被裁 | ✅ | `test_float_bar_fits_player_bar_indent`（16 + 288 = 304 ≤ 312；每个按钮 `sizeHint().width() > 40`） |
+| 不影响现有功能 | ✅ | 全量回归 **17 进程 244 项全绿**；`ruff check .` 干净 |
+| 双 EXE 重建 | ✅ | smoke + 真实平台 8s 存活检查通过 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

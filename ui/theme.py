@@ -263,19 +263,30 @@ QPushButton#RowBtn {{
 }}
 QPushButton#RowBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
 QPushButton#RowBtn[active="true"] {{ color: {t.HEART}; }}
-/* 浮动工具条：主题切换按钮（开关式，checkable） */
+/* 浮动工具条：圆形主题开关 + 分段托盘。
+   托盘是「浮起的一张卡片」（SURFACE + 细边），内部按钮透明、悬停时才凹下一层
+   —— 三个入口读成一组并列工具，而不是三个各自独立的输入框。
+   主题按钮与托盘同底色同高度，两者读成同一族；且不按 checked 变色（图标本身
+   已表明会切到什么主题，再加一圈强调色边框只会抢走内容注意力）。
+   注意：`border-radius` 不得超过控件短边的一半（QSS 里超了 Qt 会直接不圆，
+   退化成直角方块 —— 旧版 #FloatTextBtn radius 16 配 28px 高就踩了这个坑）。 */
 QPushButton#ThemeToggle {{
-    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 18px;
-    min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; color: {t.TEXT_DIM};
+    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 17px;
+    color: {t.TEXT_DIM};
 }}
-QPushButton#ThemeToggle:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; }}
-QPushButton#ThemeToggle:checked {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
-/* 浮动工具条：图标 + 文字按钮 */
+QPushButton#ThemeToggle:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
+QPushButton#ThemeToggle:pressed {{ background: {t.SURFACE_ACTIVE}; }}
+QWidget#FloatTray {{
+    background: {t.SURFACE};
+    border: 1px solid {t.BORDER};
+    border-radius: 12px;
+}}
 QPushButton#FloatTextBtn {{
-    background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 16px;
-    padding: 5px 12px 5px 6px; color: {t.TEXT_DIM}; font-size: 12px;
+    background: transparent; border: none; border-radius: 10px;
+    padding: 0px 9px; color: {t.TEXT_DIM}; font-size: 12px;
 }}
-QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
+QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_ACTIVE}; color: {t.TEXT}; }}
+QPushButton#FloatTextBtn:pressed {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; }}
 
 /* ---------- 列表 ---------- */
 QListWidget {{

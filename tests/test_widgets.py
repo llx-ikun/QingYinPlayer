@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ElidedLabel 省略行为单测（延后省略 + full_text + 销毁安全）。"""
 import os
+import re
 import sys
 import unittest
 
@@ -380,6 +381,96 @@ class TestThemeSizes(unittest.TestCase):
         self.assertEqual(sb.nickname_label.text(), sb.nickname_label.full_text())
         self.assertGreaterEqual(sb.nickname_label.width(), 120)
         sb.close()
+
+
+class TestFloatBarStyle(unittest.TestCase):
+    """浮动工具条的视觉契约（v2.1.7）。
+
+    v2.1.2 起左下角一直是「三个孤立直角方块」：`#FloatTextBtn` 的
+    border-radius 写了 16px，而按钮只有 28px 高 —— **超过短边一半时 Qt 直接
+    退化成直角**（不圆、也不报错），三层之间也没有容器，看起来像三个输入框。
+    这组用例钉住「一个托盘 + 圆角胶囊 + 悬停可辨」三件事。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.setStyleSheet("")
+
+    @staticmethod
+    def _decls(stylesheet: str, selector: str) -> list[str]:
+        """取 QSS 里该选择器的**全部**声明块。
+
+        同一个选择器会出现多次（固定尺寸控件会先被一条 `padding: 0px` 的
+        合并规则命中，再单独声明圆角），只取第一处会读到错误的块。
+        """
+        out, start = [], 0
+        while True:
+            idx = stylesheet.find(selector + " {", start)
+            if idx < 0:
+                break
+            end = stylesheet.find("}", idx)
+            out.append(stylesheet[idx:end])
+            start = end
+        assert out, f"QSS 缺少规则: {selector}"
+        return out
+
+    @classmethod
+    def _radius(cls, stylesheet: str, selector: str) -> float:
+        for decl in cls._decls(stylesheet, selector):
+            m = re.search(r"border-radius:\s*([\d.]+)px", decl)
+            if m:
+                return float(m.group(1))
+        raise AssertionError(f"{selector} 没有声明 border-radius")
+
+    def test_entries_share_one_tray(self):
+        """三个入口必须在同一个托盘容器里（否则又退回三个孤立方块）。"""
+        from ui.float_bar import FloatBar
+        fb = FloatBar()
+        self.assertTrue(hasattr(fb, "tray"), "浮动条缺托盘容器")
+        for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
+            self.assertIs(btn.parent(), fb.tray, f"{btn.text()} 不在托盘内")
+
+    def test_text_button_radius_within_half_height(self):
+        """圆角不得超过按钮半高，否则 Qt 渲染成直角方块。"""
+        from ui.float_bar import FloatBar
+        from ui.theme import THEMES, build_stylesheet
+        radius = self._radius(build_stylesheet(THEMES["light"]), "QPushButton#FloatTextBtn")
+        fb = FloatBar()   # 必须持住引用，否则 children() 迭代中 C++ 对象就没了
+        for btn in (fb.np_btn, fb.dir_btn, fb.settings_btn):
+            # 用 minimumHeight 而不是 sizeHint：按钮高度由 setFixedHeight 钉死，
+            # sizeHint 仍会按图标+文字的默认意图算（26px），量到的不是渲染高度。
+            half = btn.minimumHeight() / 2
+            self.assertLessEqual(radius, half,
+                                 f"radius {radius}px > 半高 {half}px，会被渲染成直角")
+
+    def test_theme_toggle_is_a_circle(self):
+        """主题按钮是正圆：radius 必须接近半径（差 1px 内仍算圆）。"""
+        from ui.float_bar import FloatBar
+        from ui.theme import THEMES, build_stylesheet
+        fb = FloatBar()
+        radius = self._radius(build_stylesheet(THEMES["light"]), "QPushButton#ThemeToggle")
+        side = fb.theme_toggle.minimumHeight()
+        self.assertGreaterEqual(radius, side / 2 - 1, "radius 太小，圆会变成圆角方块")
+        # 与托盘同高才读成同一族
+        self.assertEqual(side, fb.tray.minimumHeight())
+
+    def test_hover_fill_is_distinguishable(self):
+        """悬停底色与托盘底色必须拉开差距 —— 否则鼠标划过去毫无反馈。"""
+        from ui.theme import THEMES
+
+        def rgb(c: str) -> tuple[int, int, int]:
+            return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
+
+        for name, t in THEMES.items():
+            tray, hover = rgb(t.SURFACE), rgb(t.SURFACE_ACTIVE)
+            delta = max(abs(a - b) for a, b in zip(tray, hover, strict=True))
+            self.assertGreaterEqual(
+                delta, 12,
+                f"{name} 主题悬停色 {t.SURFACE_ACTIVE} 与托盘 {t.SURFACE} 差异过小（{delta}）")
 
 
 class TestTrackListAlignment(unittest.TestCase):
