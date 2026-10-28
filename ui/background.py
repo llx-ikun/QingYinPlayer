@@ -15,7 +15,8 @@ import os
 import random
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter,
+                           QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import QWidget
 
 from app.models import BackgroundConfig
@@ -83,18 +84,28 @@ def prepare_pixmap(path: str, width: int, height: int, blur: int) -> QPixmap | N
 
 
 def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str) -> None:
-    """画「星月」主题的底层装饰：右下角一枚极淡的月牙 + 固定星点。
+    """画「空月」主题的底层装饰：星点 + 符文圆环 + 羽饰 + 月牙。
 
-    为什么不用官方立绘：那是版权素材，不该随程序分发。这里只用角色的
-    **视觉语言**（月牙、星点、冰蓝冷光）重现同样的气质，且透明度压到 3%~10%，
-    只在最底层当氛围，不抢内容的注意力。
+    元素全部取自哥伦比娅（《原神》空月之歌）的视觉语言：
+      符文圆环 —— 她背后那枚多层法阵，抽象成三层同心圆 + 八枚刻度 + 中心淡点；
+      羽饰     —— 头饰与披风上的白羽，抽象成左上三片斜向羽片；
+      月牙星点 —— 夜空与月光。
+
+    为什么不用官方立绘：那是版权素材，不该随程序分发。这里只复刻形状与气质。
+
+    alpha 定档经过一轮返工：初版圆环 13 / 羽饰 11 / 月牙 14，在真实底色上
+    （BG #120e22 → BG_ALT #0a1220）**几乎完全看不见**，等于白画。现在外环 30 /
+    刻度 34 / 中心 40 / 羽饰 22 / 月牙 28 —— 形状必须锐利（细线 + 清晰轮廓），
+    亮度靠 alpha 而不是靠「涂一大块」，才既看得出又不会糊成污渍（记忆 #56）。
     """
+    import math
+
     w, h = rect.width(), rect.height()
     if w <= 0 or h <= 0:
         return
     painter.setPen(Qt.PenStyle.NoPen)
 
-    # 星点：位置/大小/亮度都由固定种子决定，窗口缩放时不会乱跳
+    # ---- 星点：位置/大小/亮度都由固定种子决定，窗口缩放时不会乱跳 ----
     rnd = random.Random(_DECOR_SEED)
     star = QColor(color)
     for _ in range(56):
@@ -104,20 +115,83 @@ def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str) -> None:
         painter.setBrush(star)
         painter.drawEllipse(QPointF(x, y), r, r)
 
-    # 月牙位置的三次试错值得记下来：
-    #   ① 贴右下角 → 被 84px 播放栏压成一道残弧，横穿音量条，像渲染脏点；
-    #   ② 右上角裁出画面 → 弧的缺口被切掉，只剩一大块淡圆盘，像污渍；
-    #   ③ 现在这版：**完整月牙**、细一点、放在右半区竖向 56% 处。
-    #      形状完整才读得出是月亮，alpha 压到 18 又不会抢列表里的字。
+    # ---- 符文圆环：右上半区，三层同心圆 + 八枚刻度 + 中心淡点 ----
+    # 圆环放右上半区、月牙放右下半区（v2.3.1 把月牙下移到「行下空白带」是有意为之），
+    # 两者在 y 方向故意错开 —— 两个淡圆一旦叠在一起，就会糊成一团说不清是什么的
+    # 「污渍」。圆环半径因此要收着点（0.23min），否则下沿会伸进月牙那一带。
+    cx, cy = w * 0.78, h * 0.26
+    ring_r = min(w, h) * 0.23
+    ring = QColor(color)
+    ring.setAlpha(30)
+    pen = QPen(ring)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for radius, width, alpha in ((ring_r, 1.8, 30), (ring_r * 0.76, 1.1, 22),
+                                 (ring_r * 0.52, 1.1, 18)):
+        ring.setAlpha(alpha)
+        pen.setColor(ring)
+        pen.setWidthF(max(0.7, width))
+        painter.setPen(pen)
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+    # 八枚刻度：沿最外一圈均布的短线段，读作「法阵的刻度」
+    ring.setAlpha(34)
+    pen.setColor(ring)
+    pen.setWidthF(1.6)
+    painter.setPen(pen)
+    for i in range(8):
+        a = math.pi * i / 4
+        ca, sa = math.cos(a), math.sin(a)
+        painter.drawLine(QPointF(cx + ring_r * 0.90 * ca, cy + ring_r * 0.90 * sa),
+                         QPointF(cx + ring_r * 1.12 * ca, cy + ring_r * 1.12 * sa))
+    # 中心一枚淡点（月之心）
+    ring.setAlpha(40)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(ring)
+    painter.drawEllipse(QPointF(cx, cy), ring_r * 0.09, ring_r * 0.09)
+
+    # ---- 羽饰：内容区右上三片斜向羽片，羽尖朝右下，与圆环组成「光环 + 羽翼」 ----
+    # 位置两次返工：① 放左上（侧栏内）→ 被半透明面板（不透明度 0.78）盖得几乎
+    # 看不见，alpha 26 透过去只剩 5；② 骑侧栏/内容区分界线 → 仍有一半在面板下。
+    # 最终放内容区右上空白处（页头标题与「播放全部」之间），与圆环同侧呼应 ——
+    # 只有**没有面板盖着**的区域，装饰才真的看得见。
+    # 画法也用「描边叶片 + 羽轴中线」而不是实心填充：实心淡块在深底上会糊成一
+    # 片说不清是什么的影（首版就这样），线条才有「羽」的辨识度。
+    feather = QColor(color)
+    feather.setAlpha(50)
+    fpen = QPen(feather)
+    fpen.setWidthF(1.5)
+    fpen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(fpen)
+    unit = min(w, h)
+    for fx, fy, ln, ang in ((0.520, 0.130, 0.100, -38),
+                            (0.565, 0.080, 0.070, -54),
+                            (0.535, 0.215, 0.055, -22)):
+        painter.save()
+        painter.translate(w * fx, h * fy)
+        painter.rotate(ang)
+        s = unit * ln
+        blade = QPainterPath()
+        blade.moveTo(0, 0)
+        blade.cubicTo(s * 0.30, -s * 0.34, s * 0.86, -s * 0.30, s, 0)
+        blade.cubicTo(s * 0.86, s * 0.30, s * 0.30, s * 0.34, 0, 0)
+        blade.closeSubpath()
+        painter.drawPath(blade)
+        painter.drawLine(QPointF(0, 0), QPointF(s * 0.90, 0))   # 羽轴
+        painter.restore()
+
+    # ---- 月牙：右下半区的「行下空白带」上，与圆环在 y 方向错开 ----
+    # 位置三次试错：① 贴右下角被 84px 播放栏压成残弧；② 右上角裁掉弧的缺口；
+    # ③ 移到行下空白带（v2.3.1，alpha 同时 18→14）。尺寸/alpha 沿用那一版，
+    # 这里只把它和圆环的占位错开，不重复调氛围浓度。
     diameter = min(w, h) * 0.38
-    cx, cy = w * 0.87, h * 0.70
-    left = cx - diameter * 0.5
-    top = cy - diameter * 0.5
+    cx2, cy2 = w * 0.87, h * 0.70
+    left = cx2 - diameter * 0.5
+    top = cy2 - diameter * 0.5
     outer = QRectF(left, top, diameter, diameter)
     path = QPainterPath()
     path.arcMoveTo(outer, 75)
     path.arcTo(outer, 75, 210)
-    # 内弧半径更大 → 月牙更细，不再是胖圆环
     inner = QRectF(left + diameter * 0.30, top + diameter * 0.10,
                    diameter * 0.82, diameter * 0.94)
     path.arcTo(inner, 285, -210)
@@ -139,7 +213,7 @@ class BackgroundLayer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._config = BackgroundConfig()
         self._pixmap: QPixmap | None = None
-        self._decor = ""                       # 主题装饰名（目前只有 "moon"）
+        self._decor = ""                       # 主题装饰名（目前只有 "columbina"）
         self._decor_color = "#7ec8e8"
 
     # ---------- 对外 ----------
@@ -183,8 +257,8 @@ class BackgroundLayer(QWidget):
         if self.width() <= 0 or self.height() <= 0:
             return
         if cfg.type == "none":
-            # 没有自定义背景时，主题可以放自己的底层装饰（星月）
-            if self._decor == "moon":
+            # 没有自定义背景时，主题可以放自己的底层装饰（空月）
+            if self._decor == "columbina":
                 painter = QPainter(self)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 _paint_theme_decor(painter, QRectF(self.rect()), self._decor_color)

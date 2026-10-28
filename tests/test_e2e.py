@@ -468,7 +468,7 @@ class TestE2EV2(unittest.TestCase):
         from ui.theme import COLUMBINA, DARK, LIGHT
         app = QApplication.instance()
         self._import()
-        # v2.3：新装默认「星月」主题
+        # v2.3：新装默认「空月」主题
         self.assertEqual(self.store.settings.theme, "columbina")
         self.assertIn(COLUMBINA.ACCENT, app.styleSheet())
         self.window._apply_theme("light")
@@ -490,7 +490,7 @@ class TestE2EV2(unittest.TestCase):
         from ui.theme import THEME_NEXT
         self._import()
         fb = self.window.float_bar
-        # v2.3 三态循环：星月 → 深色 → 浅色 → 星月。
+        # v2.3 三态循环：空月 → 深色 → 浅色 → 空月。
         # 按钮图标与提示都指向「点下去会切到哪个」，初始目标是深色。
         self.assertEqual(self.store.settings.theme, "columbina")
         self.assertEqual(fb.theme_toggle._kind, "moon")
@@ -505,7 +505,7 @@ class TestE2EV2(unittest.TestCase):
 
         self.window._toggle_theme()
         self.assertEqual(self.store.settings.theme, "light")
-        self.assertIn("切换到星月主题", fb.theme_toggle.toolTip())
+        self.assertIn("切换到空月主题", fb.theme_toggle.toolTip())
         self.assertTrue(fb.theme_toggle.isChecked())  # 浅色主题 = 开关打开
 
         self.window._toggle_theme()
@@ -982,7 +982,7 @@ class TestE2EAppearance(unittest.TestCase):
         self.window._on_settings_accent("#ff7a45")
         self.window._on_settings_accent("")
         self.assertEqual(self.store.settings.accent_color, "")
-        # v2.3 起默认主题是「星月」，默认强调色不能再写死 DARK
+        # v2.3 起默认主题是「空月」，默认强调色不能再写死 DARK
         self.assertEqual(current_theme().ACCENT, THEMES[theme_name].ACCENT)
 
     def test_accent_survives_theme_switch(self):

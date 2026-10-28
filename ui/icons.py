@@ -255,7 +255,7 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         path.closeSubpath()
         p.drawPath(path)
     elif kind == "feather":
-        # 羽毛（「星月」主题钮）：**实心羽片 + 镂空羽轴 + 两侧羽枝缺口**。
+        # 羽毛（「空月」主题钮）：**实心羽片 + 镂空羽轴 + 两侧羽枝缺口**。
         # 首版是「羽轴 + 8 条细羽枝」（纯线条），出验收表后发现 16px 下糊成一小团
         # 灰点，和相邻的 settings（细横线）撞气质 —— 主题钮是最常被点到的按钮，
         # 必须靠实心轮廓才站得住（同 gear 的教训）。

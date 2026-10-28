@@ -38,7 +38,7 @@ class Theme:
     HEART: str            # 爱心红
     ON_ACCENT: str        # 强调色上的文字/图标
     # 非空时窗口底用 BG → BG_ALT 的斜向渐变（默认空 = 纯色 BG）。
-    # 给「星月」主题做夜空层次用：纯色深紫太容易糊成一块黑。
+    # 给「空月」主题做夜空层次用：纯色深紫太容易糊成一块黑。
     BG_ALT: str = ""
 
 
@@ -62,16 +62,19 @@ LIGHT = Theme(
 
 COLUMBINA = Theme(
     name="columbina",
-    # 「星月」主题：取自《原神》「空月之歌」哥伦比娅的**视觉语言**——
-    # 深紫夜空的底、冰蓝与月白的冷光、莓红的点缀。
+    # 「空月」主题：取自《原神》「空月之歌」哥伦比娅的**视觉语言**——
+    # 深紫夜空的底、冰蓝与月白的冷光、莓粉（发色挑染与命之座）的点缀。
     # 只复刻配色与气质，不嵌入任何官方立绘（版权素材不随程序分发）。
+    # 背景装饰（ui/background.py）画的是她背后那枚**符文圆环**、头饰披风上的
+    # **羽饰**，以及月牙与星点 —— 全部抽象成矢量形状，alpha 压在 8~18 只做氛围。
     # ON_ACCENT 用近黑：冰蓝 #7ec8e8 很亮，白字对比只有 1.9:1，必须压深。
-    # BG_ALT 让窗口底从深紫斜向过渡到墨蓝，避免整屏糊成一块黑。
-    BG="#130e26", SURFACE="#1c1632", SURFACE_HOVER="#251d3f", SURFACE_ACTIVE="#2f264c",
-    BORDER="#3a2f56", TEXT="#f3eefc", TEXT_DIM="#a196bd",
+    # BG_ALT 让窗口底从深紫斜向过渡到墨蓝，避免整屏糊成一块黑（#55：纯色深底
+    # 靠「更黑」做不出层次，深度要来自光——面板整体提亮 + 斜向渐变）。
+    BG="#120e22", SURFACE="#1d1738", SURFACE_HOVER="#251d42", SURFACE_ACTIVE="#312857",
+    BORDER="#3c3060", TEXT="#f4effd", TEXT_DIM="#a89dc2",
     ACCENT="#7ec8e8", ACCENT_HOVER="#9ad9f3", ACCENT_DIM="#4a7f99",
-    ACCENT_SOFT="#2c2546", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
-    BG_ALT="#0b1526",
+    ACCENT_SOFT="#2b2450", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
+    BG_ALT="#0a1220",
 )
 
 THEMES = {"columbina": COLUMBINA, "dark": DARK, "light": LIGHT}
@@ -81,8 +84,8 @@ THEME_ORDER = ("columbina", "dark", "light")
 THEME_NEXT = {"columbina": "dark", "dark": "light", "light": "columbina"}
 # 每个主题自己的代表图标；切换按钮显示的是「下一个主题」的图标
 THEME_ICON = {"columbina": "feather", "dark": "moon", "light": "sun"}
-THEME_LABEL = {"columbina": "星月", "dark": "深色", "light": "浅色"}
-DEFAULT_THEME = "columbina"      # v2.3：新装默认「星月」主题
+THEME_LABEL = {"columbina": "空月", "dark": "深色", "light": "浅色"}
+DEFAULT_THEME = "columbina"      # v2.3：新装默认「空月」主题
 
 FONT_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif'
 

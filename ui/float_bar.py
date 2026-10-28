@@ -139,8 +139,8 @@ class FloatBar(QWidget):
     def set_theme_icon(self, theme_name: str) -> None:
         """主题钮：图标与提示都指向「点下去会切到哪个主题」。
 
-        三态循环 星月 → 深色 → 浅色 → 星月，所以按钮上画的不是当前主题，
-        而是下一个目标（羽毛=星月 / 月亮=深色 / 太阳=浅色）。
+        三态循环 空月 → 深色 → 浅色 → 空月，所以按钮上画的不是当前主题，
+        而是下一个目标（羽毛=空月 / 月亮=深色 / 太阳=浅色）。
         """
         from ui.theme import THEME_ICON, THEME_LABEL, THEME_NEXT
 

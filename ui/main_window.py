@@ -175,7 +175,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.3.2 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.3.3 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -804,7 +804,7 @@ class MainWindow(QMainWindow):
         self._toast(f"字号已调整为 {round(scale * 100)}%", 2000)
 
     def _toggle_theme(self) -> None:
-        # 三态循环：星月 → 深色 → 浅色 → 星月
+        # 三态循环：空月 → 深色 → 浅色 → 空月
         order = ui_theme.THEME_ORDER
         cur = ui_theme.current_theme().name
         idx = order.index(cur) if cur in order else -1
@@ -1054,10 +1054,11 @@ class MainWindow(QMainWindow):
 
     def _apply_background_config(self, config) -> None:
         self.background.set_config(config)
-        # 「星月」主题自带底层装饰（淡月牙 + 星点）；用户一旦设了自定义背景就让位
+        # 「空月」主题自带底层装饰（符文圆环 + 羽饰 + 月牙星点）；用户一旦设了
+        # 自定义背景就让位，免得两套背景打架。
         theme = ui_theme.current_theme()
         self.background.set_decor(
-            "moon" if theme.name == "columbina" and config.type == "none" else "",
+            "columbina" if theme.name == "columbina" and config.type == "none" else "",
             theme.ACCENT,
         )
         self._layout_background()
