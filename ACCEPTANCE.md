@@ -700,6 +700,23 @@ QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同
 | 文案 | 右键「转成 .lrc 文件」；导入后询问「是否转成带时间轴的 .lrc」 | `ui/lyrics_panel.py` / `_maybe_offer_align` |
 | 不影响现有功能 | ✅ | 25 进程 **491 项全绿**；`ruff check .` 干净 |
 
+## v2.6.8 多源联网歌词（LRCLIB + 网易云 + QQ音乐，并行取最优）
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 网易云搜索/歌词 URL | `music.163.com/api/search/get` + `/api/song/lyric`，带 Referer | `TestSearchUrl` 4 项 |
+| QQ 搜索/歌词 URL | `client_search_cp` + `fcg_query_lyric_new.fcg`，`nobase64=1` 明文 | `TestSearchUrl` |
+| 网易云解析 | 毫秒转秒、艺人/专辑/时长容错；歌词取 `lrc.lyric` | `TestParseNetease` 4 项 |
+| QQ 解析 | `interval` 即秒；歌词 `retcode`/`code` 双字段容错、非 0 拒绝 | `TestParseQQ` 5 项 |
+| 候选遍历 | 伴奏版排第一且无歌词 → 跳过、取后面正版 | `test_skips_candidate_without_lyrics` |
+| 多源并行取最优 | 三源并行、跨源统一 `pick_best`；同名翻唱（LRCLIB 艺人错）让位网易云正版 | `test_picks_most_trustworthy_across_sources` |
+| 来源标注 | `found(track_id, text, source)` 三参数；界面显示 LRCLIB/网易云/QQ音乐 | `TestMultiSourceWorker` 3 项 |
+| 中止语义 | 至少一源限流且全未命中 → `aborted=True`，不落负缓存 | `test_aborted_when_a_source_is_rate_limited_and_none_hit` |
+| 降级链 | 单源断网/被拒 → 该源返回 None，其余源兜住 | `test_network_error_degrades_to_none`（两源） |
+| 离线显示 | 命中照旧写缓存/同名 .lrc，断网可读（与单源同链路） | `_on_online_lyrics` 仍调 `write_cache` |
+| 向后兼容 | `lyrics_online.py` 只增 `fetch_best_hit`；旧 `LyricsFetchWorker` 保留、测试不动 | `TestFetchWorker` 3 项仍绿 |
+| 不影响现有功能 | ✅ | 26 进程 **520 项全绿**；`ruff check .` 干净 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

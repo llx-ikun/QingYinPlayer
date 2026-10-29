@@ -515,6 +515,49 @@ def fetch_lyrics(title: str, artist: str, duration_ms: int = 0,
     return fetch_outcome(title, artist, duration_ms, timeout, fetch, album).text
 
 
+def fetch_best_hit(title: str, artist: str, duration_ms: int = 0,
+                   timeout: float = DEFAULT_TIMEOUT, fetch=None,
+                   album: str = "") -> tuple[LyricHit | None, bool]:
+    """同 `fetch_outcome`，但返回选中的 `LyricHit`（而非纯文本）。
+
+    多源检索（见 `app/lyrics_multi.py`）需要跨源统一打分，只拿文本不够——
+    文本已丢失「艺人/时长/是否有同步稿」这些身份信号。所以这里抽出「返回 hit」
+    的变体：命中返回 `(hit, aborted)`，`hit` 是候选里最可信的一条（`pick_best`
+    已经按「标题对上或时长差 ≤2s」过滤过，配错词比没词更糟）。
+    """
+    fetch = fetch or _http_get_json
+    plan = lookup_plan(title, artist, album, duration_ms)
+    if not plan:
+        return None, False
+
+    normalized_title, normalized_artist = _norm(title), _norm(artist)
+    want = duration_ms / 1000.0 if duration_ms else 0.0
+    threshold = GOOD_ENOUGH if want else GOOD_ENOUGH_NO_DURATION
+    deadline = time.monotonic() + TOTAL_BUDGET
+
+    best: LyricHit | None = None
+    best_score = float("-inf")
+    for query in plan:
+        if time.monotonic() > deadline:
+            return best, True
+        try:
+            payload = fetch(query.url, timeout)
+        except RateLimited:
+            return best, True
+        except Exception:  # noqa: BLE001  单条查询失败不该影响后续查询
+            continue
+        hit = pick_best(as_hits(payload), title, artist, duration_ms)
+        if hit is None:
+            continue
+        score, _ = score_hit(hit, normalized_title, normalized_artist, want)
+        if score > best_score:
+            best, best_score = hit, score
+        if best_score >= threshold:
+            break
+
+    return best, False
+
+
 # ---------- 缓存（命中即离线可用） ----------
 #
 # track_id 是路径哈希的 16 位十六进制（见 models.make_track_id），直接当文件名安全。

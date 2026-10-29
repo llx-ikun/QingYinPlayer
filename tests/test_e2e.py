@@ -820,7 +820,7 @@ class TestE2ELyricsOnline(unittest.TestCase):
     （调用随机 hang）。TestE2EV2 已经 21 项，再加 5 项实测会在
     test_theme_switch_applies_and_persists 处卡满 600s。逐类独立进程即可规避。
 
-    一律不联网：`ui.main_window.LyricsFetchWorker` 换成只记一笔的假线程；
+    一律不联网：`ui.main_window.MultiSourceWorker` 换成只记一笔的假线程；
     真解析/打分/缓存逻辑在 tests/test_lyrics_online.py 里覆盖。
     """
 
@@ -844,7 +844,7 @@ class TestE2ELyricsOnline(unittest.TestCase):
         from PySide6.QtCore import QObject, Signal
 
         class FakeWorker(QObject):
-            found = Signal(str, str)
+            found = Signal(str, str, str)
             missed = Signal(str)
             aborted = Signal(str)
             progress = Signal(int, int)
@@ -893,7 +893,7 @@ class TestE2ELyricsOnline(unittest.TestCase):
         track = next(t for t in self.store.all_tracks()
                      if os.path.isfile(os.path.splitext(t.path)[0] + ".lrc"))
         starts = []
-        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+        with mock.patch.object(mw, "MultiSourceWorker", self._fake_worker(starts)):
             self.window._load_lyrics(track)
         self.assertEqual(starts, [])
         self.assertIsNone(read_cache(track.id))
@@ -907,7 +907,7 @@ class TestE2ELyricsOnline(unittest.TestCase):
 
         track = self._bare_track()
         starts = []
-        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+        with mock.patch.object(mw, "MultiSourceWorker", self._fake_worker(starts)):
             self.window._load_lyrics(track)
             self.window._load_lyrics(track)      # 同一首再进一次不该重复打网络
         self.assertEqual(starts, [track.id])
@@ -940,13 +940,13 @@ class TestE2ELyricsOnline(unittest.TestCase):
         starts = []
         track = self._bare_track()
         self.store.settings.online_lyrics = False
-        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+        with mock.patch.object(mw, "MultiSourceWorker", self._fake_worker(starts)):
             self.assertFalse(self.window._start_online_lyrics(track))
 
         self.store.settings.online_lyrics = True
         video = self._bare_track()
         video.fmt = "mp4"                     # 视频不配歌词
-        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+        with mock.patch.object(mw, "MultiSourceWorker", self._fake_worker(starts)):
             self.assertFalse(self.window._start_online_lyrics(video))
         self.assertEqual(starts, [])
 
@@ -963,7 +963,7 @@ class TestE2ELyricsOnline(unittest.TestCase):
         write_miss(track.id)
         self.assertTrue(read_miss(track.id))
 
-        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+        with mock.patch.object(mw, "MultiSourceWorker", self._fake_worker(starts)):
             self.assertFalse(self.window._start_online_lyrics(track),
                              "负缓存有效期内不该再发起检索")
             self.assertEqual(starts, [])

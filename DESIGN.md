@@ -1338,3 +1338,30 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
   磁盘可见、可拷贝迁移、可手动编辑；歌曲移走后缓存随之失效，同名 .lrc 跟着歌曲走。
 - 边界：写同名 .lrc 前若已存在则弹覆盖确认；写失败（目录只读）提示「未生成 .lrc」。
   对齐后仍需解除 `track.lrc_path`（纯文本绑定，第 1 级）否则纯文本会盖过同名 .lrc。
+
+## 28. v2.6.8 多源联网歌词：LRCLIB + 网易云 + QQ音乐（2026-10-29）
+
+- 需求：用户「添加其他音乐平台用于识别歌词」，且确认「离线显示」要成立。
+- 澄清：目标平台选网易云 + QQ音乐；接入方式「免 key 直连」；降级策略「多源并行取最优」。
+- 离线显示本身**无需新做**：命中即写 `lyrics_cache/<id>.lrc`（或同名 .lrc），断网照常读。
+  多源只是把「联网这一级」的来源变多，缓存落盘链路不变。
+- 接口事实（2026 实测，均非官方，可能失效 → 做成降级链）：
+  - 网易云：搜索 `music.163.com/api/search/get?s={kw}&type=1&limit=8`，歌词
+    `music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=-1`，需 `Referer: music.163.com/`。
+  - QQ：搜索 `c.y.qq.com/soso/fcgi-bin/client_search_cp?w={kw}&format=json&n=8&p=1`，歌词
+    `c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid={mid}&format=json&nobase64=1`，
+    需 `Referer: y.qq.com/`（缺了返回 -1310），`nobase64=1` 直接回明文 LRC。
+- 架构（新增 `app/lyrics_multi.py`，`lyrics_online.py` 只增一个 `fetch_best_hit` 纯增量）：
+  - 每个源「搜索 → 遍历前 3 个候选拉歌词 → 转 `LyricHit` → 复用 `pick_best` 门槛过滤」，
+    返回 `(hit, aborted)`；`fetch` 可注入（测试不联网）。
+  - `fetch_outcome_multi` 用 `ThreadPoolExecutor` 并行跑三源，收集 `(来源, hit)` 后统一
+    `pick_best` 跨源打分取最优；`aborted` 语义 = 「至少一源限流/超时且全都没命中」，
+    此时不落负缓存（与单源 `fetch_outcome` 一致）。
+  - `MultiSourceWorker(QThread)` 的 `found` 比旧 `LyricsFetchWorker` 多一个来源名
+    （"LRCLIB"/"网易云"/"QQ音乐"），界面据此标注；旧 worker 保留（其测试仍覆盖）。
+- 为什么「并行取最优」而非「LRCLIB 优先」：用户明确要最优；同分时 `pick_best` 保留
+  首个（源列表 LRCLIB 在最前），LRCLIB 在并列时仍占先。
+- 已知坑（沿用既有防错，不重复踩）：网易云伴奏版常排第一且无歌词 → 遍历候选；配错词
+  比没词更糟 → 复用 `pick_best` 的「标题对上或时长差 ≤2s」门槛；`usable_text` 滤空歌词。
+- 边界：繁体歌名不转简体（避免引入 zhconv/opencc 依赖），记为已知限制。
+

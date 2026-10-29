@@ -49,7 +49,8 @@ from app.filesize import file_size
 from app.lyrics import LyricLine, lyrics_from_text, strip_meta_lines
 from app.lyrics_align import LyricsAlignWorker, sidecar_lrc_path, write_sidecar_lrc
 from app.lyrics_import import match_lrc_files
-from app.lyrics_online import (LyricsFetchWorker, build_web_search_url, clear_miss,
+from app.lyrics_multi import MultiSourceWorker
+from app.lyrics_online import (build_web_search_url, clear_miss,
                                read_cache, read_miss, write_cache, write_miss)
 from app.metadata import read_track
 from app.library import is_in_library
@@ -109,7 +110,7 @@ class MainWindow(QMainWindow):
         self._scanner: ScannerWorker | None = None
         self._lyrics_cache: dict[str, tuple[list[LyricLine], list[str], str]] = {}
         # 联网补歌词（v2.2）：同一首只试一次；worker 自己持引用，结束后清掉
-        self._lyrics_workers: dict[str, LyricsFetchWorker] = {}
+        self._lyrics_workers: dict[str, MultiSourceWorker] = {}
         # 联网对齐歌词（v2.6.6）：纯文本 → LRC，同一首同时只跑一个
         self._align_workers: dict[str, LyricsAlignWorker] = {}
         self._online_attempted: set[str] = set()
@@ -181,7 +182,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.6.7 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.6.8 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -574,7 +575,7 @@ class MainWindow(QMainWindow):
         if cached_text:
             synced, plain = lyrics_from_text(cached_text)
             if synced or plain:
-                return synced, plain, "来源：LRCLIB（缓存）"
+                return synced, plain, "来源：联网（缓存）"
         # 5) 联网兜底不在这里做：网络请求是异步的，交给 _start_online_lyrics
         return [], [], ""
 
@@ -598,7 +599,7 @@ class MainWindow(QMainWindow):
         if not (track.display_title or track.artist):
             return False
         self._online_attempted.add(track.id)
-        worker = LyricsFetchWorker(track.id, track.display_title, track.artist,
+        worker = MultiSourceWorker(track.id, track.display_title, track.artist,
                                    track.duration_ms, track.album, self)
         worker.found.connect(self._on_online_lyrics)
         worker.missed.connect(self._on_online_lyrics_missed)
@@ -618,11 +619,11 @@ class MainWindow(QMainWindow):
             return                      # 已经拿到歌词了，别再覆盖
         self.now_playing.set_empty(f"正在联网匹配歌词…（{cur}/{total}）")
 
-    def _on_online_lyrics(self, track_id: str, text: str) -> None:
+    def _on_online_lyrics(self, track_id: str, text: str, source: str = "LRCLIB") -> None:
         synced, plain = lyrics_from_text(text)
         if not synced and not plain:
             return
-        self._lyrics_cache[track_id] = (synced, plain, "来源：LRCLIB")
+        self._lyrics_cache[track_id] = (synced, plain, f"来源：{source}")
         write_cache(track_id, text)
         clear_miss(track_id)                # 之前记过「没查到」，现在推翻它
         current = self.player.current_track
@@ -632,8 +633,8 @@ class MainWindow(QMainWindow):
             self.now_playing.set_synced(synced)
         else:
             self.now_playing.set_plain(plain)
-        self.now_playing.set_source("来源：LRCLIB")
-        self._toast("已联网匹配到歌词（LRCLIB）", 2500)
+        self.now_playing.set_source(f"来源：{source}")
+        self._toast(f"已联网匹配到歌词（{source}）", 2500)
 
     def _on_online_lyrics_missed(self, track_id: str) -> None:
         """没匹配到：落负缓存，并把当前这首歌的空状态文案换成「没找到」。"""

@@ -612,6 +612,24 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
   - 测试：`TestSidecarLrc` 5 项（路径 / 创建 / 覆盖 / 失败返回 None / 空入参）
   - 验收：全量回归全绿，`ruff check .` 干净
 
+- [x] **Y12** 多源联网歌词：LRCLIB + 网易云 + QQ音乐，并行取最优（v2.6.8）
+  - 需求：用户「添加其他音乐平台用于识别歌词」；澄清后选网易云 + QQ、免 key 直连、
+    多源并行取最优；离线显示靠既有缓存落盘，无需新做
+  - 实现：
+    - `app/lyrics_online.py` 增 `fetch_best_hit()`（返回 `(LyricHit|None, aborted)` 的
+      `fetch_outcome` 变体，纯增量，供跨源统一打分）
+    - `app/lyrics_multi.py` 新增：网易云 / QQ 两源（搜索+歌词，带 Referer、fetch 可注入、
+      遍历前 3 候选挑通过门槛的）、`fetch_outcome_multi`（ThreadPoolExecutor 并行三源 +
+      统一 `pick_best`）、`MultiSourceWorker`（`found` 带来源名）
+    - `ui/main_window.py` 改用 `MultiSourceWorker`；`_on_online_lyrics` 增 `source` 默认参；
+      缓存命中来源标签改「来源：联网（缓存）」
+  - 关键坑：QQ 歌词接口缺 `Referer` 返回 -1310；网易云伴奏版排第一且无歌词须遍历候选；
+    `fetch` 注入签名统一 `(url, timeout)`，三源各自默认 getter 闭包了 Referer
+  - 测试：`tests/test_lyrics_multi.py` 31 项（URL / 解析 / 候选挑选 / 多源协调 / worker）；
+    `test_e2e.py` 的 `TestE2ELyricsOnline` mock 目标从 `LyricsFetchWorker` 改
+    `MultiSourceWorker`、`found` 信号改三参数
+  - 验收：全量回归全绿，`ruff check .` 干净
+
 
 ## v2.1 验收命令
 
