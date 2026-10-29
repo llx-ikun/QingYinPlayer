@@ -458,8 +458,8 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 | 只有一坨深色不够 | 新增 `Theme.BG_ALT`，窗口底走 `qlineargradient` 斜向渐变（首版纯色糊成一块黑） | `test_bg_gradient_only_for_columbina` |
 | 角色元素（星月） | 底层 56 颗固定星点（alpha 22~72）+ 一枚完整细月牙（alpha 14） | `TestThemeDecor` 3 项 + 截图目检 |
 | 装饰不能干扰内容 | 只在「星月主题 + 背景类型 none」时画；不算自定义背景，不触发面板半透明 | `test_decor_does_not_count_as_custom_background` |
-| 主题钮能切到新主题 | 改为**三态循环** 星月 → 深色 → 浅色 → 星月；图标与提示都指向「点下去会切到哪个」 | `test_cycle_covers_all_themes_and_closes`、e2e `test_float_bar_theme_toggle` |
-| 设置里能选 | 按 `THEME_ORDER` 生成三个 radio；`dark_radio`/`light_radio` 保留为别名 | 截图 `shots/columbina-settings-v230r2.png` |
+| 主题钮能切到新主题 | 改为**两态循环** 空月 ↔ 浅色；图标与提示都指向「点下去会切到哪个」 | `test_cycle_covers_all_themes_and_closes`、e2e `test_float_bar_theme_toggle` |
+| 设置里能选 | 按 `THEME_ORDER` 生成两个 radio；`light_radio` 保留为别名（原 `dark` 主题已删除） | 截图 `shots/columbina-settings-v230r2.png` |
 | 文字可读 | `TEXT/SURFACE=16.0`、`ACCENT/SURFACE=9.8`、`ON_ACCENT/ACCENT=9.8`、`TEXT_DIM/SURFACE=6.3` | `test_theme` 对比度断言 |
 | 图标要认得出 | 新增 `feather`（实心羽片 + 镂空羽轴 + 羽枝缺口） | `shots/icons_v230.png`（16px 放大 8× 与 gear/settings 对照） |
 | 不影响现有功能 | ✅ | 22 进程 **344 项全绿**；`ruff check .` 干净 |
@@ -507,6 +507,184 @@ v2.3 的「星月」主题只有配色 + 一枚淡月牙。这次按用户给的
 1. **探针自身 bug**：`layer.render(img)` 时 `QPainter` 还没 `end()`，同一张图被并发绘制 → 装饰全被丢掉，第一版探针图是一片纯色（看起来像「alpha 太低」，其实是没画上去）。
 2. **alpha 定档**：初版圆环 13 / 羽饰 11 / 月牙 14，压在 `#120e22` 底色上几乎完全看不见。提到外环 30 / 刻度 34 / 中心 40 / 羽饰 50 才读得出 —— 亮度靠 alpha 加**锐利的细线**，不靠涂大块（涂大块就成了污渍）。
 3. **羽饰位置两次搬家**：放侧栏内 → 被半透明面板（不透明度 0.78）盖得只剩 5/50；骑侧栏/内容区分界 → 仍有一半在面板下。最终放内容区右上空白处。教训：**装饰只有落在没有面板盖着的区域才真的看得见**。
+
+## v2.3.4 主题改名「空月」→「深色」+ 默认主题改浅色
+
+只动**显示名**，不动内部 id 与持久化数据（`settings.theme` 仍是 `columbina` / `light`）。
+
+| 项 | 变化 | 证据 |
+|---|---|---|
+| 主题中文名 | `THEME_LABEL = {"columbina": "深色", "light": "浅色"}` | `test_float_bar_theme_toggle`（tooltip「切换到深色主题」） |
+| 改名的影响面 | 设置对话框 radio、浮动条 tooltip、切换 toast 三处**全部读 `THEME_LABEL`**，改一张表即全局生效 | 设置/浮动条/`_apply_theme` 均无硬编码主题名 |
+| 默认主题 | `columbina` → **`light`**；`Settings.theme` 默认值与旧数据回落同步改 | `test_default_is_light`、`test_legacy_data_without_new_settings`、`test_video` |
+| 内部 id 为什么不改 | 改 id 要迁移所有已落盘 `data.json` 与主题表 key，收益只是一个内部字符串 | — |
+| 不影响现有功能 | ✅ | 22 进程 **345 项全绿**；`ruff check .` 干净 |
+
+## v2.3.5 浅色主题按参考图重做
+
+| 项 | 变化 | 证据 |
+|---|---|---|
+| 底色 | `#f4f2fc`（粉紫）→ **`#eef2fb`**（冷调月白，参考图采样值） | `test_light_surfaces_are_blue_tinted`（B≥R、B≥G） |
+| 面板 | 纯白卡片 → `#f5f8fd`，与底色只差 1~2 阶（参考图里三块几乎同色） | 截图目检 |
+| 强调色 | `#7c83f0`（偏紫）→ **`#7389cb`**（periwinkle） | `test_accent_readable_on_surface` 3.20:1、`test_on_accent_readable_on_accent` 3.43:1 |
+| 装饰 | 18 颗碎星撒满全窗 + 2 片小叶子 → **1 支 0.9 窗高线描羽毛 + 1 枚带光环罗盘星 + 5 点微光** | `test_light_decor_paints_when_enabled` + 灰度分布采样 |
+| 装饰浓度 | 用强调色 + 低 alpha（最深 173）→ 强调色压深 75% + 高 alpha（p0.5=176 / p2=211，参考 193/219） | 无文字区灰度统计 |
+| 深色主题 | 不动 | 截图回归目检 |
+| 不影响现有功能 | ✅ | 22 进程 **345 项全绿**；`ruff check .` 干净 |
+
+**三处返工**：实心四角星→蓝色菱形（改用腰部 7% 的细长尖刺）；羽枝 26 对→梳子
+（疏到 16 根 + 轮廓与羽枝共用同一生成器 + 斜扫）；羽片根部硬截断（t 先重映射到
+羽片自己的 0~1）。另有一处位置教训：星放参考图相对位置会被"排序"下拉框盖掉半个。
+
+## v2.3.6 深色主题按参考图重做
+
+| 项 | 变化 | 证据 |
+|---|---|---|
+| 月牙 | 实心近白（α205，深底上像贴纸）→ **玻璃质感**：两圆差集 + 淡填充（α10/7/4）+ 双层软内带 + 1.6px 亮边 | 灰度采样：月内/月外差 14 阶（参考图 11 阶；旧版 30 阶） |
+| 月牙尖角 | 两段圆弧拼 → 端点间留直线弦，尖角被削平成"灰色 D" → 改 `subtracted()` 差集 | 探针单独渲染确认 |
+| 轨道环 | 无 → 1px 细圈 + 24 个长短交替刻度 | 截图目检 |
+| 罗盘星 | 月亮右下角的实心四角星 → 环正下方交点：内凹四角星 + 竖杆 + 人字刻度 + 十字准线 | 截图目检 |
+| 辉光 | 一圈淡圆（α26）→ 径向渐变，半径 = 环 × 2.55，中心 α58 | 近/远区亮度差 12.3（参考 6.0） |
+| 浮羽 | 3 片线描叶片 → 4 片柔焦浮羽（横向渐变填充 + 羽枝 + 基部发亮的羽轴） | 放大 2× 目检能读成羽毛 |
+| 不影响现有功能 | ✅ | 22 进程 **345 项全绿**；`ruff check .` 干净 |
+
+**一处位置取舍**：参考图的罗盘星在环的右侧，但我们的右侧是"时长/编辑"列，星会压住图标
+→ 改放环的正下方（无遮挡优先于构图完全吻合）。
+
+## v2.4.0 联网歌词检索改进
+
+| 项 | 变化 | 证据 |
+|---|---|---|
+| 检索策略 | 单条 `search` 查询 → **有序查询计划**：`/api/get` 精确 → search（原艺人）→ search（主艺人）→ `q=` 自由文本；命中高信任度即早停 | 真实联网：`晴天/周杰伦` 第 1 条即命中，只发 1 个请求 |
+| 标签清洗 | 无 → `clean_title` / `clean_artist`：全角转半角、括号噪声（live/remaster/伴奏/主题曲/版…）、`feat.` 尾巴、前导音轨号、破折号噪声后缀、多艺人切分 | **命中率 6/11 → 10/11**（同一批脏标签） |
+| 身份门槛 | 「歌名 or 艺人 or 时长」→ **「歌名对得上 or 时长差 ≤2s」**（移除"只有艺人对上"） | `test_artist_only_match_is_rejected` |
+| 同名翻唱 | 无惩罚 → 歌名对上但艺人和时长双双不符时 −1.5 | `test_cover_version_is_penalized` |
+| 短标题误匹配 | 包含式比对无长度校验（"雨"能匹配"下雨天"）→ 加长度比例门槛 | `test_short_title_does_not_match_longer_song` |
+| 同步稿优先 | 按总分统一排序 → **同步稿单独分区**，同曲有同步稿就绝不用纯文本 | `test_synced_wins_over_higher_scoring_plain` |
+| 无效歌词 | 空白/纯时间戳文本也算命中 → `usable_text()` 过滤 | `test_rejects_blank_and_tag_only` |
+| 负缓存 | 无（每次启动都重打请求）→ `<track_id>.miss`，TTL 7 天 | `TestMissCache` 5 项 |
+| 手动重试 | 无出路 → 歌词区**右键「重新联网匹配歌词」** | e2e `test_miss_cache_suppresses_retry_until_manual_retry` |
+| 限流处理 | 429/503 被当成"没找到"（会误写负缓存 7 天）→ `FetchOutcome.aborted` 区分；请求间隔 250ms | `test_emits_aborted_not_missed_when_rate_limited` |
+| 空状态文案 | 只有"暂无歌词" → 三态：默认 / 检索中 / 未找到（含重试提示） | e2e 断言文案 |
+| 不影响现有功能 | ✅ | 22 进程 **393 项全绿**；`ruff check .` 干净 |
+
+**关键坑（真实联网才暴露）**：连发十几个请求被 LRCLIB 429，`fetch_lyrics` 返回 None，
+上层当成"未命中"写进负缓存 —— 一首明明有歌词的歌被记住 7 天。修法是让结果带上
+`aborted` 原因，中止时**不发** `missed` 信号、改发 `aborted` 信号（v2.6.2），
+界面据此显示「失败可重试」而不落负缓存。
+
+**测试净增 39 项**：`tests/test_lyrics_online.py` 33 → 71（+38），
+`tests.test_e2e.TestE2ELyricsOnline` 5 → 6（+1）。全量 22 进程 393 项。
+
+
+## v2.5.0 图标清晰度与齿轮重画
+
+| 项 | 变化 | 证据 |
+|---|---|---|
+| 高清屏糊化 | 图标一直按 `QPixmap(16, 16)`（DPR=1）生成，125%~150% 屏上被放大绘制 → 齿轮在界面里只剩 9×10 设备像素的一团灰影 | 用户截图裁切放大 12× 叠像素网格实测：圆钮 45px、图标 9×10px |
+| 渲染管线 | 新增 `device_ratio()`；`_paint()` 按 `size×DPR` 渲染并 `setDevicePixelRatio`，笔画粗细同步缩放；缓存键带 dpr | `test_paint_scales_bitmap_with_dpr`（DPR 1.5 → 24×24 位图） |
+| QLabel 图标 | 三处 `QIcon.pixmap(n, n)` 默认按 DPR=1 取图，会把高清位图又降采样回去 → 新增 `make_pixmap()` 直接用 DPR 位图 | sidebar / title_bar / queue_panel 三处替换 |
+| 齿轮齿形 | 齿深 0.16→0.12、齿顶平台 0.28→0.44 步、斜边 0.16→0.09 步、轴孔 Ø0.28→Ø0.30：从"多角星"变成"厚环 + 短宽齿"的实体齿轮 | 20px / 24px 设备像素上逐轮对比定参（16px 判断会得出错误结论） |
+| 与太阳区分 | 齿轮 = 实体环 + 8 短齿；太阳 = 圆点 + 8 根细射线；浅深两主题下均一眼可分 | `shots/v250-float-bar.png`、`shots/v250-icons.png` |
+| 验收工具 | `probe_icons.py` 增加第三行「设备像素渲染」——只看 16px 那行**发现不了糊掉**这个问题 | 三行验收表 |
+| 布局不变 | ✅ | `FloatBar.sizeHint() = (224, 82)`，右缘 236 |
+| 不影响现有功能 | ✅ | 22 进程 **397 项全绿**；`ruff check .` 干净 |
+
+**两轮弯路**（已记入 DESIGN §19.3）：① 先把齿加深、齿数降到 6，结果读成"风车/多角星"；
+② 参数矩阵里四折点公式漏了齿谷那段（齿谷恒为 0），整批变体都成了锯齿边。
+
+
+## v2.5.1 主题钮图标改为月亮
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 目标确认 | 红圈盖住了钮体、无法靠像素判断，改从代码确认：浮动条左列上=主题切换、下=设置齿轮 | `ui/float_bar.py` 网格第 0 列 |
+| 图标语义 | 钮上画的是「点下去会切到**哪个**主题」而非当前主题 → 浅色显示月亮、深色显示太阳（用户截图是浅色，所以原来是羽毛） | `set_theme_icon()` 取 `THEME_NEXT` |
+| 月亮形状 | 两圆差集 `outer.subtracted(inner)`，尖角是两个圆真实相交处 | 24px 设备像素下仍是清晰月牙 |
+| 不用拼弧 | 弃用 `arcMoveTo / arcTo`：两弧端点之间会连出一条直线弦，月牙被削平成「灰色 D」 | 与 v2.3.6 装饰月牙同一个坑（DESIGN §17.2） |
+| 参数 | 外圆 R=0.42、内圆 0.90R 右移 0.16、整体转 −30° | 20/24/72/96 四档包围盒：宽 77~80%、高 85~90% |
+| 与齿轮区分 | 月牙（弧形开口）vs 齿轮（实体环 + 8 短齿），浅深两主题下一眼可分 | `shots/v251-moon-before-after.png` |
+| 改动面 | 只动 `icons.py` 画法 + `theme.THEME_ICON` 表 + `float_bar` 初始值；持久化 id 仍是 `columbina`/`light` | 无数据迁移 |
+| 布局不变 | ✅ | `FloatBar.sizeHint() = (224, 82)`，右缘 236 |
+| 不影响现有功能 | ✅ | 22 进程 **400 项全绿**；`ruff check .` 干净 |
+
+**一次环境坑**（与代码无关，已记入 MEMORY #7）：首次全量跑时，我在旁边用探针脚本以真实平台
+开了 `QApplication`，`tests.test_player` 卡到 600s 超时；单独重跑 4.3s 通过，随后全量复跑全绿。
+QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同时开任何 Qt 进程**。
+
+
+## v2.6.0 数据目录可选择
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 位置可配置 | 设置 → 存储：显示当前目录 + 模式（默认/自定义/便携），可「更改位置…」「放到软件目录」「恢复默认」「打开目录」 | `ui/settings_dialog.py` 第 4 页 |
+| 优先级 | `QY_DATA_DIR` > 便携模式（软件目录 `data/`）> 指针文件 `location.txt` > `%APPDATA%` | `test_storage.TestResolveRoot` 6 项 |
+| 指针放在哪 | 放**默认目录**的 `location.txt`，不能记进 data.json —— data.json 自己要被搬走 | `app/paths.py` `read_pointer()` |
+| 指针失效 | 目录不存在（U 盘拔了/被删）→ 回退默认位置，不会把程序钉在空目录 | `test_broken_pointer_falls_back_to_default` |
+| 便携模式 | 软件目录下存在 `data/` 即生效，整个文件夹拷走就带走曲库 | `test_packaged_uses_software_dir` |
+| 便携模式仅打包版 | 源码运行时忽略，且按钮禁用 —— 否则会把数据搬进仓库、程序却不认，还会破坏测试隔离 | `test_source_run_ignores_portable_dir`、E2E `test_settings_dialog_has_storage_tab` |
+| 自检隔离 | `--smoke` 同时设 `APPDATA` 与 `QY_DATA_DIR`，便携/指针都压不过它 | `test_env_beats_portable`、`test_smoke_isolation` 2 项 |
+| 迁移安全性 | 目标必须空目录；先复制→逐文件核对字节→才删源；失败/取消清理目标、源不动 | `test_cancel_cleans_target_and_keeps_source` 等 5 项 |
+| 迁移完整性 | `data.json` + `library/`（含子目录）+ `covers/` 全就位，`.part`/`.bak` 残留不搬 | `test_migrate_copies_everything_and_removes_source` |
+| 防递归 | 目标与源相同 / 目标在源内部 / 源在目标内部 → 拒绝 | `test_rejects_same_directory`、`test_rejects_nested_target` |
+| 恢复默认 | 删指针文件，数据搬回 `%APPDATA%` | `test_switch_back_to_default_clears_pointer` |
+| 生效方式 | 迁移后提示重启（热切换要重建 store/封面缓存/播放器，风险大于收益） | `storage_changed` 信号 + toast |
+| 不影响现有功能 | ✅ | 23 进程 **428 项全绿**；`ruff check .` 干净 |
+
+**两个实现坑**（已记入 DESIGN §21.5）：① 迁移的「总量统计」与「实际复制」最初用了两套遍历，
+统计把 `.part` 算进去而复制跳过 → 核对永远失败，现在统一走 `plan()`；② 顶层目录下的文件
+相对路径写成 `name`（漏了文件名）→ 迁移后 `library` 变成文件。
+
+
+## v2.6.1 浮动工具条改为单行
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 四个入口一排 | 主题圆钮 → 设置齿轮 → 导入音乐 → 数据目录 同一水平线，`QHBoxLayout` | `shots/float_v261_light.png` / `_dark.png` |
+| 整条尺寸 | **224 × 38**（原 3×2 网格 224×82），高度 = 圆钮直径 | `FloatBar.sizeHint() = (224, 38)` |
+| 宽度分配 | `38+4+38+4+68+4+68 = 224`，右缘 236 齐平侧栏内容右边界 | `test_single_row_layout_is_exactly_sidebar_width` |
+| 文字不再折行 | 「导入音乐」「数据目录」单行四字，65 宽会在大字号下裁字，故取 68 + QSS `padding:0px` | 1.30 倍字号下文字 64px vs 可绘制 66px |
+| 竖直位置 | 由「贴窗口底边留 4px」改为**在 84 高播放栏内垂直居中**（y=739，中心 758） | `PLAYER_BAR_HEIGHT` 常量 |
+| 视觉 | 圆钮 radius 19 正圆；文字按钮 radius 13（≤ 半高 19，不退化成直角） | 探针放大图 |
+| 旧断言更新 | 4 处「上下关系 / 宽 >70 / 左列竖排 / 两个圆钮都对齐导航」按新几何重写 | DESIGN §22.5 |
+| 不影响现有功能 | ✅ | 23 进程 **429 项全绿**；`ruff check .` 干净 |
+
+## v2.6.2 歌词：导入 / 进度与来源 / 匹配率
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 单曲导入并识别 | 右键「导入歌词文件…」，无效 LRC 不绑定并提示；识别成功报告行数 | `_bind_lyrics_file` |
+| 批量导入 | 歌词区右键「批量导入歌词…」扫 `*.lrc` 按文件名认到曲目，歧义跳过 | `tests/test_lyrics_import.py` 11 项 |
+| 联网进度 | 空状态显示「正在联网匹配歌词…（cur/total）」 | `LyricsFetchWorker.progress` |
+| 来源显示 | 列表下方小字：手动绑定 / 同名 .lrc / 内嵌 / LRCLIB(缓存) / LRCLIB | `LyricsPanel.set_source` |
+| 匹配率 | 追加 `q=标题+主艺人` 兜底 + 噪声词增补；真实抽查 5/5 命中 | `test_falls_back_to_search_then_keyword` 等 |
+| 不影响现有功能 | ✅ | 24 进程 **444 项全绿**；`ruff check .` 干净 |
+
+## v2.6.5 纯文本 .txt 歌词导入识别
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 头部信息剔除 | 浏览器下载的 `.txt` 歌词头部「歌名/作词/作曲/编曲…」信息块在解析纯文本前统一剥离 | `strip_meta_lines()` + `lyrics_from_text()` 集成 |
+| 首行不误删 | 仅当下一非空行是职员表行才删首行歌名；无元数据时首句歌词保留 | `TestStripMetaLines` 4 项 |
+| 手动导入收 `.txt` | 单曲「导入歌词文件…」过滤 `*.lrc *.txt` | `_bind_lyrics` |
+| 批量导入收 `.txt` | 批量扫描同时收 `.lrc` 与 `.txt`，按去扩展名 basename 匹配曲目 | `test_matches_txt_extension_too` |
+| 真实文件验证 | `唯有追赶风的方向 (Only By Chasing the).txt` 剥离后 74 行干净歌词（首行 `Who can surely know`） | 本地读文件核对 |
+| 不影响现有功能 | ✅ | 24 进程 **460 项全绿**；`ruff check .` 干净 |
+
+## v2.6.6 纯文本歌词联网对齐成带时间轴 LRC
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| Key 校验 | `verify_key` 走 GET /v1/usage，`plan != anonymous` 才算有效；无效直接拦下不上传音频 | `TestVerifyKey` 4 项 |
+| 三步对齐流程 | 创建 multipart 任务 → 轮询 → 下载 LRC，成功返回带时间轴 LRC | `TestAlignLyrics.test_happy_path` |
+| 错误分类 | 缺 key / 无歌词 / 无文件 / 格式不支持 / 超 30MB / 401 / 429 / failed / soft_fail 各自落对 error_code | `TestAlignLyrics` 多项 |
+| 软失败提示 | `done` 带 `soft_fail` 时 LRC 仍返回但标记不可信，界面提示核对 | `test_soft_fail` |
+| 轮询推进 | 首次 queued、下次 done 能正确轮询到终态 | `test_poll_then_done` |
+| 后台线程 | worker 分发 done / soft_fail / failed 三态信号 | `TestAlignWorker` 3 项 |
+| Key 持久化 | `lyrics_align_api_key` 可存可读，默认空，不进日志 | `TestSettingsKeyPersist` 2 项 |
+| 触发入口 | 导入纯文本后 `_maybe_offer_align` 询问 + 歌词区右键「联网对齐歌词」 | `ui/main_window.py` / `ui/lyrics_panel.py` |
+| 对齐成功落地 | 写 `lyrics_cache/<id>.lrc` + 解除纯文本绑定 + 立即 `set_synced` 滚动 | `_apply_aligned_lrc` |
+| 不影响现有功能 | ✅ | 25 进程 **486 项全绿**；`ruff check .` 干净 |
 
 ## v2.0 修复的缺陷
 

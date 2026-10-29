@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QSlider,
@@ -32,10 +33,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app import paths as app_paths
 from app.library import import_background
-from app.models import BackgroundConfig
+from app.models import BackgroundConfig, LYRICS_EFFECTS
 from app.paths import bgs_dir
 from ui import theme as ui_theme
+from ui.dialogs import StorageMoveDialog
 from ui.widgets import ChevronComboBox
 
 # 预设强调色：覆盖"冷暖各一支"，避免用户以为只能蓝
@@ -53,6 +56,14 @@ FONT_SCALE_OPTIONS = [
     ("标准", 1.00),
     ("较大", 1.15),
     ("特大", 1.28),
+]
+
+# 歌词播放动效（v2.6.4，单选）：与 app/models.py 的 LYRICS_EFFECTS 一一对应
+LYRICS_EFFECT_OPTIONS = [
+    ("无特效", "none"),
+    ("放大当前行", "zoom"),
+    ("打字机", "typewriter"),
+    ("颜色覆盖", "karaoke"),
 ]
 
 BG_TYPE_OPTIONS = [
@@ -111,17 +122,21 @@ class _Swatch(QWidget):
 
 
 class SettingsDialog(QDialog):
-    theme_changed = Signal(str)          # columbina / dark / light
+    theme_changed = Signal(str)          # columbina / light
     nickname_changed = Signal(str)
     online_lyrics_changed = Signal(bool)
     accent_changed = Signal(str)         # "#rrggbb"，"" = 跟随主题默认
     font_scale_changed = Signal(float)
+    lyrics_effect_changed = Signal(str)  # none / zoom / typewriter / karaoke
+    lyrics_align_api_key_changed = Signal(str)  # 联网歌词对齐 Key（v2.6.6）
     background_changed = Signal(str, object)   # (作用域, BackgroundConfig)
+    storage_changed = Signal(str)        # 数据目录搬到的新位置（需重启生效）
 
     def __init__(self, theme_name: str, nickname: str, stats: dict, parent=None,
                  online_lyrics: bool = True, accent_color: str = "",
                  font_scale: float = 1.0, bg_configs: dict | None = None,
-                 bg_scope: str = "all"):
+                 bg_scope: str = "all", lyrics_effect: str = "none",
+                 lyrics_align_api_key: str = ""):
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
@@ -129,6 +144,8 @@ class SettingsDialog(QDialog):
         self._theme_name = theme_name if theme_name in ui_theme.THEMES else ui_theme.DEFAULT_THEME
         self._accent = (accent_color or "").lower()
         self._font_scale = font_scale
+        self._lyrics_effect = lyrics_effect if lyrics_effect in LYRICS_EFFECTS else "none"
+        self._lyrics_align_api_key = lyrics_align_api_key or ""
         self._loading = False
         self._bg_scope = bg_scope if bg_scope in ("all", "library", "now_playing") else "all"
         self._bg: dict[str, BackgroundConfig] = {}
@@ -145,6 +162,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_appearance_tab(nickname), "外观")
         self.tabs.addTab(self._build_background_tab(), "背景")
         self.tabs.addTab(self._build_misc_tab(stats, online_lyrics), "歌词与统计")
+        self.tabs.addTab(self._build_storage_tab(), "存储")
         root.addWidget(self.tabs, 1)
 
         buttons = QHBoxLayout()
@@ -181,8 +199,7 @@ class SettingsDialog(QDialog):
             radio.toggled.connect(lambda checked, t=tid: checked and self._on_theme(t))
             theme_row.addWidget(radio)
             self.theme_radios[tid] = radio
-        # 兼容旧引用
-        self.dark_radio = self.theme_radios["dark"]
+        # 兼容旧引用（仅保留浅色别名；深色主题已移除）
         self.light_radio = self.theme_radios["light"]
         theme_row.addStretch(1)
         root.addLayout(theme_row)
@@ -355,6 +372,38 @@ class SettingsDialog(QDialog):
         hint.setWordWrap(True)
         root.addWidget(hint)
 
+        effect_row = QHBoxLayout()
+        effect_row.setSpacing(10)
+        effect_row.addWidget(QLabel("歌词动效"))
+        self.effect_combo = ChevronComboBox()
+        self.effect_combo.setObjectName("FontScaleCombo")
+        for label, value in LYRICS_EFFECT_OPTIONS:
+            self.effect_combo.addItem(label, value)
+        effect_index = self.effect_combo.findData(self._lyrics_effect)
+        self.effect_combo.setCurrentIndex(max(0, effect_index))
+        self.effect_combo.currentIndexChanged.connect(self._on_effect_combo)
+        effect_row.addWidget(self.effect_combo)
+        effect_row.addStretch(1)
+        root.addLayout(effect_row)
+        effect_hint = QLabel("放大当前行 / 打字机逐字出现 / 颜色随播放进度逐渐覆盖。")
+        effect_hint.setObjectName("Dim")
+        effect_hint.setWordWrap(True)
+        root.addWidget(effect_hint)
+
+        root.addSpacing(4)
+        align_label = QLabel("歌词对齐 Key（纯文本 → 带时间轴 LRC）")
+        align_label.setWordWrap(True)
+        root.addWidget(align_label)
+        self.align_key_edit = QLineEdit(self._lyrics_align_api_key)
+        self.align_key_edit.setPlaceholderText("在 lyrictimestamps.com 注册获取，ltk_ 开头")
+        self.align_key_edit.editingFinished.connect(self._on_align_key_edited)
+        root.addWidget(self.align_key_edit)
+        align_hint = QLabel("仅当你导入了没有时间戳的纯文本歌词、想让它跟歌滚动时才需要；"
+                            "会联网上传音频，免费额度约 15 分钟/月。Key 只存在本机。")
+        align_hint.setObjectName("Dim")
+        align_hint.setWordWrap(True)
+        root.addWidget(align_hint)
+
         root.addSpacing(6)
         stats_text = (
             f"曲目 {stats.get('tracks', 0)} 首 · 歌单 {stats.get('playlists', 0)} 个 · "
@@ -371,6 +420,134 @@ class SettingsDialog(QDialog):
         root.addWidget(about)
         root.addStretch(1)
         return page
+
+    # ---------- 页 4：存储 ----------
+
+    def _build_storage_tab(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.setSpacing(10)
+
+        root.addWidget(QLabel("数据存放位置"))
+
+        self.storage_path_edit = QLineEdit(app_paths.current_root())
+        self.storage_path_edit.setReadOnly(True)
+        self.storage_path_edit.setCursorPosition(0)
+        self.storage_path_edit.setToolTip("曲库、封面、歌词缓存、背景和设置都在这个目录里")
+        root.addWidget(self.storage_path_edit)
+
+        self.storage_mode_label = QLabel()
+        self.storage_mode_label.setObjectName("Dim")
+        self.storage_mode_label.setWordWrap(True)
+        root.addWidget(self.storage_mode_label)
+        self._refresh_storage_info()
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        self.open_storage_btn = QPushButton("打开目录")
+        self.open_storage_btn.setObjectName("Ghost")
+        self.open_storage_btn.clicked.connect(self._open_storage_dir)
+        btn_row.addWidget(self.open_storage_btn)
+
+        self.change_storage_btn = QPushButton("更改位置…")
+        self.change_storage_btn.clicked.connect(self._change_storage_location)
+        btn_row.addWidget(self.change_storage_btn)
+
+        self.portable_storage_btn = QPushButton("放到软件目录")
+        self.portable_storage_btn.setObjectName("Ghost")
+        self.portable_storage_btn.setToolTip(
+            "把数据放到程序目录下的 data 文件夹，整个文件夹拷走就能带走曲库")
+        self.portable_storage_btn.clicked.connect(self._use_portable_storage)
+        # 便携模式只在打包版生效（开发态判断会踩到仓库里的 data/），这里直接禁用
+        if not app_paths.is_packaged():
+            self.portable_storage_btn.setEnabled(False)
+            self.portable_storage_btn.setToolTip("仅打包后的程序支持便携模式")
+        btn_row.addWidget(self.portable_storage_btn)
+
+        self.reset_storage_btn = QPushButton("恢复默认")
+        self.reset_storage_btn.setObjectName("Ghost")
+        self.reset_storage_btn.clicked.connect(self._reset_storage_location)
+        btn_row.addWidget(self.reset_storage_btn)
+        btn_row.addStretch(1)
+        root.addLayout(btn_row)
+
+        hint = QLabel(
+            "移动时会把曲库、封面、歌词缓存、背景和设置一起搬过去：先复制并逐个核对文件，"
+            "确认无误后才删除原数据；中途失败或取消都不会改动原数据。\n"
+            "改完需要关闭并重新打开播放器才生效。"
+        )
+        hint.setObjectName("Dim")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+        root.addStretch(1)
+        return page
+
+    def _refresh_storage_info(self) -> None:
+        mode_text = {
+            "default": "默认位置（系统用户目录），重装系统前记得先备份。",
+            "custom": "自定义位置，程序每次启动都会按这里找数据。",
+            "portable": "便携模式：数据就在软件目录的 data 文件夹里，整个文件夹拷走即可。",
+            "env": "临时目录（自检或测试指定，不会读写你的真实曲库）。",
+        }.get(app_paths.mode(), "")
+        self.storage_path_edit.setText(app_paths.current_root())
+        self.storage_path_edit.setCursorPosition(0)
+        self.storage_mode_label.setText(mode_text)
+
+    def _open_storage_dir(self) -> None:
+        folder = app_paths.app_data_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(folder)):
+            QMessageBox.warning(self, "打不开", f"无法打开目录：\n{folder}")
+
+    def _change_storage_location(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "选择数据存放位置", app_paths.current_root())
+        if folder:
+            self._apply_storage_location(folder)
+
+    def _use_portable_storage(self) -> None:
+        if not app_paths.is_packaged():
+            QMessageBox.information(self, "仅打包版可用",
+                                    "便携模式需要打包后的程序，源码运行时不生效。")
+            return
+        self._apply_storage_location(
+            os.path.join(app_paths.exe_dir(), app_paths.PORTABLE_MARKER))
+
+    def _reset_storage_location(self) -> None:
+        if app_paths.mode() == "default":
+            QMessageBox.information(self, "已经在默认位置", "当前数据就放在默认位置。")
+            return
+        self._apply_storage_location(app_paths.default_root())
+
+    def _apply_storage_location(self, folder: str) -> None:
+        target = os.path.abspath(folder)
+        if os.path.normcase(target) == os.path.normcase(os.path.abspath(app_paths.current_root())):
+            QMessageBox.information(self, "已在该位置", "这已经是当前的数据目录了。")
+            return
+        answer = QMessageBox.question(
+            self, "移动数据",
+            f"要把数据移动到：\n{target}\n\n"
+            "曲库、封面、歌词缓存、背景和设置会一起搬过去。\n"
+            "复制并核对成功后才删除原数据；中途失败或取消都不会丢数据。\n\n继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        dialog = StorageMoveDialog(target, remove_source=True, parent=self)
+        dialog.exec()
+        if dialog.error:
+            QMessageBox.warning(self, "移动失败", dialog.error)
+            self._refresh_storage_info()
+            return
+        if dialog.result_info is None:
+            self._refresh_storage_info()
+            return
+        self._refresh_storage_info()
+        self.storage_changed.emit(target)
+        QMessageBox.information(
+            self, "移动完成",
+            "数据已经搬到新位置。\n\n请关闭播放器再重新打开，新位置才会生效。")
 
     # ---------- 主题 / 强调色 / 字号 ----------
 
@@ -420,6 +597,16 @@ class SettingsDialog(QDialog):
         value = self.font_combo.itemData(index)
         if value is not None and not self._loading:
             self.font_scale_changed.emit(float(value))
+
+    def _on_effect_combo(self, index: int) -> None:
+        value = self.effect_combo.itemData(index)
+        if value is not None and not self._loading:
+            self.lyrics_effect_changed.emit(value)
+
+    def _on_align_key_edited(self) -> None:
+        """对齐 Key 输完（焦点离开/回车）才保存，避免每敲一个字符就写盘。"""
+        if not self._loading:
+            self.lyrics_align_api_key_changed.emit(self.align_key_edit.text().strip())
 
     # ---------- 背景 ----------
 

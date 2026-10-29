@@ -3,7 +3,7 @@
 
 设计要点：
 - Track.id = 路径归一化后的哈希，作为去重与持久化主键；
-- 资料库是全部 tracks 的集合，用户歌单只存 track_ids 引用；
+- 音乐库是全部 tracks 的集合，用户歌单只存 track_ids 引用；
 - 「最近播放」为虚拟歌单，按 last_played_at 动态生成，不落盘 track_ids。
 """
 from __future__ import annotations
@@ -36,8 +36,12 @@ MODE_SINGLE = "single"           # 单曲循环
 MODE_SHUFFLE = "shuffle"         # 随机播放
 PLAY_MODES = (MODE_SEQUENTIAL, MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE)
 
+# 歌词播放动效（v2.6.4）：none 无特效 / zoom 当前行放大 / typewriter 打字机 /
+# karaoke 颜色随进度逐渐覆盖。单选，值持久化进 Settings.lyrics_effect。
+LYRICS_EFFECTS = ("none", "zoom", "typewriter", "karaoke")
+
 # 虚拟歌单标识
-PLAYLIST_LIBRARY = "__library__"   # 资料库
+PLAYLIST_LIBRARY = "__library__"   # 音乐库
 PLAYLIST_RECENT = "__recent__"     # 最近播放
 PLAYLIST_FAVORITES = "__favorites__"  # 我喜欢（v2.0：落盘为 system 歌单，见 store）
 
@@ -227,11 +231,13 @@ class Settings:
     last_track_id: str | None = None
     last_position_ms: int = 0
     last_view: str = PLAYLIST_LIBRARY   # 上次所在视图（library / playlist id）
-    theme: str = "columbina"            # v2.3：主题（columbina 星月 / dark / light）
+    theme: str = "light"                # 默认主题（columbina 深色 / light 浅色）
     nickname: str = "音乐爱好者"         # v2.0：侧边栏用户卡片昵称
     online_lyrics: bool = True          # v2.2：本地无歌词时联网补（LRCLIB）
     accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
     font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
+    lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/zoom/typewriter/karaoke）
+    lyrics_align_api_key: str = ""      # v2.6.6：联网歌词对齐 Key（lyrictimestamps.com，纯文本→LRC）
     # v2.2 自定义背景：三个作用域（全部 / 列表页 / 正在播放页）
     bg_all: BackgroundConfig = field(default_factory=BackgroundConfig)
     bg_library: BackgroundConfig = field(default_factory=BackgroundConfig)
@@ -266,6 +272,8 @@ class Settings:
             "online_lyrics": self.online_lyrics,
             "accent_color": self.accent_color,
             "font_scale": self.font_scale,
+            "lyrics_effect": self.lyrics_effect,
+            "lyrics_align_api_key": self.lyrics_align_api_key,
             "bg": {
                 "all": self.bg_all.to_dict(),
                 "library": self.bg_library.to_dict(),
@@ -282,7 +290,7 @@ class Settings:
         s.last_track_id = d.get("last_track_id")
         s.last_position_ms = int(d.get("last_position_ms", 0))
         s.last_view = d.get("last_view", PLAYLIST_LIBRARY)
-        s.theme = d.get("theme") or "columbina"
+        s.theme = d.get("theme") or "light"
         s.nickname = d.get("nickname") or "音乐爱好者"
         s.online_lyrics = bool(d.get("online_lyrics", True))
         s.accent_color = d.get("accent_color") or ""
@@ -290,6 +298,9 @@ class Settings:
             s.font_scale = float(d.get("font_scale", 1.0))
         except (TypeError, ValueError):
             s.font_scale = 1.0
+        effect = str(d.get("lyrics_effect") or "none")
+        s.lyrics_effect = effect if effect in LYRICS_EFFECTS else "none"
+        s.lyrics_align_api_key = str(d.get("lyrics_align_api_key") or "")
         bg = d.get("bg") or {}
         if isinstance(bg, dict):
             s.bg_all = BackgroundConfig.from_dict(bg.get("all") or {})

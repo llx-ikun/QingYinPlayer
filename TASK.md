@@ -7,7 +7,7 @@
 
 ## A. 后端（app/，无 UI 依赖，先行）
 
-- [ ] **A1** `app/models.py`：新增 `PLAYLIST_FAVORITES = "__favorites__"`；`Settings` 增加 `theme: str = "dark"`、`nickname: str = "音乐爱好者"`（含 `to_dict/from_dict`，旧数据无损升级）
+- [ ] **A1** `app/models.py`：新增 `PLAYLIST_FAVORITES = "__favorites__"`；`Settings` 增加 `theme: str = "columbina"`、`nickname: str = "音乐爱好者"`（含 `to_dict/from_dict`，旧数据无损升级）
   - 验收：旧 JSON（无新字段）`from_dict` 不抛错且取默认值
 - [ ] **A2** `app/store.py`：`load()` 改为保留 system 歌单（原逻辑丢弃）；懒创建 favorites 系统歌单；新增 `toggle_favorite/is_favorite/favorite_tracks/favorite_count`；`view_tracks/view_name` 支持 favorites
   - 验收：单测覆盖增删切、round-trip、重复收藏幂等、`remove_track` 联动清理
@@ -428,11 +428,179 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py                            #
   - 验收：22 进程 345 项全绿；ruff 干净；装饰探针 + 整窗截图（深/浅）逐张目检；
     三次返工全因「看不见」而非「画错」（探针 render 并发 bug / alpha 定档 / 羽饰被面板盖住）
 
+- [x] **X7** 主题改名 + 默认改浅色（v2.3.4）：用户要求「空月换成浅色」「空月名字换成深色」
+  - `THEME_LABEL = {"columbina": "深色", "light": "浅色"}`；`DEFAULT_THEME = "light"`
+  - 只改显示名：设置 radio / 浮动条 tooltip / 切换 toast 都读 `THEME_LABEL`，
+    内部 id 与 `data.json` 里的 `theme` 值不动（改 id 要迁移所有已落盘数据）
+  - 同步清理源码里「空月 / 星月」的残留注释与 docstring；DESIGN §12.3 / §15.4 改写
+  - 验收：22 进程 345 项全绿；ruff 干净；已重建 EXE
+
+- [x] **X8** 浅色主题按参考图重做（v2.3.5）：用户二次发参考图「浅色做成这样」
+  - 色值全部从参考图采样：BG `#eef2fb`、SURFACE `#f5f8fd`、ACCENT `#7389cb`
+    （参考图播放键 `#7f97d6` 白字只有 2.88:1，压深到 3.43:1 才过可读性下限）
+  - 装饰层重写：1 支 0.9 窗高线描羽毛（裸羽轴伸出画面、两侧不等宽）+ 1 枚带光环的
+    罗盘星 + 5 点微光；删掉"18 颗碎星撒满全窗"
+  - 三次形态返工（实心星=菱形 / 羽枝=梳子 / 羽片根部硬截断）+ 一次位置返工
+    （星被"排序"下拉框遮掉半个）
+  - 验收：22 进程 345 项全绿；ruff 干净；灰度分布对齐参考图；EXE 重建
+
+- [x] **X9** 深色主题按参考图重做（v2.3.6）：用户发深色参考图「深色做成这样」
+  - 五层重画：径向辉光 → 星尘 → 轨道环（带刻度）→ 玻璃月牙 → 罗盘星 → 柔焦浮羽
+  - 三个坑：两段圆弧拼月牙会留直线弦（改 `subtracted()` 差集）；发光不是整体涂白
+    （亮在边缘，月内/月外差 14 阶 vs 参考 11）；浮羽不能用线描（改横向渐变 + 羽枝）
+  - 位置取舍：星从环右侧挪到环正下方（右侧是列表列，会被图标压住）
+  - 验收：22 进程 345 项全绿；ruff 干净；灰度采样对齐；EXE 重建
+
+- [x] **Y1** 联网歌词检索改进（v2.4.0）：用户「改进联网歌词」
+  - 有序查询计划：`/api/get` 精确（带 album/duration）→ search（原艺人）→ search（主艺人）
+    → `q=` 自由文本；命中高信任度即早停（多为一首 1 个请求）
+  - 标签清洗 `clean_title` / `clean_artist`：全角转半角、括号噪声、`feat.` 尾巴、
+    前导音轨号、破折号噪声后缀、多艺人切分（不切 `&` 和 `,`）
+  - 打分收紧：身份门槛改为「歌名对得上 or 时长差 ≤2s」，移除"只有艺人对上"；
+    同名翻唱 −1.5；包含式比对加长度校验；同步稿单独分区优先
+  - 负缓存 `<track_id>.miss`（TTL 7 天）+ 歌词区右键「重新联网匹配歌词」
+  - 限流 429/503 用 `FetchOutcome.aborted` 与"未命中"区分，绝不误写负缓存；
+    请求间隔 250ms（官方建议）
+  - 真实联网命中率 **6/11 → 10/11**；`test_lyrics_online` 33 → 71 项，e2e 5 → 6 项
+
+
+- [x] **Y2** 图标清晰度与齿轮重画（v2.5.0）：用户圈出左下设置齿轮「优化一下图案」
+  - 先量化：圆钮 45 设备像素、齿轮只有 9×10 → 不是画得丑，是被放大糊掉
+  - 根因：`_paint()` 按 16×16、DPR=1 生成位图，高分屏上被平滑放大
+  - 修：`device_ratio()` + 按 `size×DPR` 渲染 + `setDevicePixelRatio`；缓存键带 dpr；
+    新增 `make_pixmap()` 供 QLabel（`QIcon.pixmap(n,n)` 会降采样回去）
+  - 齿形重画：齿深 0.16→0.12、齿顶平台 0.28→0.44、斜边→0.09、轴孔→Ø0.30
+  - 验收工具补「设备像素」第三行；新增 4 项图标渲染回归
+  - 布局未变（浮动条仍 224×82，右缘 236）；22 进程全绿；EXE 重建
+
+
+- [x] **Y3** 主题钮图标改为月亮（v2.5.1）：用户圈出左下浮动条**上方**圆钮，「画成月亮」
+  - 先定位：红圈盖住了钮体，改从代码确认该钮是主题切换，原图标 = `feather`
+  - 语义澄清：钮上画的不是当前主题，而是「点下去会切到哪个主题」——
+    浅色→月亮（切深色）、深色→太阳（切浅色），所以用户截图（浅色）上是羽毛
+  - 画法：`outer.subtracted(inner)` 两圆差集，**不用** `arcMoveTo/arcTo` 拼弧
+    （两段弧端点间会连出直线弦，月牙尖角被削平成「灰色 D」，同 v2.3.6 装饰月牙的坑）
+  - 参数（20/24 设备像素上比过）：外圆 R=0.42、内圆 0.90R 右移 0.16、整体转 −30°
+  - 只改三处：`icons.py` 画法、`theme.THEME_ICON` 表、`float_bar` 初始值；
+    持久化的主题 id 仍是 `columbina`/`light`，无数据迁移
+  - 新增回归 3 项：`test_moon_is_crescent_not_disc`、`test_moon_fills_the_canvas`、
+    `test_theme_icons_are_moon_and_sun`；22 进程 **400 项全绿**；
+    对比图 `shots/v251-moon-before-after.png`
+
+
+- [x] **Y4** 数据目录可选择 / 便携模式（v2.6.0）
+  - 需求：新电脑能直接用 + 数据位置自己选，"或者直接放到软件目录里"
+  - 四级优先级：`QY_DATA_DIR`（测试/自检）> 便携模式（软件目录 `data/`）>
+    指针文件 `%APPDATA%/轻音播放器/location.txt` > 默认 APPDATA
+  - **指针不能记进 data.json**：data.json 自己要被搬走，记在它身上一搬家就找不着
+  - **便携模式只在打包后生效**：开发态 `exe_dir()` 是仓库根，手建一个 `data/` 会让所有
+    「改 APPDATA 做隔离」的测试写进仓库、污染用户曲库；设置页按钮在源码态直接禁用
+  - **smoke 隔离加一层**：`--smoke` 同时设 `APPDATA` + `QY_DATA_DIR`，压过便携与指针
+  - 迁移：目标必须空目录 → 复制 → 逐文件核对字节 → 才删源；失败/取消清理目标、源不动
+  - UI：设置 → 存储（当前目录 / 模式 / 更改位置 / 放到软件目录 / 恢复默认 / 打开目录），
+    迁移跑在 QThread 里带进度与取消，完成后提示重启
+  - 新增 `tests/test_storage.py` 27 项 + 设置页 E2E 1 项；23 进程 **428 项全绿**；DESIGN §21
+
+
 ## v2.1 依赖关系
 
 ```
 K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 → N3 → N4 → O1 → O2 → O3 → O4 → P1 → P2 → Q1 → Q2 → Q3 → Q4 → Q5 → Q6 → Q7 → Q8 → Q9 → R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9 → R10 → S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → U1 → U2 → U3 → U4 → U5 → U6 → V1 → V2 → V3 → V4 → V5 → V6 → V7 → W1 → W2 → W3 → W4 → W5 → W6 → W7 → W8 → W9
 ```
+
+- [x] **Y5** 浮动工具条四个入口并成一排（v2.6.1）
+  - 需求：用户圈出主题/设置/导入音乐/数据目录四个控件，「这四个并成一排」
+  - 布局：`QHBoxLayout` 单行，`38+4+38+4+68+4+68 = 224`，高 38（原 3×2 网格 224×82）
+  - 文字按钮 68 宽的依据：字号可放大到 1.30 倍 → 12px 变 16px → 4 个中文字 64px，
+    扣掉 2px 边框剩 66，刚好放得下；曾经取 65 会在最大字号下裁 1px
+  - QSS 侧必须补 `padding:0px`，否则基础 `QPushButton{padding:6px 10px}` 再吃掉 20px
+  - 竖直定位改为「在播放栏内垂直居中」（`PLAYER_BAR_HEIGHT` 提成常量），贴底会显得下沉
+  - 4 处旧断言按单行几何重写（DESIGN §22.5），新增 `test_single_row_layout_is_exactly_sidebar_width`
+  - 验收图 `shots/float_v261_{light,dark}.png`
+
+- [x] **Y6** 歌词导入 + 联网进度/来源 + 匹配率提升（v2.6.2）
+  - 需求：用户「歌词可以自己导入并识别，联网匹配歌词可以显示进度和来源，提高匹配率」
+  - 手动导入：歌词区右键「导入歌词文件…」（单首，`_bind_lyrics_file` 识别同步/纯文本）
+  - 批量导入：右键「批量导入歌词…」选多份 `.lrc`，按文件名归一（小写、去标点、含 CJK）
+    匹配曲目（`app/lyrics_import.py`：`normalize_key` / `track_keys` / `match_lrc_files`）；
+    键 = 音频文件名 → 标题 → 艺人 → 标题+艺人，歧义键（一键多曲）跳过不误绑
+  - 联网进度/来源：`fetch_outcome(..., progress=cb)` 每查询前回调 `(cur, total)`；
+    `LyricsFetchWorker.progress` 信号 → 歌词区显示检索进度，命中后标注「来源：LRCLIB」
+  - 匹配率：`lookup_plan` 追加 `q=标题+主艺人` 全文本兜底查询；`_NOISE_WORDS` 扩
+    （国语/粤语/日语/闽南语/mv/live at），脏标签清理更彻底
+  - `_lyrics_cache` 由 2 元组扩为 3 元组 `(synced, plain, source)`，所有解包同步更新
+  - 新增回归 `tests/test_lyrics_import.py`（11 项）+ 联网进度 2 项 + 计划 1 项
+  - 验收：24 进程 **444 项全绿**，`ruff check .` 干净；真实联网命中率 5/5
+
+- [x] **Y7** 修复：联网匹配中断时歌词区卡死在「正在找」（v2.6.3）
+  - 现象：用户反馈「没显示」——联网超时/限流/预算耗尽时 `fetch_outcome` 返回
+    `aborted=True` 且无文本，`LyricsFetchWorker.run()` 既不 `found` 也不 `missed`，
+    界面永远停在「正在联网匹配歌词…」
+  - 修法：worker 新增 `aborted = Signal(str)`，中止时发它（仍**不发** `missed`，
+    不落负缓存）；`_on_online_lyrics_aborted` 把空状态换成「联网匹配失败，请稍后重试
+    \n可右键「重新联网匹配」再试一次」
+  - 测试：`test_stays_silent_when_aborted_by_rate_limit` 改名
+    `test_emits_aborted_not_missed_when_rate_limited`（断 abort 发、missed 不发）；
+    e2e 新增 `test_online_aborted_shows_retry_hint_but_no_negative_cache`
+  - 验收：24 进程 **445 项全绿**，`ruff check .` 干净
+
+- [x] **Y8** 在线搜索歌词 + 歌词播放动效（v2.6.4）
+  - 需求：用户「匹配不了歌词用户可以在软件内打开网页自己匹配歌词」「歌词播放添加更多
+    效果（放大 / 打字机 / 颜色逐渐覆盖）」
+  - 在线搜索：歌词区右键「在线搜索歌词…」→ `build_web_search_url(标题, 艺人)` 拼
+    `lrclib.net/search?q=`，`QDesktopServices.openUrl` 开系统默认浏览器（用户选轻量方案）
+  - 歌词动效（单选，`Settings.lyrics_effect`，none/zoom/typewriter/karaoke）：
+    - `ui/lyrics_panel.py` 改用 `QStyledItemDelegate` 自绘歌词行，支持四种效果；
+      保留 `QListWidgetItem.text()/foreground()` 兼容旧测试
+    - 逐字进度靠「行内进度 0~1」：`update_position` 算 `_line_progress`，
+      最后一行固定 3000ms 行时长；zoom +6px、其余 +3px（`_bump_font` 像素优先）
+    - 平滑：QMediaPlayer `positionChanged` 在 PySide6 无 `setNotifyInterval`，
+      改主窗口 100ms `QTimer` 播放时轮询 `position()`（暂停/停止即停）
+  - 坑：delegate 的 `option.font` 经 QSS 是 `pixelSize=13, pointSize=-1`（与
+    `item.font()` 的 `pointSize=9` 不同），直接 `setPointSize(-1+Δ)` 会把当前行缩成
+    2pt 一小截；karaoke 未唱部分用半透明 TEXT_DIM（alpha 90）才有「亮/暗」分界
+  - 测试：`build_web_search_url` 3 项、`TestLyricsEffect` 5 项、settings 持久化 2 项
+  - 验收：24 进程 **455 项全绿**，`ruff check .` 干净；探针截图
+    `shots/lyrics_effect_{light,dark}.png` 四效果并排目检通过
+
+- [x] **Y9** 纯文本 `.txt` 歌词导入识别（v2.6.5）
+  - 需求：用户「`D:/浏览器/唯有追赶风的方向 (Only By Chasing the).txt` 做个导入识别」
+  - 现象：浏览器下载的歌词常是 `.txt`，头部带「歌名 / 作词 / 作曲 / 编曲…」信息块，
+    直接当纯文本会把标题与职员表混进歌词
+  - 实现：
+    - `app/lyrics.py` 新增 `strip_meta_lines()`：`_PLAIN_META_LABEL` 正则匹配
+      「作词/作曲/编曲/填词/词曲/演唱/混音/制作/出品/发行/和声/吉他…」+ 冒号行并剔除；
+      首行歌名仅在「下一非空行是职员表行」时才删（避免误删第一句歌词）
+    - `lyrics_from_text()` 在 `parse_plain()` 前统一过 `strip_meta_lines()`，
+      手动绑定 / 同名文件 / 内嵌 / 缓存 / 联网各路径一致生效
+    - 手动导入对话框过滤 `*.lrc` → `*.lrc *.txt`；批量导入扫描同时收 `.lrc` 与 `.txt`
+      （`match_lrc_files()` 只取去扩展名的 basename，天然兼容，无需改逻辑）
+  - 测试：`TestStripMetaLines` 4 项（剔除标题+职员表 / 全角冒号 / 无元数据不误删 /
+    无信号不删首行）、`test_matches_txt_extension_too`
+  - 验收：全量回归 24 进程全绿，`ruff check .` 干净
+
+- [x] **Y10** 纯文本歌词联网对齐成带时间轴 LRC（v2.6.6）
+  - 需求：用户「歌词导入进去可以自动跟歌识别，可以滚动」；澄清后选定
+    「联网自动对齐（自备 Key）」，触发方式「导入后询问 + 右键手动」
+  - 背景：纯文本歌词没有时间戳，本无法跟歌滚动；必须先把每行配到音频时间轴
+  - 选型：**LyricTimestamps API**（支持 multipart 直接上传本地音频，免费 15 分钟/月、
+    最长 12 分钟/首、直传 30MB；QuickLRC 只收公开 URL 不适合本地文件）
+  - 实现：
+    - `app/lyrics_align.py` 新增：`verify_key`（GET /v1/usage）、
+      `align_lyrics`（创建 multipart 任务 → 轮询 → 下载 LRC，进度回调、错误分类、
+      网络可注入 `fetch`）、`describe_error`、`LyricsAlignWorker(QThread)`
+    - `Settings.lyrics_align_api_key`（v2.6.6，存 data.json，不进日志）
+    - 设置「歌词与统计」页加 Key 输入框（editingFinished 才保存）
+    - 导入纯文本后 `_maybe_offer_align` 弹「是否联网对齐」；歌词区右键
+      「联网对齐歌词」`_align_lyrics_for_current`；对齐成功缓存到
+      `lyrics_cache/<id>.lrc` + 解除纯文本手动绑定，之后跟歌滚动
+  - 关键坑：错误 key 在**读端点**会被当匿名游客只回 60 秒预览，所以创建任务前
+    必须先 `verify_key`；必须 multipart form-data，JSON body 会被静默接受后 400
+  - 测试：`tests/test_lyrics_align.py` 26 项（verify_key / multipart / happy path /
+    missing_key / no_audio / 超限 / 401 / 429 / failed / soft_fail / 轮询 / worker /
+    key 持久化）
+  - 验收：全量回归全绿，`ruff check .` 干净
+
 
 ## v2.1 验收命令
 

@@ -46,8 +46,11 @@ from PySide6.QtWidgets import (
 
 from app.covers import CoverProvider
 from app.filesize import file_size
-from app.lyrics import LyricLine, lyrics_from_text
-from app.lyrics_online import LyricsFetchWorker, read_cache, write_cache
+from app.lyrics import LyricLine, lyrics_from_text, strip_meta_lines
+from app.lyrics_align import LyricsAlignWorker
+from app.lyrics_import import match_lrc_files
+from app.lyrics_online import (LyricsFetchWorker, build_web_search_url, clear_miss,
+                               read_cache, read_miss, write_cache, write_miss)
 from app.metadata import read_track
 from app.library import is_in_library
 from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, BackgroundConfig, Track
@@ -60,7 +63,7 @@ from ui import theme as ui_theme
 from ui.background import BackgroundLayer
 from ui.dialogs import ImportProgressDialog
 from ui.float_bar import FloatBar
-from ui.player_bar import PlayerBar
+from ui.player_bar import PLAYER_BAR_HEIGHT, PlayerBar
 from ui.settings_dialog import SettingsDialog, stats_for
 from ui.sidebar import SIDEBAR_WIDTH, Sidebar
 from ui.title_bar import TitleBar
@@ -70,9 +73,10 @@ from ui.video_view import VideoFullscreenOverlay
 
 # 联网检索中给用户的提示：既解释「为什么现在没歌词」，也暗示等一下会出现
 ONLINE_PENDING_HINT = "正在联网匹配歌词…"
-
-# 左下浮动条与窗口底边的距离：贴到 0 会被窗口圆角遮罩削掉一块，也缺呼吸空间
-_FLOAT_BOTTOM_GAP = 4
+# 检索结束仍无结果：明确区分「没找到」和「这首歌本来就没歌词」，并告诉用户出路
+ONLINE_MISSED_HINT = "未找到歌词\n可右键「重新联网匹配」再试一次"
+# 联网被中断（超时/限流/预算耗尽）：不等于「没歌词」，不落负缓存，只提示可重试
+ONLINE_ABORTED_HINT = "联网匹配失败，请稍后重试\n可右键「重新联网匹配」再试一次"
 
 # 排序预设集中在 app/sorting.py（维度 + 方向 + 文案），此文件只负责应用
 
@@ -103,9 +107,11 @@ class MainWindow(QMainWindow):
         self._search_text = ""
         self._displayed: list[Track] = []
         self._scanner: ScannerWorker | None = None
-        self._lyrics_cache: dict[str, tuple[list[LyricLine], list[str]]] = {}
+        self._lyrics_cache: dict[str, tuple[list[LyricLine], list[str], str]] = {}
         # 联网补歌词（v2.2）：同一首只试一次；worker 自己持引用，结束后清掉
         self._lyrics_workers: dict[str, LyricsFetchWorker] = {}
+        # 联网对齐歌词（v2.6.6）：纯文本 → LRC，同一首同时只跑一个
+        self._align_workers: dict[str, LyricsAlignWorker] = {}
         self._online_attempted: set[str] = set()
         # 当前是否处于「自定义背景」模式（面板半透明）；None = 无背景
         self._bg_scrim: float | None = None
@@ -175,7 +181,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.3.3 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.6.6 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -219,11 +225,21 @@ class MainWindow(QMainWindow):
         # 播放器
         self.player.track_changed.connect(self._on_track_changed)
         self.player.state_changed.connect(self.player_bar.update_state)
+        self.player.state_changed.connect(self._on_player_state)
         self.player.position_changed.connect(self._on_position)
         self.player.duration_changed.connect(self._on_duration)
         self.player.volume_changed.connect(self.player_bar.update_volume)
         self.player.mode_changed.connect(self.player_bar.set_mode)
         self.player.error.connect(lambda msg: self._toast(msg, 5000))
+
+        # 歌词逐字动效需要平滑的行内进度，而 QMediaPlayer 的 positionChanged
+        # 在 PySide6 里默认约 1s 一次（且无 setNotifyInterval 可调），会让
+        # 「颜色覆盖」一跳一跳。这里用一个 100ms 定时器在播放时主动轮询
+        # position()，只在 playing 态运行，暂停/停止即停，开销可忽略。
+        self._position_timer = QTimer(self)
+        self._position_timer.setInterval(100)
+        self._position_timer.timeout.connect(
+            lambda: self._on_position(self.player.position_ms))
 
         # 播放栏
         self.player_bar.play_clicked.connect(self.player.toggle_play)
@@ -247,6 +263,21 @@ class MainWindow(QMainWindow):
 
         # 正在播放页歌词
         self.now_playing.seek_requested.connect(lambda ms: self.player.seek(ms))
+        # 歌词区右键「重新联网匹配歌词」（v2.4）：给用户一个补救入口，
+        # 否则负缓存生效后这首歌 7 天内都不会再自动重试
+        self.now_playing.lyrics.retry_online_requested.connect(
+            self._retry_online_lyrics)
+        # 歌词区右键「导入歌词文件 / 批量导入歌词」（v2.6.2）
+        self.now_playing.lyrics.import_lyrics_requested.connect(
+            self._import_lyrics_for_current)
+        self.now_playing.lyrics.batch_import_requested.connect(
+            self._batch_import_lyrics)
+        # 歌词区右键「在线搜索歌词」（v2.6.4）：联网匹配失败时去网页自己搜
+        self.now_playing.lyrics.search_online_requested.connect(
+            self._open_lyrics_search)
+        # 歌词区右键「联网对齐歌词」（v2.6.6）：纯文本 → 带时间轴 LRC
+        self.now_playing.lyrics.align_lyrics_requested.connect(
+            self._align_lyrics_for_current)
 
         # 视频页交互（v2.1）
         self.now_playing.back_to_list_requested.connect(lambda: self._show_page(0))
@@ -280,6 +311,8 @@ class MainWindow(QMainWindow):
     def _restore_state(self) -> None:
         self.sidebar.set_nickname(self.store.settings.nickname)
         self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
+        # 歌词播放动效（v2.6.4）：启动即按持久化设置渲染
+        self.now_playing.lyrics.set_effect(self.store.settings.lyrics_effect)
         self.set_view(self._view_id)
         self.player_bar.set_mode(self.player.mode)
         self.player_bar.update_volume(self.player.volume, self.player.muted)
@@ -432,6 +465,13 @@ class MainWindow(QMainWindow):
         self.player_bar.update_position(position_ms, duration)
         self.now_playing.update_position(position_ms)
 
+    def _on_player_state(self, state: str) -> None:
+        """播放时开启进度轮询（供歌词逐字动效），暂停/停止即关。"""
+        if state == "playing":
+            self._position_timer.start()
+        else:
+            self._position_timer.stop()
+
     def _on_duration(self, duration_ms: int) -> None:
         self.player_bar.update_duration(duration_ms)
         track = self.player.current_track
@@ -490,70 +530,101 @@ class MainWindow(QMainWindow):
         if cached is None:
             cached = self._resolve_lyrics(track)
             self._lyrics_cache[track.id] = cached
-        synced, plain = cached
+        synced, plain, source = cached
         if synced:
             self.now_playing.set_synced(synced)
+            self.now_playing.set_source(source)
         elif plain:
             self.now_playing.set_plain(plain)
+            self.now_playing.set_source(source)
         elif self._start_online_lyrics(track) or track.id in self._lyrics_workers:
             # 已经发起、结果还没回来：先告诉用户「在找」，别让人以为这首没歌词
             self.now_playing.set_empty(ONLINE_PENDING_HINT)
         else:
             self.now_playing.set_empty()
 
-    def _resolve_lyrics(self, track: Track) -> tuple[list[LyricLine], list[str]]:
+    def _resolve_lyrics(self, track: Track) -> tuple[list[LyricLine], list[str], str]:
+        """返回 (同步行, 纯文本行, 来源标签)。来源为空串表示「没有歌词」。"""
         # 1) 手动绑定的 .lrc
         if track.lrc_path and os.path.isfile(track.lrc_path):
             text = _read_text(track.lrc_path)
             if text:
-                return lyrics_from_text(text)
+                synced, plain = lyrics_from_text(text)
+                if synced or plain:
+                    return synced, plain, "本地歌词 · 手动绑定"
         # 2) 同名 .lrc
         sidecar = os.path.splitext(track.path)[0] + ".lrc"
         if os.path.isfile(sidecar):
             text = _read_text(sidecar)
             if text:
-                return lyrics_from_text(text)
+                synced, plain = lyrics_from_text(text)
+                if synced or plain:
+                    return synced, plain, "本地歌词 · 同名 .lrc"
         # 3) 内嵌歌词
         try:
             meta = read_track(track.path)
         except Exception:  # noqa: BLE001
             meta = None
         if meta is not None and meta.lyrics_text:
-            return lyrics_from_text(meta.lyrics_text)
+            synced, plain = lyrics_from_text(meta.lyrics_text)
+            if synced or plain:
+                return synced, plain, "本地歌词 · 内嵌"
         # 4) 上次联网匹配的缓存（v2.2）——命中即完全离线可用
         cached_text = read_cache(track.id)
         if cached_text:
-            return lyrics_from_text(cached_text)
+            synced, plain = lyrics_from_text(cached_text)
+            if synced or plain:
+                return synced, plain, "来源：LRCLIB（缓存）"
         # 5) 联网兜底不在这里做：网络请求是异步的，交给 _start_online_lyrics
-        return [], []
+        return [], [], ""
 
-    def _start_online_lyrics(self, track: Track) -> bool:
+    def _start_online_lyrics(self, track: Track, force: bool = False) -> bool:
         """本地无歌词时发起一次联网检索。返回 True 表示「已经去要了」。
 
-        三条不发的理由：设置里关了、视频文件（歌词无意义）、本地已试过一次
-        （失败也不重试，避免每切一次歌曲就打一次网络）。
+        四条不发的理由：设置里关了、视频文件（歌词无意义）、本次会话已试过、
+        负缓存里记着「最近查过且没查到」（默认 7 天内不重试，免得每次启动都为
+        冷门歌/纯音乐空打四个请求）。`force=True` 由用户右键「重新联网匹配」触发，
+        绕过后面两条。
         """
-        if track.is_video or track.id in self._online_attempted:
+        if track.is_video:
             return False
         if not self.store.settings.online_lyrics:
             return False
+        if not force:
+            if track.id in self._online_attempted:
+                return False
+            if read_miss(track.id):
+                return False
         if not (track.display_title or track.artist):
             return False
         self._online_attempted.add(track.id)
         worker = LyricsFetchWorker(track.id, track.display_title, track.artist,
-                                   track.duration_ms, self)
+                                   track.duration_ms, track.album, self)
         worker.found.connect(self._on_online_lyrics)
+        worker.missed.connect(self._on_online_lyrics_missed)
+        worker.aborted.connect(self._on_online_lyrics_aborted)
+        worker.progress.connect(self._on_online_lyrics_progress)
         worker.finished.connect(lambda tid=track.id: self._lyrics_workers.pop(tid, None))
         self._lyrics_workers[track.id] = worker
         worker.start()
         return True
 
+    def _on_online_lyrics_progress(self, track_id: str, cur: int, total: int) -> None:
+        """联网匹配进度：只更新「正在找」的空状态文案，不打断已有歌词。"""
+        current = self.player.current_track
+        if current is None or current.id != track_id:
+            return
+        if self._lyrics_cache.get(track_id) is not None:
+            return                      # 已经拿到歌词了，别再覆盖
+        self.now_playing.set_empty(f"正在联网匹配歌词…（{cur}/{total}）")
+
     def _on_online_lyrics(self, track_id: str, text: str) -> None:
         synced, plain = lyrics_from_text(text)
         if not synced and not plain:
             return
-        self._lyrics_cache[track_id] = (synced, plain)
+        self._lyrics_cache[track_id] = (synced, plain, "来源：LRCLIB")
         write_cache(track_id, text)
+        clear_miss(track_id)                # 之前记过「没查到」，现在推翻它
         current = self.player.current_track
         if current is None or current.id != track_id:
             return                      # 用户已经切走了，别串到当前这首歌上
@@ -561,7 +632,146 @@ class MainWindow(QMainWindow):
             self.now_playing.set_synced(synced)
         else:
             self.now_playing.set_plain(plain)
-        self._toast("已联网匹配到歌词", 2500)
+        self.now_playing.set_source("来源：LRCLIB")
+        self._toast("已联网匹配到歌词（LRCLIB）", 2500)
+
+    def _on_online_lyrics_missed(self, track_id: str) -> None:
+        """没匹配到：落负缓存，并把当前这首歌的空状态文案换成「没找到」。"""
+        write_miss(track_id)
+        current = self.player.current_track
+        if current is None or current.id != track_id:
+            return
+        self.now_playing.set_empty(ONLINE_MISSED_HINT)
+
+    def _on_online_lyrics_aborted(self, track_id: str) -> None:
+        """联网被中断（超时/限流/预算耗尽）：不等于「没歌词」，不落负缓存。"""
+        current = self.player.current_track
+        if current is None or current.id != track_id:
+            return
+        self.now_playing.set_empty(ONLINE_ABORTED_HINT)
+
+    def _retry_online_lyrics(self) -> None:
+        """歌词区右键「重新联网匹配歌词」：无视负缓存与「本次已试过」，重新抓一次。"""
+        track = self.player.current_track
+        if track is None:
+            self._toast("当前没有播放中的歌曲", 2000)
+            return
+        if track.is_video:
+            self._toast("视频文件不匹配歌词", 2000)
+            return
+        if not self.store.settings.online_lyrics:
+            self._toast("设置里未开启联网歌词", 2500)
+            return
+        if track.id in self._lyrics_workers:
+            self._toast("正在匹配中，请稍候", 2000)
+            return
+        clear_miss(track.id)
+        self._online_attempted.discard(track.id)
+        if self._start_online_lyrics(track, force=True):
+            self.now_playing.set_empty(ONLINE_PENDING_HINT)
+        else:
+            self._toast("无法发起联网匹配", 2500)
+
+    def _open_lyrics_search(self) -> None:
+        """歌词区右键「在线搜索歌词」：用系统默认浏览器打开 LRCLIB 网页搜索。
+
+        联网匹配不到（未找到 / 被限流）时给用户一条自己动手的路：网页已自动
+        带上「标题 + 艺人」，用户找到后下载 .lrc 再用「导入歌词文件」绑定。
+        """
+        track = self.player.current_track
+        if track is None:
+            self._toast("当前没有播放中的歌曲", 2000)
+            return
+        url = build_web_search_url(track.display_title, track.display_artist)
+        if not QDesktopServices.openUrl(QUrl(url)):
+            self._toast("无法打开浏览器，请手动访问 lrclib.net", 4000)
+
+    # ---------- 联网对齐歌词（v2.6.6：纯文本 → 带时间轴 LRC） ----------
+
+    def _align_lyrics_for_current(self) -> None:
+        """歌词区右键「联网对齐歌词」：把当前显示的纯文本歌词转成带时间轴的 LRC。"""
+        track = self.player.current_track
+        if track is None:
+            self._toast("当前没有播放中的歌曲", 2000)
+            return
+        synced, plain, _source = self._lyrics_cache.get(track.id, ([], [], ""))
+        if synced:
+            self._toast("这首已是带时间轴的歌词，无需对齐", 2500)
+            return
+        if not plain:
+            self._toast("当前没有可对齐的纯文本歌词，请先导入歌词", 3000)
+            return
+        self._start_align(track, "\n".join(plain))
+
+    def _start_align(self, track: Track, plain_text: str) -> None:
+        """发起一次联网对齐：先检查 key 与重复任务，再开后台线程。"""
+        plain_text = (plain_text or "").strip()
+        if not plain_text:
+            self._toast("没有可对齐的歌词文本", 2500)
+            return
+        key = (self.store.settings.lyrics_align_api_key or "").strip()
+        if not key:
+            self._toast("未填写歌词对齐 Key，请到「设置 → 歌词与统计」填写", 4000)
+            return
+        if track.id in self._align_workers:
+            self._toast("这首歌正在对齐中，请稍候", 2000)
+            return
+        worker = LyricsAlignWorker(track.id, track.path, plain_text, key, self)
+        worker.done.connect(self._on_align_done)
+        worker.soft_fail.connect(self._on_align_soft_fail)
+        worker.failed.connect(self._on_align_failed)
+        worker.progress.connect(self._on_align_progress)
+        worker.finished.connect(lambda tid=track.id: self._align_workers.pop(tid, None))
+        self._align_workers[track.id] = worker
+        worker.start()
+        self.now_playing.set_empty("正在联网对齐歌词…")
+        self._toast("已开始联网对齐，请稍候（约 1~2 分钟）", 3000)
+
+    def _on_align_progress(self, track_id: str, percent: int, stage: str) -> None:
+        current = self.player.current_track
+        if current is None or current.id != track_id:
+            return
+        self.now_playing.set_empty(f"正在联网对齐歌词… {stage}")
+
+    def _on_align_done(self, track_id: str, lrc: str) -> None:
+        self._apply_aligned_lrc(track_id, lrc, soft_fail=False)
+
+    def _on_align_soft_fail(self, track_id: str, lrc: str) -> None:
+        self._apply_aligned_lrc(track_id, lrc, soft_fail=True)
+
+    def _apply_aligned_lrc(self, track_id: str, lrc: str, soft_fail: bool) -> None:
+        """对齐结果落地：缓存 + 解除纯文本绑定 + 立即刷新滚动。"""
+        synced, _plain = lyrics_from_text(lrc)
+        if not synced:
+            # 对齐出的 LRC 解析不出时间轴，不能滚动，按失败处理
+            current = self.player.current_track
+            if current is not None and current.id == track_id:
+                self.now_playing.set_empty("对齐结果无法解析，请重试")
+            self._toast("对齐结果无效，请重试", 3000)
+            return
+        # 1) 落缓存，之后离线也能滚动（_resolve_lyrics 第 4 级来源）
+        write_cache(track_id, lrc)
+        # 2) 解除纯文本手动绑定，让缓存里的对齐结果优先生效
+        track = self.store.get_track(track_id)
+        if track is not None and track.lrc_path:
+            track.lrc_path = None
+            self.store.save()
+        # 3) 更新内存缓存 + 立即刷新显示
+        self._lyrics_cache[track_id] = (synced, [], "来源：联网对齐")
+        current = self.player.current_track
+        if current is not None and current.id == track_id:
+            self.now_playing.set_synced(synced)
+            self.now_playing.set_source("来源：联网对齐")
+        if soft_fail:
+            self._toast("对齐完成，但结果可能不准，请核对", 4000)
+        else:
+            self._toast("已对齐歌词，现在可以跟歌滚动了", 3000)
+
+    def _on_align_failed(self, track_id: str, message: str) -> None:
+        current = self.player.current_track
+        if current is not None and current.id == track_id:
+            self.now_playing.set_empty("对齐失败")
+        self._toast(message or "对齐失败", 4000)
 
     # ---------- 歌单管理 ----------
 
@@ -685,15 +895,84 @@ class MainWindow(QMainWindow):
 
     def _bind_lyrics(self, track: Track) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择歌词文件", os.path.dirname(track.path),
-                                              "歌词文件 (*.lrc);;所有文件 (*)")
+                                              "歌词文件 (*.lrc *.txt);;所有文件 (*)")
         if not path:
             return
+        self._bind_lyrics_file(track, path)
+
+    def _bind_lyrics_file(self, track: Track, path: str) -> bool:
+        """把一份歌词文件绑到某首歌，先「识别」再绑定。返回是否绑定成功。
+
+        识别失败（不是有效 LRC / 没有任何歌词行）时不绑定，避免给用户塞一个
+        空歌词面板。
+        """
+        text = _read_text(path)
+        synced, plain = lyrics_from_text(text)
+        if not synced and not plain:
+            self._toast(f"未识别到歌词行：{os.path.basename(path)}", 4000)
+            return False
         track.lrc_path = path
         self.store.save()
         self._lyrics_cache.pop(track.id, None)
         if self.player.current_track and self.player.current_track.id == track.id:
             self._load_lyrics(track)
-        self._toast(f"已绑定歌词：{os.path.basename(path)}", 3000)
+        if synced:
+            self._toast(f"已绑定歌词：{os.path.basename(path)}（识别到 {len(synced)} 行同步歌词）", 3500)
+        else:
+            self._toast(f"已绑定歌词：{os.path.basename(path)}（识别到纯文本歌词 {len(plain)} 行）", 3500)
+            self._maybe_offer_align(track, text)
+        return True
+
+    def _maybe_offer_align(self, track: Track, text: str) -> None:
+        """导入纯文本歌词后询问是否联网对齐成带时间轴的歌词（v2.6.6）。"""
+        clean = strip_meta_lines(text).strip()
+        if not clean:
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("联网对齐歌词")
+        box.setText("检测到纯文本歌词（没有时间轴，不能跟歌滚动）。\n"
+                    "是否联网对齐成带时间轴的歌词？")
+        box.setInformativeText("会联网上传音频，需在设置里填写对齐 Key，免费额度约 15 分钟/月。")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self._start_align(track, clean)
+
+    def _import_lyrics_for_current(self) -> None:
+        """歌词区右键「导入歌词文件…」：给当前这首歌手动挑一份 .lrc。"""
+        track = self.player.current_track
+        if track is None:
+            self._toast("当前没有播放中的歌曲", 2000)
+            return
+        self._bind_lyrics(track)
+
+    def _batch_import_lyrics(self) -> None:
+        """歌词区右键「批量导入歌词…」：选一个文件夹，按文件名把 *.lrc/*.txt 认到曲库。"""
+        folder = QFileDialog.getExistingDirectory(self, "选择包含歌词文件的文件夹")
+        if not folder:
+            return
+        lrc_files: list[str] = []
+        for root, _dirs, files in os.walk(folder):
+            for name in files:
+                if name.lower().endswith((".lrc", ".txt")):
+                    lrc_files.append(os.path.join(root, name))
+        if not lrc_files:
+            self._toast("该文件夹里没有 .lrc / .txt 歌词文件", 3000)
+            return
+        matched, unmatched = match_lrc_files(lrc_files, self.store.all_tracks())
+        for path, track in matched.items():
+            track.lrc_path = path
+            self._lyrics_cache.pop(track.id, None)
+        if matched:
+            self.store.save()
+        # 若当前这首歌被绑上了，立即刷新歌词区
+        current = self.player.current_track
+        if current is not None and any(t.id == current.id for t in matched.values()):
+            self._load_lyrics(current)
+        summary = f"导入歌词：匹配 {len(matched)} 首"
+        if unmatched:
+            summary += f"，{len(unmatched)} 个文件未匹配"
+        self._toast(summary, 4000)
 
     def _refresh_track(self, track: Track) -> None:
         meta = read_track(track.path)
@@ -720,12 +999,12 @@ class MainWindow(QMainWindow):
         # 老条目（外部路径）仍按「不动磁盘文件」处理。
         in_library = is_in_library(track.path, library_dir())
         box = QMessageBox(self)
-        box.setWindowTitle("移除出资料库")
+        box.setWindowTitle("移除出音乐库")
         if in_library:
-            box.setText(f"将「{track.display_title}」移出资料库？\n"
+            box.setText(f"将「{track.display_title}」移出音乐库？\n"
                         f"（软件曲库内的副本会被删除，你自己的原文件不受影响）")
         else:
-            box.setText(f"将「{track.display_title}」移出资料库？\n"
+            box.setText(f"将「{track.display_title}」移出音乐库？\n"
                         f"（不会删除磁盘文件，但会从所有歌单中移除）")
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.No)
@@ -741,7 +1020,7 @@ class MainWindow(QMainWindow):
         self.refresh_list()
         self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
         self._refresh_counts()
-        self._toast("已移出资料库", 3000)
+        self._toast("已移出音乐库", 3000)
 
     # ---------- 昵称 ----------
 
@@ -758,7 +1037,7 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, name: str) -> None:
         self.store.settings.theme = name
         self._apply_appearance()
-        # 文案跟主题表走：三态循环后不能再写「浅色 else 深色」
+        # 文案跟主题表走：两态循环，用主题表的中文名，别写死「浅色 / 深色」
         label = ui_theme.THEME_LABEL.get(name, name)
         self._toast(f"已切换到{label}主题", 2000)
 
@@ -803,8 +1082,24 @@ class MainWindow(QMainWindow):
         self._apply_appearance()
         self._toast(f"字号已调整为 {round(scale * 100)}%", 2000)
 
+    def _on_settings_lyrics_effect(self, effect: str) -> None:
+        """歌词播放动效：保存 + 立即应用到歌词面板。"""
+        if self.store.settings.lyrics_effect == effect:
+            return
+        self.store.settings.lyrics_effect = effect
+        self.store.save()
+        self.now_playing.lyrics.set_effect(effect)
+        labels = {"none": "无特效", "zoom": "放大当前行",
+                  "typewriter": "打字机", "karaoke": "颜色覆盖"}
+        self._toast(f"歌词动效：{labels.get(effect, effect)}", 2000)
+
+    def _on_settings_align_key(self, key: str) -> None:
+        """保存联网歌词对齐 Key（不打印、不进日志）。"""
+        self.store.settings.lyrics_align_api_key = key or ""
+        self.store.save()
+
     def _toggle_theme(self) -> None:
-        # 三态循环：空月 → 深色 → 浅色 → 空月
+        # 两态循环：深色 ↔ 浅色
         order = ui_theme.THEME_ORDER
         cur = ui_theme.current_theme().name
         idx = order.index(cur) if cur in order else -1
@@ -824,14 +1119,23 @@ class MainWindow(QMainWindow):
                                 font_scale=s.font_scale,
                                 bg_configs={"all": s.bg_all, "library": s.bg_library,
                                             "now_playing": s.bg_now},
-                                bg_scope=self._current_bg_page())
+                                bg_scope=self._current_bg_page(),
+                                lyrics_effect=s.lyrics_effect,
+                                lyrics_align_api_key=s.lyrics_align_api_key)
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
         dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
         dialog.accent_changed.connect(self._on_settings_accent)
         dialog.font_scale_changed.connect(self._on_settings_font_scale)
+        dialog.lyrics_effect_changed.connect(self._on_settings_lyrics_effect)
+        dialog.lyrics_align_api_key_changed.connect(self._on_settings_align_key)
         dialog.background_changed.connect(self._on_settings_background)
+        dialog.storage_changed.connect(self._on_storage_changed)
         dialog.exec()
+
+    def _on_storage_changed(self, _path: str) -> None:
+        """数据目录已搬走：当前进程还握着旧路径，必须重启才生效。"""
+        self._toast("数据已移动，重启播放器后生效", 6000)
 
     def _on_settings_online_lyrics(self, enabled: bool) -> None:
         if self.store.settings.online_lyrics == enabled:
@@ -842,7 +1146,7 @@ class MainWindow(QMainWindow):
             # 刚打开开关：把「试过但没结果」的记录清掉，让当前这首立刻重试
             self._online_attempted.clear()
             track = self.player.current_track
-            if track is not None and self._lyrics_cache.get(track.id) == ([], []):
+            if track is not None and self._lyrics_cache.get(track.id) == ([], [], ""):
                 self._load_lyrics(track)
         self._toast("已开启联网补歌词" if enabled else "已关闭联网补歌词", 2500)
 
@@ -1019,15 +1323,15 @@ class MainWindow(QMainWindow):
 
     def _position_float_bar(self) -> None:
         # 左下角，右缘对齐侧边栏内容右边界（248 - 12 = 236），不再跨进内容区。
-        # 竖直方向：底边固定留 4px。原来「在播放栏内居中」在改大后会贴到窗口底边
-        # （84 高的播放栏放 82 高的条，只剩 1px），正好压进窗口圆角遮罩里被削掉一块。
+        # 竖直方向：在播放栏里垂直居中（v2.6.1 单行后整条只有 38 高，若继续贴
+        # 窗口底边会明显"下沉"到播放栏下半截，与封面/按钮的重心错位）。
         # 注意：绝对定位的子控件不会自动拿到 sizeHint 宽度，必须 adjustSize()，
         # 否则宽度停在默认 100px，图标+文字按钮会被父控件裁掉（v2.1.2 起的真实缺陷）。
         bar = self.float_bar
         bar.adjustSize()
         right = SIDEBAR_WIDTH - 12
         x = right - bar.width()
-        y = self._root.height() - bar.height() - _FLOAT_BOTTOM_GAP
+        y = self._root.height() - PLAYER_BAR_HEIGHT + (PLAYER_BAR_HEIGHT - bar.height()) // 2
         bar.move(x, max(0, y))
         bar.raise_()
         self._position_version_label()
@@ -1054,11 +1358,11 @@ class MainWindow(QMainWindow):
 
     def _apply_background_config(self, config) -> None:
         self.background.set_config(config)
-        # 「空月」主题自带底层装饰（符文圆环 + 羽饰 + 月牙星点）；用户一旦设了
-        # 自定义背景就让位，免得两套背景打架。
+        # 「深色」与「浅色」主题自带底层装饰（月牙星点 / 羽饰 / 四角星）；
+        # 用户一旦设了自定义背景就让位，免得两套背景打架。
         theme = ui_theme.current_theme()
         self.background.set_decor(
-            "columbina" if theme.name == "columbina" and config.type == "none" else "",
+            theme.name if config.type == "none" and theme.name in ("columbina", "light") else "",
             theme.ACCENT,
         )
         self._layout_background()
@@ -1123,6 +1427,20 @@ class MainWindow(QMainWindow):
             return Qt.CursorShape.SizeBDiagCursor
         return None
 
+    @staticmethod
+    def _qt_edges(edge: int):
+        """把内部边位映射成 Qt 的 Edges，交给 startSystemResize。"""
+        edges = Qt.Edges()
+        if edge & _EDGE_LEFT:
+            edges |= Qt.Edge.LeftEdge
+        if edge & _EDGE_RIGHT:
+            edges |= Qt.Edge.RightEdge
+        if edge & _EDGE_TOP:
+            edges |= Qt.Edge.TopEdge
+        if edge & _EDGE_BOTTOM:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
     def eventFilter(self, obj, event):  # noqa: N802
         """应用级事件过滤：本窗口内任意控件上的鼠标移动都参与边缘缩放判定。"""
         if not isinstance(obj, QWidget) or obj.window() is not self:
@@ -1139,9 +1457,14 @@ class MainWindow(QMainWindow):
                 obj.unsetCursor()
         elif etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
             if self._resize_edge:
-                self._resizing = True
-                self._resize_start_geo = self.geometry()
-                self._resize_start_pos = event.globalPosition().toPoint()
+                # 用系统原生缩放：无边框窗口手动 setGeometry 累加会造成整体移位，
+                # 且吃不到 Windows 的磁性贴靠/分屏；原生缩放两者都稳。
+                handle = self.windowHandle()
+                started = handle is not None and handle.startSystemResize(self._qt_edges(self._resize_edge))
+                if not started:  # 兜底：没有原生窗口句柄时退回手动跟踪
+                    self._resizing = True
+                    self._resize_start_geo = self.geometry()
+                    self._resize_start_pos = event.globalPosition().toPoint()
         elif etype == QEvent.Type.MouseButtonRelease:
             if self._resizing:
                 self._resizing = False
@@ -1200,6 +1523,10 @@ class MainWindow(QMainWindow):
         for worker in list(self._lyrics_workers.values()):
             worker.wait(2000)
         self._lyrics_workers.clear()
+        # 联网对齐歌词的线程同样要等它收尾（v2.6.6）
+        for worker in list(self._align_workers.values()):
+            worker.wait(2000)
+        self._align_workers.clear()
         self.player.stop()
         self.store.save()
         super().closeEvent(event)

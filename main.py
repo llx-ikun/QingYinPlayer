@@ -11,7 +11,7 @@ import sys
 from PySide6.QtGui import QIcon
 
 APP_NAME = "轻音播放器"
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.6.6"
 
 
 def _resolve_app_icon() -> str | None:
@@ -46,6 +46,10 @@ def main() -> int:
         # 落在 %APPDATA%\轻音播放器\data.json —— 也就是**用户真实曲库**。若不隔离，
         # 每次 build.py 自检都会把合成夹具「晴天」写进用户库，退出时还会覆盖
         # last_view / last_track_id。这里在创建窗口之前把 APPDATA 指向临时目录。
+        #
+        # v2.6 起还有两条会绕过 APPDATA 的路径：便携模式（软件目录的 data/）和
+        # 指针文件（用户改过数据位置）。两者优先级都高于 APPDATA，所以这里必须再设
+        # QY_DATA_DIR —— 它是最高优先级，能把自检牢牢钉在临时目录里。
         import atexit
         import shutil
         import tempfile
@@ -53,6 +57,7 @@ def main() -> int:
 
         _smoke_appdata = tempfile.mkdtemp(prefix="qy_smoke_")
         os.environ["APPDATA"] = _smoke_appdata
+        os.environ["QY_DATA_DIR"] = os.path.join(_smoke_appdata, "data")
         atexit.register(shutil.rmtree, _smoke_appdata, True)
 
         from PySide6.QtCore import QCoreApplication, QTimer
@@ -111,8 +116,15 @@ def main() -> int:
 
     from PySide6.QtWidgets import QApplication
 
-    from app.paths import app_data_dir  # noqa: F401  （确保数据目录存在）
+    from app.paths import app_data_dir, current_root, mode
     from ui.main_window import MainWindow
+
+    # 先确定数据目录并建好，再开窗口：路径解析要读指针/探测便携模式，
+    # 出问题（比如指向了已拔掉的 U 盘）应该在窗口出现前就降级处理。
+    app_data_dir()
+    # 打包成 windowed 后双击启动时 sys.stdout 是 None，直接 print 会抛异常
+    if sys.stdout is not None:
+        print(f"数据目录: {current_root()} ({mode()})")
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)

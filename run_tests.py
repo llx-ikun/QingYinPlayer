@@ -25,6 +25,10 @@ MODULES = [
     "tests.test_library",
     # v2.2 联网歌词：URL 构造 / 脏数据 / 选曲打分 / 缓存读写 / 后台线程（不联网）
     "tests.test_lyrics_online",
+    # v2.6.2 歌词批量导入：.lrc 文件名 → 曲目匹配（纯逻辑）
+    "tests.test_lyrics_import",
+    # v2.6.6 歌词联网对齐：key 校验 / multipart / 三步流程 / 错误分类 / worker（不联网）
+    "tests.test_lyrics_align",
     # v2.2 自定义背景：图片导入 / 铺满裁切 / 模糊近似 / 半透明样式表
     "tests.test_background",
     "tests.test_queue",
@@ -58,6 +62,8 @@ MODULES = [
     # v2.1 视频 E2E 独立进程：视频链路会额外创建 QMediaPlayer + QVideoSink，
     # 累积后同样会触发 offscreen 下的 C++ 层 hang，必须单独成进程。
     "tests.test_e2e_video.TestE2EVideo",
+    # v2.6 数据目录：优先级解析 / 指针文件 / 便携模式 / 迁移与失败回滚（纯逻辑）
+    "tests.test_storage",
 ]
 
 
