@@ -1327,3 +1327,14 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
 - **必须 multipart form-data**：JSON body 会被静默接受然后 `400 missing_audio`。
 - `/exports/lrc` 的响应就是文件本身，没有签名 URL。
 - `done` 可能带 `soft_fail`（对齐完成但服务端不信任），此时 LRC 仍可用但提示核对。
+
+## 27. v2.6.7 .txt 转 .lrc 文件：对齐产物写成同名 .lrc（2026-10-29）
+
+- 需求：用户「添加一个可以把 .txt 文件转 .lrc 文件的功能，歌曲能识别歌词」。
+- 澄清：时间轴来源复用联网对齐（LyricTimestamps），产物位置选「歌曲同目录同名 .lrc」。
+- 增量：`_apply_aligned_lrc` 从「写缓存」改为「写同名 .lrc」——`sidecar_lrc_path()` 算
+  路径、`write_sidecar_lrc()` 原子写（`.part` + `os.replace`）。
+- 为什么同名 .lrc 优于缓存：它是 `_resolve_lyrics` 第 2 级来源（优先级高于第 4 级缓存），
+  磁盘可见、可拷贝迁移、可手动编辑；歌曲移走后缓存随之失效，同名 .lrc 跟着歌曲走。
+- 边界：写同名 .lrc 前若已存在则弹覆盖确认；写失败（目录只读）提示「未生成 .lrc」。
+  对齐后仍需解除 `track.lrc_path`（纯文本绑定，第 1 级）否则纯文本会盖过同名 .lrc。

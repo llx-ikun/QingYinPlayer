@@ -313,7 +313,7 @@ class LyricsPanel(QWidget):
         search = QAction("在线搜索歌词…", menu)
         search.triggered.connect(self.search_online_requested.emit)
         menu.addAction(search)
-        align = QAction("联网对齐歌词（纯文本 → 时间轴）", menu)
+        align = QAction("转成 .lrc 文件（联网对齐）", menu)
         align.triggered.connect(self.align_lyrics_requested.emit)
         menu.addAction(align)
         sender = self.sender()

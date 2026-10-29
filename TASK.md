@@ -601,6 +601,17 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
     key 持久化）
   - 验收：全量回归全绿，`ruff check .` 干净
 
+- [x] **Y11** .txt 转 .lrc 文件：对齐产物写成同名 .lrc 到歌曲目录（v2.6.7）
+  - 需求：用户「添加一个可以把 .txt 文件转 .lrc 文件的功能，歌曲能识别歌词」
+  - 澄清：时间轴来源复用联网对齐（LyricTimestamps），产物位置选「歌曲同目录同名 .lrc」
+  - 实现：
+    - `app/lyrics_align.py` 新增 `sidecar_lrc_path()` / `write_sidecar_lrc()`（原子写）
+    - `_apply_aligned_lrc` 从「写缓存」改为「写同名 .lrc」；`_start_align` 前检查
+      同名 .lrc 已存在则弹覆盖确认；菜单/弹窗文案改为「转成 .lrc 文件」
+    - 同名 .lrc 是 `_resolve_lyrics` 第 2 级来源，比缓存更直观、可迁移、可手动管理
+  - 测试：`TestSidecarLrc` 5 项（路径 / 创建 / 覆盖 / 失败返回 None / 空入参）
+  - 验收：全量回归全绿，`ruff check .` 干净
+
 
 ## v2.1 验收命令
 

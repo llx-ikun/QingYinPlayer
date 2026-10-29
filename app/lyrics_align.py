@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QThread, Signal
 
 ALIGN_BASE = "https://api.lyrictimestamps.com"
-USER_AGENT = "QingYinPlayer/2.6.6 (+local desktop music player)"
+USER_AGENT = "QingYinPlayer/2.6.7 (+local desktop music player)"
 
 # 直传上限 30MB（两段式上传 120MB 暂不接，超了直接提示「文件过大」）。
 DIRECT_UPLOAD_LIMIT = 30 * 1024 * 1024
@@ -287,6 +288,38 @@ def align_lyrics(audio_path: str, lyrics_text: str, api_key: str, fetch=None,
         progress(100, "完成")
     message = f"对齐完成，但结果可能不准（{soft_fail_code}），请核对" if soft_fail else ""
     return AlignOutcome(lrc=lrc, soft_fail=soft_fail, error_message=message)
+
+
+# ---------- 同名 .lrc 落地（v2.6.7） ----------
+#
+# 对齐结果写成「歌曲同目录同名 .lrc」：播放器 `_resolve_lyrics` 第 2 级来源会
+# 自动识别同名 .lrc（晴天.mp3 → 晴天.lrc），比写缓存更直观、可迁移、可手动管理。
+
+
+def sidecar_lrc_path(audio_path: str) -> str:
+    """歌曲同目录同名 .lrc 的路径（去扩展名 + .lrc）。"""
+    return os.path.splitext(audio_path)[0] + ".lrc"
+
+
+def write_sidecar_lrc(audio_path: str, lrc: str) -> str | None:
+    """把 LRC 原子写到歌曲同目录同名 .lrc，返回写入路径；失败（目录不可写等）返回 None。
+
+    覆盖已有同名 .lrc 前由调用方确认；这里只负责原子写，不删不改其它文件。
+    """
+    if not audio_path or not lrc:
+        return None
+    path = sidecar_lrc_path(audio_path)
+    tmp = path + ".part"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(lrc)
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        return None
+    return path
 
 
 # ---------- 后台线程 ----------

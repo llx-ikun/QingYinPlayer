@@ -686,6 +686,20 @@ QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同
 | 对齐成功落地 | 写 `lyrics_cache/<id>.lrc` + 解除纯文本绑定 + 立即 `set_synced` 滚动 | `_apply_aligned_lrc` |
 | 不影响现有功能 | ✅ | 25 进程 **486 项全绿**；`ruff check .` 干净 |
 
+## v2.6.7 .txt 转 .lrc 文件（对齐产物写成同名 .lrc）
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 同名路径计算 | `sidecar_lrc_path` 去扩展名 + `.lrc`（晴天.mp3 → 晴天.lrc） | `TestSidecarLrc.test_path_strips_extension` |
+| 原子写入 | `write_sidecar_lrc` 用 `.part` + `os.replace`，成功返回路径 | `test_write_creates_file` |
+| 覆盖已有 | 同名 .lrc 已存在时覆盖为新对齐结果 | `test_write_overwrites_existing` |
+| 失败兜底 | 目录只读/写入失败返回 None，界面提示「未生成 .lrc」 | `test_write_failure_returns_none` |
+| 空入参 | 空路径或空歌词直接返回 None | `test_write_empty_returns_none` |
+| 覆盖确认 | `_start_align` 前若同名 .lrc 已存在，弹确认再覆盖 | `ui/main_window.py` |
+| 落地改动 | `_apply_aligned_lrc` 从写缓存改为写同名 .lrc + 解除纯文本绑定 | `_apply_aligned_lrc` |
+| 文案 | 右键「转成 .lrc 文件」；导入后询问「是否转成带时间轴的 .lrc」 | `ui/lyrics_panel.py` / `_maybe_offer_align` |
+| 不影响现有功能 | ✅ | 25 进程 **491 项全绿**；`ruff check .` 干净 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

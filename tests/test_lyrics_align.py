@@ -21,7 +21,9 @@ from app.lyrics_align import (
     _build_multipart,
     align_lyrics,
     describe_error,
+    sidecar_lrc_path,
     verify_key,
+    write_sidecar_lrc,
 )
 from app.models import Settings
 
@@ -248,6 +250,48 @@ class TestAlignWorker(unittest.TestCase):
             worker.soft_fail.connect(lambda tid, lrc: got.update(tid=tid, lrc=lrc))
             worker.run()
         self.assertEqual(got["lrc"], LRC_OK)
+
+
+class TestSidecarLrc(unittest.TestCase):
+    def test_path_strips_extension(self):
+        self.assertEqual(sidecar_lrc_path("/music/晴天.mp3"), "/music/晴天.lrc")
+        self.assertEqual(sidecar_lrc_path("/music/晴天.flac"), "/music/晴天.lrc")
+
+    def test_write_creates_file(self):
+        audio = _tmp_audio()
+        try:
+            path = write_sidecar_lrc(audio, LRC_OK)
+            self.assertEqual(path, sidecar_lrc_path(audio))
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), LRC_OK)
+        finally:
+            os.remove(sidecar_lrc_path(audio))
+            os.remove(audio)
+
+    def test_write_overwrites_existing(self):
+        audio = _tmp_audio()
+        sidecar = sidecar_lrc_path(audio)
+        try:
+            with open(sidecar, "w", encoding="utf-8") as f:
+                f.write("旧内容")
+            write_sidecar_lrc(audio, LRC_OK)
+            with open(sidecar, encoding="utf-8") as f:
+                self.assertEqual(f.read(), LRC_OK)
+        finally:
+            os.remove(sidecar)
+            os.remove(audio)
+
+    def test_write_failure_returns_none(self):
+        audio = _tmp_audio()
+        try:
+            with mock.patch("app.lyrics_align.open", side_effect=OSError("readonly")):
+                self.assertIsNone(write_sidecar_lrc(audio, LRC_OK))
+        finally:
+            os.remove(audio)
+
+    def test_write_empty_returns_none(self):
+        self.assertIsNone(write_sidecar_lrc("", LRC_OK))
+        self.assertIsNone(write_sidecar_lrc(_tmp_audio(), ""))
 
 
 class TestSettingsKeyPersist(unittest.TestCase):
