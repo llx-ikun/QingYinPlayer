@@ -887,11 +887,12 @@ class TestLyricsAutoscroll(unittest.TestCase):
 
 
 class TestLyricsMenu(unittest.TestCase):
-    """歌词右键菜单（v2.6.12）。
+    """歌词右键菜单（v2.6.12 / v2.7.0）。
 
-    坑的背景：两个对齐入口原来只差「本地 / 联网」两个字，用户点了本地那个、
+    历史坑：两个对齐入口原来只差「本地 / 联网」两个字，用户点了本地那个、
     又以为跑的是联网精确对齐，于是把「本地近似」的误差当成联网对齐的 bug 报上来。
-    所以文案必须能一眼区分，且偏移微调只在已有时间轴时可用。
+    v2.7.0 移除联网精确对齐后只保留本地近似对齐——因此断言只剩一个对齐入口、
+    写明「本地近似」，不再有联网入口；偏移微调只在已有时间轴时可用。
     """
 
     @classmethod
@@ -912,15 +913,14 @@ class TestLyricsMenu(unittest.TestCase):
     def _actions(self, panel) -> dict:
         return {a.text(): a for a in panel._build_menu().actions()}
 
-    def test_align_entries_are_distinguishable(self):
+    def test_single_local_align_entry(self):
+        """v2.7.0：只保留一个本地近似对齐入口，且不再有联网入口。"""
         labels = [t for t in self._actions(self._panel(False)) if "转成 .lrc" in t]
-        self.assertEqual(len(labels), 2, f"应有两个对齐入口：{labels}")
-        local = next(t for t in labels if "本地" in t)
-        online = next(t for t in labels if "联网" in t)
-        self.assertIn("近似", local, "本地对齐必须写明是近似结果")
-        self.assertIn("Key", local, "本地对齐要显示免 Key")
-        self.assertIn("精确", online, "联网对齐必须写明是精确结果")
-        self.assertIn("Key", online, "联网对齐要提示需要 Key")
+        self.assertEqual(len(labels), 1, f"应只有一个对齐入口：{labels}")
+        self.assertIn("本地", labels[0])
+        self.assertIn("近似", labels[0], "本地对齐必须写明是近似结果")
+        self.assertFalse(any("联网" in t for t in labels),
+                         "v2.7.0 已移除联网精确对齐，不应再有联网对齐入口")
 
     def test_shift_actions_disabled_without_synced_lyrics(self):
         actions = self._actions(self._panel(False))

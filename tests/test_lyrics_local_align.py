@@ -311,7 +311,7 @@ class TestWorker(unittest.TestCase):
                         return_value=type("O", (), {"lrc": None, "error_code": "decode_failed",
                                                     "error_message": ""})()):
             self._run(worker, failed=failed, timeout_ms=600)
-        self.assertEqual(failed, [("tid-2", "无法解码该音频（本地对齐支持 mp3/flac/wav/ogg，其余格式请用联网对齐）")])
+        self.assertEqual(failed, [("tid-2", "无法解码该音频（本地对齐支持 mp3/flac/wav/ogg，其余格式暂不支持）")])
 
 
 if __name__ == "__main__":

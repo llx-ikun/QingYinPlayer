@@ -197,8 +197,6 @@ class LyricsPanel(QWidget):
     search_online_requested = Signal()
     # 右键「转成 .lrc 文件（本地近似对齐）」：纯文本歌词本地对齐成 LRC（v2.6.9）
     align_local_requested = Signal()
-    # 右键「转成 .lrc 文件（联网精确对齐）」：联网 LyricTimestamps 对齐（v2.6.6，兜底）
-    align_lyrics_requested = Signal()
     # 右键「整体提前/延后 0.5s」：消掉对齐后的系统性偏移（v2.6.12）
     shift_lyrics_requested = Signal(int)
 
@@ -403,17 +401,12 @@ class LyricsPanel(QWidget):
         search = QAction("在线搜索歌词…", menu)
         search.triggered.connect(self.search_online_requested.emit)
         menu.addAction(search)
-        # 两个对齐入口名字必须能一眼区分：本地是纯信号处理估算（可能差几秒），
-        # 联网是上传音频做强制对齐（准，但要 Key）。旧文案只差「本地/联网」两个字，
-        # 实测过用户点错、以为跑的是联网对齐。
-        align_local = QAction("转成 .lrc 文件（本地近似·免 Key）", menu)
+        # 右键「转成 .lrc 文件（本地近似对齐）」：离线把纯文本歌词配成带时间轴 LRC。
+        # 纯信号处理估算（可能整体差几秒），配合下面的「整体提前/延后」微调。
+        align_local = QAction("转成 .lrc 文件（本地近似对齐）", menu)
         align_local.setStatusTip("离线分析音频节奏，大致跟唱；可能整体差几秒")
         align_local.triggered.connect(self.align_local_requested.emit)
         menu.addAction(align_local)
-        align_online = QAction("转成 .lrc 文件（联网精确·需 Key）", menu)
-        align_online.setStatusTip("上传音频做强制对齐，逐句卡准；需在设置里填 API Key")
-        align_online.triggered.connect(self.align_lyrics_requested.emit)
-        menu.addAction(align_online)
         menu.addSeparator()
         earlier = QAction("整体提前 0.5 秒", menu)
         earlier.setStatusTip("对齐后整条时间轴偏晚／偏早时微调（写回 .lrc）")

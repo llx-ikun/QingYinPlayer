@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 from app.covers import CoverProvider
 from app.filesize import file_size
 from app.lyrics import LyricLine, lyrics_from_text, shift_lrc, strip_meta_lines
-from app.lyrics_align import LyricsAlignWorker, sidecar_lrc_path, write_sidecar_lrc
+from app.lyrics_align import sidecar_lrc_path, write_sidecar_lrc
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
 from app.lyrics_multi import MultiSourceWorker
@@ -112,8 +112,8 @@ class MainWindow(QMainWindow):
         self._lyrics_cache: dict[str, tuple[list[LyricLine], list[str], str]] = {}
         # 联网补歌词（v2.2）：同一首只试一次；worker 自己持引用，结束后清掉
         self._lyrics_workers: dict[str, MultiSourceWorker] = {}
-        # 歌词对齐（v2.6.6 联网 / v2.6.9 本地）：纯文本 → LRC，同一首同时只跑一个
-        self._align_workers: dict[str, LyricsAlignWorker | LyricsLocalAlignWorker] = {}
+        # 歌词本地近似对齐（v2.6.9）：纯文本 → LRC，同一首同时只跑一个
+        self._align_workers: dict[str, LyricsLocalAlignWorker] = {}
         self._online_attempted: set[str] = set()
         # 当前是否处于「自定义背景」模式（面板半透明）；None = 无背景
         self._bg_scrim: float | None = None
@@ -277,11 +277,9 @@ class MainWindow(QMainWindow):
         # 歌词区右键「在线搜索歌词」（v2.6.4）：联网匹配失败时去网页自己搜
         self.now_playing.lyrics.search_online_requested.connect(
             self._open_lyrics_search)
-        # 歌词区右键「转成 .lrc 文件」：本地对齐（v2.6.9）优先，联网对齐（v2.6.6）兜底
+        # 歌词区右键「转成 .lrc 文件（本地近似对齐）」：纯文本 → 带时间轴 LRC
         self.now_playing.lyrics.align_local_requested.connect(
             self._align_lyrics_local_for_current)
-        self.now_playing.lyrics.align_lyrics_requested.connect(
-            self._align_lyrics_for_current)
         # 歌词区右键「整体提前/延后 0.5 秒」（v2.6.12）：对齐后的系统性偏移微调
         self.now_playing.lyrics.shift_lyrics_requested.connect(
             self._shift_current_lyrics)
@@ -780,66 +778,11 @@ class MainWindow(QMainWindow):
         self.now_playing.set_empty("正在本地对齐歌词…")
         self._toast("已开始本地对齐，请稍候", 2500)
 
-    def _align_lyrics_for_current(self) -> None:
-        """歌词区右键「转成 .lrc 文件（联网对齐）」：联网把纯文本转成带时间轴的 LRC。"""
-        track = self.player.current_track
-        if track is None:
-            self._toast("当前没有播放中的歌曲", 2000)
-            return
-        synced, plain, _source = self._lyrics_cache.get(track.id, ([], [], ""))
-        if synced:
-            self._toast("这首已是带时间轴的歌词，无需对齐", 2500)
-            return
-        if not plain:
-            self._toast("当前没有可对齐的纯文本歌词，请先导入歌词", 3000)
-            return
-        self._start_align(track, "\n".join(plain))
-
-    def _start_align(self, track: Track, plain_text: str) -> None:
-        """发起一次联网对齐：先检查 key 与重复任务，再开后台线程。"""
-        plain_text = (plain_text or "").strip()
-        if not plain_text:
-            self._toast("没有可对齐的歌词文本", 2500)
-            return
-        key = (self.store.settings.lyrics_align_api_key or "").strip()
-        if not key:
-            self._toast("联网精确对齐需要 API Key（设置 → 歌词与统计）；"
-                        "暂时可先用「本地近似对齐」", 5000)
-            return
-        if track.id in self._align_workers:
-            self._toast("这首歌正在对齐中，请稍候", 2000)
-            return
-        sidecar = sidecar_lrc_path(track.path)
-        if os.path.isfile(sidecar):
-            box = QMessageBox(self)
-            box.setWindowTitle("覆盖同名 .lrc")
-            box.setText(f"歌曲旁边已存在「{os.path.basename(sidecar)}」，转换会覆盖它。\n是否继续？")
-            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            box.setDefaultButton(QMessageBox.StandardButton.No)
-            if box.exec() != QMessageBox.StandardButton.Yes:
-                return
-        worker = LyricsAlignWorker(track.id, track.path, plain_text, key, self)
-        worker.done.connect(self._on_align_done)
-        worker.soft_fail.connect(self._on_align_soft_fail)
-        worker.failed.connect(self._on_align_failed)
-        worker.progress.connect(self._on_align_progress)
-        worker.finished.connect(lambda tid=track.id: self._align_workers.pop(tid, None))
-        self._align_workers[track.id] = worker
-        worker.start()
-        self.now_playing.set_empty("正在联网对齐歌词…")
-        self._toast("已开始联网对齐，请稍候（约 1~2 分钟）", 3000)
-
     def _on_align_progress(self, track_id: str, percent: int, stage: str) -> None:
         current = self.player.current_track
         if current is None or current.id != track_id:
             return
-        self.now_playing.set_empty(f"正在联网对齐歌词… {stage}")
-
-    def _on_align_done(self, track_id: str, lrc: str) -> None:
-        self._apply_aligned_lrc(track_id, lrc, soft_fail=False, source_label="来源：联网对齐")
-
-    def _on_align_soft_fail(self, track_id: str, lrc: str) -> None:
-        self._apply_aligned_lrc(track_id, lrc, soft_fail=True, source_label="来源：联网对齐")
+        self.now_playing.set_empty(f"正在对齐歌词… {stage}")
 
     def _on_align_done_local(self, track_id: str, lrc: str) -> None:
         self._apply_aligned_lrc(track_id, lrc, soft_fail=False,
@@ -881,9 +824,9 @@ class MainWindow(QMainWindow):
             self._toast("已生成 .lrc，但结果可能不准，请核对", 4000)
         elif approx:
             # 本地对齐是「有声段 + 字数」估算，前奏长会整体偏早，必须把话说清楚，
-            # 否则用户会以为拿到了精确时间轴（实测过有人以为跑的是联网对齐）。
+            # 否则用户会以为拿到了精确时间轴。
             self._toast("已生成 .lrc（本地近似对齐，可能整体差几秒）。"
-                        "不准可右键「整体提前/延后」微调，或配 Key 用联网精确对齐", 6000)
+                        "不准可右键「整体提前/延后」微调", 6000)
         else:
             self._toast(f"已生成同名 .lrc：{os.path.basename(sidecar)}，切歌自动识别", 3500)
 
@@ -1053,7 +996,7 @@ class MainWindow(QMainWindow):
         box.setText("检测到纯文本歌词（没有时间轴，不能跟歌滚动）。\n"
                     "是否转成带时间轴的 .lrc 文件？")
         box.setInformativeText("本地对齐：离线分析音频节奏，让歌词大致跟着唱；"
-                               "转换后生成同名 .lrc 到歌曲目录。想要更准可右键「联网对齐」。")
+                               "转换后生成同名 .lrc 到歌曲目录。")
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.Yes)
         if box.exec() == QMessageBox.StandardButton.Yes:
@@ -1214,11 +1157,6 @@ class MainWindow(QMainWindow):
                   "typewriter": "打字机", "karaoke": "颜色覆盖"}
         self._toast(f"歌词动效：{labels.get(effect, effect)}", 2000)
 
-    def _on_settings_align_key(self, key: str) -> None:
-        """保存联网歌词对齐 Key（不打印、不进日志）。"""
-        self.store.settings.lyrics_align_api_key = key or ""
-        self.store.save()
-
     def _toggle_theme(self) -> None:
         # 两态循环：深色 ↔ 浅色
         order = ui_theme.THEME_ORDER
@@ -1241,15 +1179,13 @@ class MainWindow(QMainWindow):
                                 bg_configs={"all": s.bg_all, "library": s.bg_library,
                                             "now_playing": s.bg_now},
                                 bg_scope=self._current_bg_page(),
-                                lyrics_effect=s.lyrics_effect,
-                                lyrics_align_api_key=s.lyrics_align_api_key)
+                                lyrics_effect=s.lyrics_effect)
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
         dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
         dialog.accent_changed.connect(self._on_settings_accent)
         dialog.font_scale_changed.connect(self._on_settings_font_scale)
         dialog.lyrics_effect_changed.connect(self._on_settings_lyrics_effect)
-        dialog.lyrics_align_api_key_changed.connect(self._on_settings_align_key)
         dialog.background_changed.connect(self._on_settings_background)
         dialog.storage_changed.connect(self._on_storage_changed)
         dialog.exec()
@@ -1644,7 +1580,7 @@ class MainWindow(QMainWindow):
         for worker in list(self._lyrics_workers.values()):
             worker.wait(2000)
         self._lyrics_workers.clear()
-        # 联网对齐歌词的线程同样要等它收尾（v2.6.6）
+        # 本地对齐歌词的线程同样要等它收尾（v2.6.9）
         for worker in list(self._align_workers.values()):
             worker.wait(2000)
         self._align_workers.clear()

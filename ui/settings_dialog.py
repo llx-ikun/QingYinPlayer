@@ -128,15 +128,13 @@ class SettingsDialog(QDialog):
     accent_changed = Signal(str)         # "#rrggbb"，"" = 跟随主题默认
     font_scale_changed = Signal(float)
     lyrics_effect_changed = Signal(str)  # none / zoom / typewriter / karaoke
-    lyrics_align_api_key_changed = Signal(str)  # 联网歌词对齐 Key（v2.6.6）
     background_changed = Signal(str, object)   # (作用域, BackgroundConfig)
     storage_changed = Signal(str)        # 数据目录搬到的新位置（需重启生效）
 
     def __init__(self, theme_name: str, nickname: str, stats: dict, parent=None,
                  online_lyrics: bool = True, accent_color: str = "",
                  font_scale: float = 1.0, bg_configs: dict | None = None,
-                 bg_scope: str = "all", lyrics_effect: str = "none",
-                 lyrics_align_api_key: str = ""):
+                 bg_scope: str = "all", lyrics_effect: str = "none"):
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
@@ -145,7 +143,6 @@ class SettingsDialog(QDialog):
         self._accent = (accent_color or "").lower()
         self._font_scale = font_scale
         self._lyrics_effect = lyrics_effect if lyrics_effect in LYRICS_EFFECTS else "none"
-        self._lyrics_align_api_key = lyrics_align_api_key or ""
         self._loading = False
         self._bg_scope = bg_scope if bg_scope in ("all", "library", "now_playing") else "all"
         self._bg: dict[str, BackgroundConfig] = {}
@@ -390,20 +387,6 @@ class SettingsDialog(QDialog):
         effect_hint.setWordWrap(True)
         root.addWidget(effect_hint)
 
-        root.addSpacing(4)
-        align_label = QLabel("歌词对齐 Key（纯文本 → 带时间轴 LRC）")
-        align_label.setWordWrap(True)
-        root.addWidget(align_label)
-        self.align_key_edit = QLineEdit(self._lyrics_align_api_key)
-        self.align_key_edit.setPlaceholderText("在 lyrictimestamps.com 注册获取，ltk_ 开头")
-        self.align_key_edit.editingFinished.connect(self._on_align_key_edited)
-        root.addWidget(self.align_key_edit)
-        align_hint = QLabel("仅当你导入了没有时间戳的纯文本歌词、想让它跟歌滚动时才需要；"
-                            "会联网上传音频，免费额度约 15 分钟/月。Key 只存在本机。")
-        align_hint.setObjectName("Dim")
-        align_hint.setWordWrap(True)
-        root.addWidget(align_hint)
-
         root.addSpacing(6)
         stats_text = (
             f"曲目 {stats.get('tracks', 0)} 首 · 歌单 {stats.get('playlists', 0)} 个 · "
@@ -602,11 +585,6 @@ class SettingsDialog(QDialog):
         value = self.effect_combo.itemData(index)
         if value is not None and not self._loading:
             self.lyrics_effect_changed.emit(value)
-
-    def _on_align_key_edited(self) -> None:
-        """对齐 Key 输完（焦点离开/回车）才保存，避免每敲一个字符就写盘。"""
-        if not self._loading:
-            self.lyrics_align_api_key_changed.emit(self.align_key_edit.text().strip())
 
     # ---------- 背景 ----------
 

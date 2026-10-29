@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """本地歌词对齐：把纯文本歌词配到音频时间轴，产出 LRC（无需联网、无需 Key）。
 
-与 `app/lyrics_align.py`（联网 LyricTimestamps）的区别：这里**完全本地**完成，
-不依赖外部服务、不上传音频、零额度限制。代价是精度是「近似对齐」而非「逐字
-卡点」——适合「让歌词大致跟着唱、别一整坨不动」的场景；想要精准卡点仍可走联网。
+**完全本地**完成，不依赖外部服务、不上传音频、零额度限制。精度是「近似对齐」而非
+「逐字卡点」——适合「让歌词大致跟着唱、别一整坨不动」的场景；对齐结果由
+`app/lyrics_align.py` 写成歌曲同目录同名 .lrc。
 
 算法（纯信号处理，无 AI 模型）：
 1. 解码音频到 mono 16kHz 的 float32 采样（miniaudio，纯 C，无 numpy）；
@@ -54,8 +54,8 @@ class LocalAlignOutcome:
 
 _ERROR_MESSAGES = {
     "no_audio": "音频文件不存在或不可读",
-    "decode_failed": "无法解码该音频（本地对齐支持 mp3/flac/wav/ogg，其余格式请用联网对齐）",
-    "no_decoder": "缺少音频解码组件（miniaudio / cffi），本地对齐不可用，请改用联网对齐",
+    "decode_failed": "无法解码该音频（本地对齐支持 mp3/flac/wav/ogg，其余格式暂不支持）",
+    "no_decoder": "缺少音频解码组件（miniaudio / cffi），本地对齐不可用",
     "no_lyrics": "没有可对齐的歌词文本",
     "already_synced": "这首已是带时间轴的歌词，无需对齐",
     "read_failed": "读取音频文件失败",
