@@ -68,11 +68,11 @@ python -m venv .venv
 # 2. 运行（开发模式）
 .venv/Scripts/python.exe main.py
 
-# 3. 运行测试（535 项：单测 + offscreen E2E，27 个独立进程）
+# 3. 运行测试（543 项：单测 + offscreen E2E，28 个独立进程）
 .venv/Scripts/python.exe run_tests.py
 # 无显示器的 headless 环境（如 CI）自动加 QT_QPA_PLATFORM=offscreen
 
-# 4. 打包（生成图标 + 单文件版 + 目录版 + 冒烟测试）
+# 4. 打包（单文件版 + 目录版 + 冒烟测试；图标缺失时才自动补一个占位）
 .venv/Scripts/python.exe build.py
 ```
 
@@ -87,7 +87,7 @@ python -m venv .venv
 music-player/
 ├── main.py               # 入口（--check 环境自检 / --smoke 产物自检）
 ├── build.py              # 图标生成 + PyInstaller 打包
-├── run_tests.py          # 全量回归入口（27 个独立进程）
+├── run_tests.py          # 全量回归入口（28 个独立进程）
 ├── app/                  # 后端核心（无 UI 依赖，可单测）
 │   ├── models.py         #   Track / Playlist / Settings / 排序预设
 │   ├── store.py          #   JSON 持久化 + 曲库/歌单 CRUD + 收藏
@@ -124,11 +124,13 @@ music-player/
 ├── tests/                # 单测 + E2E + 夹具生成器
 ├── tools/                # 视觉自审截图与探针工具（开发辅助）
 ├── docs/history/         # 历史交付说明、预览与早期脚本归档
-└── assets/app.ico        # 应用图标（构建时生成）
+└── assets/app.ico        # 应用图标（正式图标在真实桌面下生成，见「已知事项」）
 ```
 
 ## 已知事项
 
+- **打包依赖 cffi**：本地歌词对齐用 miniaudio，它的 `_miniaudio.pyd` 在 C 层 `import _cffi_backend`，PyInstaller 的 PE 依赖扫描看不到这种运行时导入，所以 `build.py` 显式加了 `--hidden-import _cffi_backend`；`main.py --smoke` 还会探一次解码器，缺了直接让构建失败，避免「界面正常、点本地对齐才报缺组件」的半成品出厂；
+- **构建日志不是 UTF-8**：windowed 产物（PyInstaller `runw.exe`）重定向到文件时按系统代码页写（中文 Windows 为 cp936），且不认 `PYTHONIOENCODING`；`build.py` 读日志时 utf-8 → gbk 回退，`tests/test_build.py` 有回归。
 - **m4a/aac**：无真实样本在本环境验证过（无转码工具），代码路径与 mp3/flac 相同，FFmpeg AAC 解码为标准能力，预期可用但未实测；
 - 构建沙箱无音频渲染设备，「声音输出与播放进度自动推进」已在开发环境之外验证（状态机/seek/音量/解码加载均通过自动化测试），最终声音效果请以本机双击运行为准；
 - 超大曲库（>5000 首）首次导入会稍慢，列表渲染为逐行控件，滚动流畅度以千首级为设计目标；

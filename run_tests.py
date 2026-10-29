@@ -68,6 +68,9 @@ MODULES = [
     "tests.test_e2e_video.TestE2EVideo",
     # v2.6 数据目录：优先级解析 / 指针文件 / 便携模式 / 迁移与失败回滚（纯逻辑）
     "tests.test_storage",
+    # v2.6.9 构建辅助：自检日志的编码回退（windowed 产物写 cp936，
+    # 只按 utf-8 读会把失败诊断整片变成乱码）
+    "tests.test_build",
 ]
 
 

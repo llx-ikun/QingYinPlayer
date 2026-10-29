@@ -1390,3 +1390,37 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
 - 关键坑：miniaudio 中文路径 -7；`array.array` 切片返回新 array、纯 Python 遍历足够快；
   LRC 时间戳必须 `[mm:ss.xx]` 百分秒（`parse_lrc` 只认 mm:ss 两位百分秒/三位毫秒）。
 
+
+## 30. v2.6.9 打包事故复盘：cffi 后端漏收 + smoke 挂死（2026-10-29）
+
+版本号升到 2.6.9 后打包，`dist/QingYinPlayer.exe` 能产出，但 `--smoke` **永久挂住**
+（19 分钟无返回）。逐层排查后的两个独立问题：
+
+1. **`_cffi_backend` 没被收进包**（真正的 bug）
+   - 现象：`--smoke` 无输出、无返回码；把子进程输出重定向到文件后才看到
+     `ModuleNotFoundError: No module named '_cffi_backend'`（`miniaudio.py` → `_miniaudio.pyd`）。
+   - 原因：`_miniaudio.pyd` 在 **C 层运行时** `import _cffi_backend`，PyInstaller 的
+     PE 依赖扫描只看静态导入表，看不到这类运行时导入，于是 cffi 的编译后端被漏收。
+   - 修法：`build.py` 加 `--hidden-import _cffi_backend`；`requirements.txt` 显式声明
+     `cffi`（它此前只是 miniaudio 的传递依赖）。
+   - 结构性加固：`app/lyrics_local_align.py` 改成**延迟导入** miniaudio（`_decoder()`），
+     并把解码器不可用映射成新的 `no_decoder` 错误码。理由：本地对齐是可选能力，
+     它的依赖缺失绝不该让主程序连窗口都起不来 —— 最坏只是「本地对齐不可用，请走联网」。
+2. **`smoke_test` 用了会挂死的管道**（放大器，不是根因）
+   - onefile 是父子进程，子进程继承 stdout 管道句柄；`subprocess.run(capture_output=True)`
+     在超时杀掉父进程后仍等不到 EOF。叠加 windowed 产物异常时会弹**错误对话框**等人点
+     确定，返回码永远拿不到 → 构建无限等待。
+   - 修法：输出重定向到临时文件 + `Popen` + 超时 `taskkill /T /F` 杀整棵树 + 失败时把
+     已写日志打出来（`_real_platform_check` 早就这么写了，这次把 `smoke_test` 补齐）。
+
+验证（两变体都过）：
+- `dist/QingYinPlayer.exe --smoke <夹具>` → `smoke decoder: miniaudio OK` /
+  `smoke media: status=BufferedMedia duration=2037ms` / `smoke ok (含音频解码)`；
+- `dist/QingYinPlayer-Portable/QingYinPlayer-Portable.exe --smoke` → `smoke ok`；
+- 真实平台检查两变体各持续运行 8s 未崩溃；产物 67.4 MB（单文件）/ 5.1 MB + `_internal`。
+
+附带修正：
+- `_read_logs` 不再假设日志是 UTF-8 —— windowed 产物按 cp936 写且不认
+  `PYTHONIOENCODING`，改 utf-8 → gbk 回退，否则失败诊断整片变成替换字符（`tests/test_build.py`）；
+- `build.py` 的 `generate_icon()` 改为**仅图标缺失时**才生成：offscreen 下字体库为空，
+  无条件生成会把仓库里的正式图标降级覆盖（本轮就靠手工注释+备份绕，属于易踩的坑）。

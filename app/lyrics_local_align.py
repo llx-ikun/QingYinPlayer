@@ -17,6 +17,11 @@
 - `miniaudio.decode` 返回的 `samples` 是 `array.array('f')`，纯 Python 分帧算 RMS
   对一首 3 分钟歌只要 ~0.2s，不必引入 numpy。
 - LRC 时间戳用 `[mm:ss.xx]`（百分秒），与 `app/lyrics.parse_lrc` 兼容。
+- **miniaudio 必须延迟导入**（见下方 `_decoder()`）。它是可选解码依赖，模块顶层
+  `import miniaudio` 会让 `_miniaudio.pyd` 在启动时就去载 cffi 的编译后端
+  `_cffi_backend`；一旦这个 .pyd 没被 PyInstaller 收进包里，整个主程序连窗口都
+  起不来（v2.6.9 打包实测：ModuleNotFoundError: _cffi_backend，且 windowed 产物
+  还会弹错误框把构建挂死）。延迟导入后最坏结果只是「本地对齐不可用」。
 """
 from __future__ import annotations
 
@@ -25,7 +30,6 @@ import statistics
 from array import array
 from dataclasses import dataclass
 
-import miniaudio
 from PySide6.QtCore import QThread, Signal
 
 from app.lyrics import lyrics_from_text
@@ -51,10 +55,19 @@ class LocalAlignOutcome:
 _ERROR_MESSAGES = {
     "no_audio": "音频文件不存在或不可读",
     "decode_failed": "无法解码该音频（本地对齐支持 mp3/flac/wav/ogg，其余格式请用联网对齐）",
+    "no_decoder": "缺少音频解码组件（miniaudio / cffi），本地对齐不可用，请改用联网对齐",
     "no_lyrics": "没有可对齐的歌词文本",
     "already_synced": "这首已是带时间轴的歌词，无需对齐",
     "read_failed": "读取音频文件失败",
 }
+
+
+class AudioDecoderUnavailable(RuntimeError):
+    """音频解码器不可用：miniaudio 未安装，或打包漏收了 cffi 的 `_cffi_backend`。"""
+
+
+class AudioDecodeFailed(RuntimeError):
+    """文件能打开但解不出采样（损坏、编码不支持等）。"""
 
 
 def describe_error(code: str) -> str:
@@ -64,20 +77,41 @@ def describe_error(code: str) -> str:
 # ---------- 解码 ----------
 
 
+def _decoder():
+    """延迟导入 miniaudio，返回模块。
+
+    抽成独立函数有两个理由：一是让 `import` 发生在真正要用解码器的时候，避免
+    可选依赖把主程序启动一起拖死；二是测试可以 patch 这里模拟「解码器缺失」，
+    无需真的卸载依赖。导入失败统一抛 `AudioDecoderUnavailable`。
+    """
+    try:
+        import miniaudio
+    except Exception as exc:  # ImportError / OSError(DLL 加载失败) 都算不可用
+        raise AudioDecoderUnavailable(f"{type(exc).__name__}: {exc}") from exc
+    return miniaudio
+
+
 def decode_mono(audio_path: str, target_sr: int = TARGET_SR) -> tuple[array, int]:
     """解码音频为 mono float32 采样，返回 `(samples, sample_rate)`。
 
     `samples` 是 `array.array('f')`。用 `open().read()` + `decode(bytes)` 而非
     `decode_file(path)`，绕开 miniaudio 对中文路径的 ANSI 解码失败。
+
+    解码器不可用抛 `AudioDecoderUnavailable`，解码失败抛 `AudioDecodeFailed`，
+    读文件失败仍按 OSError 系列抛出（调用方自己区分）。
     """
+    decoder = _decoder()
     with open(audio_path, "rb") as f:
         data = f.read()
-    decoded = miniaudio.decode(
-        data,
-        output_format=miniaudio.SampleFormat.FLOAT32,
-        nchannels=1,
-        sample_rate=target_sr,
-    )
+    try:
+        decoded = decoder.decode(
+            data,
+            output_format=decoder.SampleFormat.FLOAT32,
+            nchannels=1,
+            sample_rate=target_sr,
+        )
+    except Exception as exc:
+        raise AudioDecodeFailed(str(exc)) from exc
     return decoded.samples, decoded.sample_rate
 
 
@@ -212,10 +246,12 @@ def align_local(audio_path: str, lyrics_text: str, progress=None) -> LocalAlignO
         progress(10, "解码音频…")
     try:
         samples, sample_rate = decode_mono(audio_path)
+    except AudioDecoderUnavailable:
+        return LocalAlignOutcome(error_code="no_decoder")
+    except AudioDecodeFailed:
+        return LocalAlignOutcome(error_code="decode_failed")
     except FileNotFoundError:
         return LocalAlignOutcome(error_code="no_audio")
-    except miniaudio.DecodeError:
-        return LocalAlignOutcome(error_code="decode_failed")
     except OSError:
         return LocalAlignOutcome(error_code="read_failed")
     total_ms = len(samples) * 1000 // sample_rate

@@ -181,6 +181,39 @@ class TestAlignLocal(unittest.TestCase):
             f.write(b"this is not audio")
         self.assertEqual(align_local(bad, "歌词").error_code, "decode_failed")
 
+    def test_missing_decoder_degrades_to_no_decoder(self):
+        """miniaudio 不可用（打包漏收 _cffi_backend）只该降级，不该抛出。
+
+        `sys.modules[name] = None` 会让 `import name` 直接抛 ImportError，正好
+        模拟「解码器装不上」而无需真的卸载依赖。
+        """
+        import app.lyrics_local_align as la
+        with mock.patch.dict(sys.modules, {"miniaudio": None}):
+            with self.assertRaises(la.AudioDecoderUnavailable):
+                decode_mono(self.wav)
+            outcome = align_local(self.wav, "第一句\n第二句")
+        self.assertEqual(outcome.error_code, "no_decoder")
+        self.assertIn("解码组件", la.describe_error("no_decoder"))
+
+    def test_module_import_does_not_require_decoder(self):
+        """模块顶层不许 import miniaudio —— 否则可选依赖会把主程序启动一起拖死。
+
+        在子进程里把 sys.modules['miniaudio'] 置 None 再导入本模块：若顶层有
+        `import miniaudio` 就会抛 ImportError，子进程非零退出即判失败。
+        """
+        import subprocess
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        env.pop("PYTHONPATH", None)
+        code = ("import sys; sys.modules['miniaudio'] = None; "
+                "import app.lyrics_local_align as m; print('IMPORT_OK')")
+        proc = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=120)
+        self.assertEqual(proc.returncode, 0,
+                         f"顶层导入了 miniaudio？stderr={proc.stderr[-500:]}")
+        self.assertIn("IMPORT_OK", proc.stdout)
+
 
 class TestWorker(unittest.TestCase):
     def _run(self, worker, done=None, failed=None, timeout_ms=4000):

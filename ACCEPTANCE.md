@@ -730,7 +730,22 @@ QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同
 | 后台线程 | worker 分发 done / failed 两态信号 | `TestWorker` 2 项 |
 | 本地优先 | 导入纯文本后询问默认走本地对齐；右键「本地对齐」置顶、「联网对齐」兜底 | `_maybe_offer_align` / `lyrics_panel._show_menu` |
 | 来源区分 | `_apply_aligned_lrc` 按本地/联网标注「来源：本地对齐 / 联网对齐」 | `main_window.py` |
-| 不影响现有功能 | ✅ | 27 进程 **535 项全绿**；`ruff check .` 干净 |
+| 错误降级 | 解码器缺失（打包漏收 `_cffi_backend`）→ `no_decoder` 中文提示，不抛异常 | `test_missing_decoder_degrades_to_no_decoder` |
+| 可选依赖不拖启动 | `app/lyrics_local_align` 顶层不 import miniaudio（子进程屏蔽该模块后仍可导入） | `test_module_import_does_not_require_decoder` |
+| 不影响现有功能 | ✅ | 28 进程 **543 项全绿**；`ruff check .` 干净 |
+
+## v2.6.9 打包验收（更新版本）
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 单文件产物 | ✅ 67.4 MB，`--smoke <夹具>` 返回 0 | `EXIT 0 in 4.3s` |
+| 解码器入包 | ✅ 冻结产物里 `import miniaudio` 成功 | 自检输出 `smoke decoder: miniaudio OK` |
+| 音频解码链路 | ✅ `status=BufferedMedia duration=2037ms` | 自检输出 `smoke ok (含音频解码)` |
+| 目录版产物 | ✅ `--smoke` 返回 0 | `smoke ok` |
+| 真实平台检查 | ✅ 两变体各持续运行 8s 未崩溃 | `build.py` 输出 |
+| 构建不会挂死 | ✅ 超时杀进程树 + 日志落文件（原管道方案挂过 19 分钟） | `build.py:smoke_test` |
+| 失败日志可读 | ✅ cp936 日志按 utf-8→gbk 回退解码 | `tests/test_build.py` 4 项 |
+| 正式图标未被降级 | ✅ md5 `9f4bdcdf12d625c16cc998e4f7ae40f0` 前后一致 | `md5sum assets/app.ico` |
 
 ## v2.0 修复的缺陷
 

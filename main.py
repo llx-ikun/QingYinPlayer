@@ -67,6 +67,17 @@ def main() -> int:
         from app.metadata import read_track
         from ui.main_window import MainWindow
 
+        # 本地歌词对齐依赖 miniaudio（_miniaudio.pyd 在 C 层 import _cffi_backend）。
+        # 打包最常见的事故就是漏收 _cffi_backend：界面一切正常，用户点「本地对齐」
+        # 才报缺组件（v2.6.9 实测）。自检里显式探一次，让问题在构建阶段就暴露，
+        # 而不是带着坏功能出厂。
+        try:
+            import miniaudio  # noqa: F401
+        except Exception as exc:  # noqa: BLE001 - 任何加载失败都算打包残缺
+            print(f"smoke fail: 本地对齐解码器不可用（{type(exc).__name__}: {exc}）")
+            return 1
+        print("smoke decoder: miniaudio OK")
+
         app = QApplication(sys.argv[:1])
         app.setApplicationName(APP_NAME)
         _apply_app_icon(app)

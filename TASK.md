@@ -646,9 +646,27 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
   - 关键坑：miniaudio `decode_file` 对**中文路径**解码失败（-7，C 层 ANSI）→ 走
     `decode(bytes)`；`samples` 是 `array.array('f')`，纯 Python 分帧 RMS 够快无需 numpy；
     LRC 时间戳用 `[mm:ss.xx]` 百分秒与 `parse_lrc` 兼容
-  - 测试：`tests/test_lyrics_local_align.py` 15 项（标准库 wave 生成正弦波+静音合成音频，
-    断言解码/静音检测/时间戳分配/LRC/worker）
+  - 测试：`tests/test_lyrics_local_align.py` 17 项（标准库 wave 生成正弦波+静音合成音频，
+    断言解码/静音检测/时间戳分配/LRC/worker；含「解码器缺失优雅降级」「顶层不得 import
+    miniaudio」两项打包防回归）
   - 验收：全量回归全绿，`ruff check .` 干净
+
+- [x] **Y14** 更新版本：v2.6.9 打包（修 cffi 漏收 + smoke 挂死）
+  - 需求：用户「更新软件版本」
+  - 阻塞：产物能编出来，但 `--smoke` 永久挂住 → 定位到两个独立问题
+  - 修复：
+    - `build.py` 加 `--hidden-import _cffi_backend`（`_miniaudio.pyd` 在 C 层运行时
+      import，PE 扫描抓不到）；`requirements.txt` 显式声明 `cffi`
+    - `app/lyrics_local_align.py` 改延迟导入（`_decoder()`）+ 新增 `no_decoder` 错误码：
+      可选依赖缺失不得让主程序起不来
+    - `build.py` 的 `smoke_test` 重写为 Popen + 文件重定向 + 超时 `taskkill /T` 杀树
+      （原 `subprocess.run(capture_output=True)` 在 onefile 子进程弹错误框时永久等 EOF）
+    - `main.py --smoke` 增加解码器探测，缺 miniaudio 直接让构建失败
+    - `build.py` 的 `_read_logs` utf-8 → gbk 回退（windowed 产物按 cp936 写日志）
+    - `build.py` 的 `generate_icon()` 改为仅图标缺失时生成，避免 offscreen 覆盖正式图标
+  - 测试：新增 `tests/test_build.py` 4 项；`test_lyrics_local_align.py` +2 项
+  - 验收：28 进程 **543 项全绿**；两变体 smoke + 真实平台检查通过；`assets/app.ico`
+    md5 仍为 `9f4bdcdf12d625c16cc998e4f7ae40f0`
 
 
 ## v2.1 验收命令

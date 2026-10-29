@@ -127,6 +127,11 @@ def _pyinstaller(onefile: bool) -> str:
         "--specpath", os.path.join(HERE, "build"),
         # 把图标随包带上，供运行时 app.setWindowIcon 显式设置（双保险）
         "--add-data", f"{ICON_PATH}{os.pathsep}assets",
+        # miniaudio 的 _miniaudio.pyd 在 C 层 `import _cffi_backend`，PE 依赖扫描
+        # 抓不到这种运行时导入，PyInstaller 会漏收 —— 打包后一启动就
+        # ModuleNotFoundError: No module named '_cffi_backend'（v2.6.9 实测，
+        # 而且 windowed 产物还会弹错误框，把构建挂在 smoke 上）。必须显式声明。
+        "--hidden-import", "_cffi_backend",
     ]
     if onefile:
         cmd.append("--onefile")
@@ -140,20 +145,75 @@ def _pyinstaller(onefile: bool) -> str:
     return exe
 
 
-def smoke_test(exe: str, audio_file: str | None = None) -> None:
-    """离屏启动产物，验证主窗口可创建；附带音频时验证解码链路。"""
+def smoke_test(exe: str, audio_file: str | None = None, timeout_s: int = 180) -> None:
+    """离屏启动产物，验证主窗口可创建；附带音频时验证解码链路。
+
+    实现要点（v2.6.9 事故后重写，勿退回 `subprocess.run(capture_output=True)`）：
+    - onefile 是父子进程：子进程会继承 stdout 管道句柄，一旦子进程卡住，杀父进程
+      后 `communicate()` 仍等不到 EOF，整个构建永久挂死。所以输出**重定向到临时
+      文件**，不从管道读；
+    - 超时用 `taskkill /T /F` 杀整棵树，别只杀父进程；
+    - windowed 产物在子进程异常时会弹一个错误对话框等人点确定 —— 这既会挂死构建，
+      又会让「返回码」永远拿不到。杀树后把已经写到文件里的 traceback 打出来，
+      才能看到真正的原因（这次就是靠它定位到 _cffi_backend 的）。
+    """
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     env.pop("PYTHONPATH", None)
     cmd = [exe, "--smoke"] + ([audio_file] if audio_file else [])
     print(f"smoke test: {' '.join(cmd)}")
-    result = subprocess.run(cmd, env=env, cwd=HERE, timeout=90,
-                            capture_output=True, text=True, encoding="utf-8", errors="replace")
-    tail = (result.stdout or "").strip().splitlines()[-1:] or [(result.stderr or "").strip()[-200:]]
-    if result.returncode != 0:
-        print(result.stdout)
-        print(result.stderr)
-        raise SystemExit(f"smoke test 失败，返回码 {result.returncode}")
-    print("smoke test 通过:", tail)
+    td = tempfile.mkdtemp(prefix="qy_smoke_log_")
+    try:
+        out_path = os.path.join(td, "stdout.log")
+        err_path = os.path.join(td, "stderr.log")
+        with open(out_path, "wb") as fo, open(err_path, "wb") as fe:
+            proc = subprocess.Popen(cmd, env=env, cwd=HERE, stdout=fo, stderr=fe)
+            timed_out = False
+            try:
+                proc.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                               capture_output=True)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=10)
+        out, err = _read_logs(out_path, err_path)
+        if timed_out:
+            print(out)
+            print(err)
+            raise SystemExit(f"smoke test 超时（{timeout_s}s），已强制结束进程树: {os.path.basename(exe)}")
+        if proc.returncode != 0:
+            print(out)
+            print(err)
+            raise SystemExit(f"smoke test 失败，返回码 {proc.returncode}")
+        tail = out.strip().splitlines()[-1:] or [err.strip()[-200:]]
+        print("smoke test 通过:", tail)
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _read_logs(*paths: str) -> tuple[str, ...]:
+    """读回 smoke/自检的重定向日志，缺文件按空串处理。
+
+    windowed 产物（PyInstaller runw.exe）在重定向到文件时按**系统代码页**写
+    （中文 Windows 是 cp936），不认 PYTHONIOENCODING——实测设了也还是 GBK。
+    所以这里按字节读、先试 utf-8 再退 gbk，保证失败时的中文报错可读。
+    """
+    texts = []
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            raw = b""
+        for encoding in ("utf-8", "gbk"):
+            try:
+                texts.append(raw.decode(encoding))
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            texts.append(raw.decode("utf-8", "replace"))
+    return tuple(texts)
 
 
 def _cleanup_intermediate_exes() -> None:
@@ -208,13 +268,7 @@ def _real_platform_check(exe: str, timeout_s: int = 8) -> None:
                     proc.wait(timeout=10)
                 print(f"真实平台检查通过: {os.path.basename(exe)} 持续运行 {timeout_s}s 未崩溃")
                 return
-        out = ""
-        for p in (out_path, err_path):
-            try:
-                with open(p, "r", encoding="utf-8", errors="replace") as f:
-                    out += f.read()
-            except OSError:
-                pass
+        out = "".join(_read_logs(out_path, err_path))
         low = out.lower()
         if "platform plugin" in low or "could not" in low:
             tail = out.strip().splitlines()[-1] if out.strip() else ""
@@ -234,7 +288,11 @@ def main() -> None:
     from tests.make_fixtures import ensure_fixtures
     fixture_audio = os.path.join(ensure_fixtures(), "晴天 - 周杰伦.mp3")
 
-    generate_icon()
+    # 注意：generate_icon() 在 offscreen 下字体库为空，会直接把 ♫ 画成方块写入
+    # assets/app.ico，把仓库里的正式图标降级覆盖。要改图标请在**真实桌面**下单独跑
+    # （见 README「图标」一节），构建流程本身只在图标缺失时才补一个占位。
+    if not os.path.exists(ICON_PATH):
+        generate_icon()
     # 清理旧产物
     for path in (os.path.join(HERE, "dist"), os.path.join(HERE, "build")):
         if os.path.isdir(path):

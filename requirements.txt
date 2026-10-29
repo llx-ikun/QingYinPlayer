@@ -2,3 +2,4 @@
 PySide6>=6.12,<7
 mutagen>=1.47
 miniaudio>=1.5    # 本地歌词对齐：解码音频算能量（纯 C，无 numpy）
+cffi>=1.15        # miniaudio 的 _miniaudio.pyd 运行时依赖 _cffi_backend，打包也必须显式收
