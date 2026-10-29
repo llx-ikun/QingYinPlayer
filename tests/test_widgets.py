@@ -886,6 +886,58 @@ class TestLyricsAutoscroll(unittest.TestCase):
         self.assertGreater(values[-1], values[0], "整段播放应确实向下滚动")
 
 
+class TestLyricsMenu(unittest.TestCase):
+    """歌词右键菜单（v2.6.12）。
+
+    坑的背景：两个对齐入口原来只差「本地 / 联网」两个字，用户点了本地那个、
+    又以为跑的是联网精确对齐，于是把「本地近似」的误差当成联网对齐的 bug 报上来。
+    所以文案必须能一眼区分，且偏移微调只在已有时间轴时可用。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def _panel(self, synced: bool):
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        if synced:
+            panel.set_synced([LyricLine(1000, "第一句"), LyricLine(5000, "第二句")])
+        else:
+            panel.set_plain(["第一句", "第二句"])
+        return panel
+
+    def _actions(self, panel) -> dict:
+        return {a.text(): a for a in panel._build_menu().actions()}
+
+    def test_align_entries_are_distinguishable(self):
+        labels = [t for t in self._actions(self._panel(False)) if "转成 .lrc" in t]
+        self.assertEqual(len(labels), 2, f"应有两个对齐入口：{labels}")
+        local = next(t for t in labels if "本地" in t)
+        online = next(t for t in labels if "联网" in t)
+        self.assertIn("近似", local, "本地对齐必须写明是近似结果")
+        self.assertIn("Key", local, "本地对齐要显示免 Key")
+        self.assertIn("精确", online, "联网对齐必须写明是精确结果")
+        self.assertIn("Key", online, "联网对齐要提示需要 Key")
+
+    def test_shift_actions_disabled_without_synced_lyrics(self):
+        actions = self._actions(self._panel(False))
+        self.assertFalse(actions["整体提前 0.5 秒"].isEnabled())
+        self.assertFalse(actions["整体延后 0.5 秒"].isEnabled())
+
+    def test_shift_actions_emit_half_second(self):
+        panel = self._panel(True)
+        got = []
+        panel.shift_lyrics_requested.connect(got.append)
+        actions = self._actions(panel)
+        self.assertTrue(actions["整体提前 0.5 秒"].isEnabled())
+        actions["整体提前 0.5 秒"].trigger()
+        actions["整体延后 0.5 秒"].trigger()
+        self.assertEqual(got, [-500, 500])
+
+
 class TestIconRendering(unittest.TestCase):
     """图标按设备像素渲染（v2.5）：高分屏上不能把 16px 位图放大糊掉。"""
 

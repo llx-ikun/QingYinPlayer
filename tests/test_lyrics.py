@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.lyrics import (LyricLine, format_lrc, format_lrc_stamp, format_time,
                         has_cjk, is_bilingual_alternating, lyric_index_at,
                         lyrics_from_text, merge_translations, pair_bilingual,
-                        parse_lrc, parse_plain, strip_meta_lines)
+                        parse_lrc, parse_plain, shift_lrc, strip_meta_lines)
 
 
 class TestParseLrc(unittest.TestCase):
@@ -250,6 +250,73 @@ class TestFormatLrc(unittest.TestCase):
 
     def test_empty_returns_empty_string(self):
         self.assertEqual(format_lrc([]), "")
+
+
+class TestShiftLrc(unittest.TestCase):
+    """整体偏移（v2.6.12）：本地对齐只能估算，前奏长会整条偏早，靠这个微调。
+
+    只许动「行首时间标签」：正文里的方括号、元数据行、双语同时间戳两行都要正确。
+    """
+
+    def test_shift_later_moves_every_stamp(self):
+        lrc = "[00:01.00]a\n[00:03.00]b\n"
+        out, applied = shift_lrc(lrc, 500)
+        self.assertEqual(applied, 500)
+        self.assertEqual(out, "[00:01.50]a\n[00:03.50]b\n")
+
+    def test_shift_earlier_moves_every_stamp(self):
+        lrc = "[00:10.00]a\n[00:12.00]b\n"
+        out, applied = shift_lrc(lrc, -500)
+        self.assertEqual(applied, -500)
+        self.assertEqual(out, "[00:09.50]a\n[00:11.50]b\n")
+
+    def test_first_line_clamps_at_zero(self):
+        """最早一句只有 0.3s 时再提前 0.5s，只能提 0.3s —— 否则多句糊在 0 秒。"""
+        lrc = "[00:00.30]a\n[00:05.00]b\n"
+        out, applied = shift_lrc(lrc, -500)
+        self.assertEqual(applied, -300)
+        self.assertEqual(out, "[00:00.00]a\n[00:04.70]b\n")
+
+    def test_already_at_zero_returns_unchanged(self):
+        lrc = "[00:00.00]a\n[00:05.00]b\n"
+        out, applied = shift_lrc(lrc, -500)
+        self.assertEqual(applied, 0)
+        self.assertEqual(out, lrc)
+
+    def test_bilingual_same_stamp_shifts_together(self):
+        lrc = "[00:04.06]Who can surely know\n[00:04.06]风将吹向何方\n"
+        out, _ = shift_lrc(lrc, 1000)
+        self.assertEqual(out, "[00:05.06]Who can surely know\n[00:05.06]风将吹向何方\n")
+
+    def test_text_brackets_and_metadata_untouched(self):
+        lrc = "[ar:某人]\n[00:01.00][00:03.00]合唱 [第一段]\n"
+        out, _ = shift_lrc(lrc, 500)
+        self.assertIn("[ar:某人]", out)                 # 元数据行没有时间标签，原样保留
+        self.assertIn("合唱 [第一段]", out)             # 正文方括号不碰
+        self.assertIn("[00:01.50][00:03.50]", out)      # 一行多标签一起平移
+
+    def test_hundredths_and_milliseconds_both_parse(self):
+        self.assertEqual(shift_lrc("[00:01.23]a\n", 0)[0], "[00:01.23]a\n")
+        out, applied = shift_lrc("[00:01.23]a\n", 1000)
+        self.assertEqual(out, "[00:02.23]a\n")
+        out, _ = shift_lrc("[00:01.234]a\n", 1000)      # 毫秒写法：解析认，输出仍统一百分秒
+        self.assertEqual(out, "[00:02.23]a\n")
+
+    def test_no_stamps_returns_unchanged(self):
+        self.assertEqual(shift_lrc("纯文本没有时间轴\n", 500), ("纯文本没有时间轴\n", 0))
+        self.assertEqual(shift_lrc("", 500), ("", 0))
+
+    def test_trailing_newline_preserved(self):
+        with_nl, _ = shift_lrc("[00:01.00]a\n", 500)
+        self.assertTrue(with_nl.endswith("\n"))
+        without, _ = shift_lrc("[00:01.00]a", 500)
+        self.assertFalse(without.endswith("\n"))
+
+    def test_roundtrip_restores_original(self):
+        lrc = "[00:10.00]a\n[00:12.00]b\n"
+        later, _ = shift_lrc(lrc, 2000)
+        back, _ = shift_lrc(later, -2000)
+        self.assertEqual(back, lrc)
 
 
 class TestBilingualText(unittest.TestCase):

@@ -22,6 +22,7 @@ from app.lyrics_local_align import (
     assign_timestamps,
     decode_mono,
     detect_speech,
+    line_weight,
     rms_envelope,
 )
 
@@ -142,6 +143,35 @@ class TestAssignTimestamps(unittest.TestCase):
 
     def test_empty_lines_returns_empty(self):
         self.assertEqual(assign_timestamps([], [], 1000), [])
+
+    def test_longer_lines_get_longer_slots(self):
+        """按字数加权（v2.6.12）：长句占更长的时间槽，不再一律均分。
+
+        依据：拿联网歌词当真值比《何者》30 句，均分 → 按字数加权后逐句绝对误差
+        中位数 7.24s → 6.04s、最大 19.75s → 13.70s。
+        """
+        lines = ["十个字符的这一句", "十个字符的这一句", "短句", "短句"]
+        times = [ms for _, ms in assign_timestamps(lines, [(0, 14000)], total_ms=14000)]
+        self.assertEqual(times, sorted(times), "时间戳必须递增")
+        self.assertGreater(times[1] - times[0], (times[3] - times[2]) * 2,
+                           f"长句之间的间隔应明显大于短句：{times}")
+
+    def test_equal_length_lines_stay_uniform(self):
+        """等长句必须退化成原来的均匀铺 —— 老行为不能因加权而改变。"""
+        times = [ms for _, ms in assign_timestamps(
+            ["aa", "bb", "cc", "dd"], [(5000, 10000), (20000, 25000)], total_ms=30000)]
+        self.assertEqual(times, [6250, 8750, 21250, 23750])
+
+    def test_weighted_fallback_without_segments(self):
+        """没有有声段时也要按字数加权，而不是退回等分（权重 8+8+1+1=18）。"""
+        times = [ms for _, ms in assign_timestamps(
+            ["长" * 8, "长" * 8, "短", "短"], [], total_ms=20000)]
+        self.assertEqual(times, [0, 8888, 17777, 18888])
+
+    def test_line_weight_ignores_spaces(self):
+        self.assertEqual(line_weight("ab c"), 3)
+        self.assertEqual(line_weight("   "), 1)      # 全空白也不能出现零权重
+        self.assertEqual(line_weight(""), 1)
 
 
 class TestAlignLocal(unittest.TestCase):

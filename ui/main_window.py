@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 
 from app.covers import CoverProvider
 from app.filesize import file_size
-from app.lyrics import LyricLine, lyrics_from_text, strip_meta_lines
+from app.lyrics import LyricLine, lyrics_from_text, shift_lrc, strip_meta_lines
 from app.lyrics_align import LyricsAlignWorker, sidecar_lrc_path, write_sidecar_lrc
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
@@ -183,7 +183,7 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.6.11 · 本地音乐与视频", self._root)
+        self.version_label = QLabel("v2.6.12 · 本地音乐与视频", self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()
@@ -282,6 +282,9 @@ class MainWindow(QMainWindow):
             self._align_lyrics_local_for_current)
         self.now_playing.lyrics.align_lyrics_requested.connect(
             self._align_lyrics_for_current)
+        # 歌词区右键「整体提前/延后 0.5 秒」（v2.6.12）：对齐后的系统性偏移微调
+        self.now_playing.lyrics.shift_lyrics_requested.connect(
+            self._shift_current_lyrics)
 
         # 视频页交互（v2.1）
         self.now_playing.back_to_list_requested.connect(lambda: self._show_page(0))
@@ -692,6 +695,48 @@ class MainWindow(QMainWindow):
 
     # ---------- 歌词对齐（本地 v2.6.9 优先 / 联网 v2.6.6 兜底） ----------
 
+    def _shift_current_lyrics(self, delta_ms: int) -> None:
+        """歌词区右键「整体提前/延后 0.5 秒」：平移整条时间轴并写回同名 .lrc。
+
+        为什么需要手动这一步：本地对齐只能按「有声段 + 字数」估算，**前奏越长整条
+        时间轴越偏早**，而偏移量取决于这首歌前奏的具体长度——音频能量测不出来
+        （实测前奏能量可能比人声句间还高）。所以让用户听一句、按 0.5 秒步进推到位
+        最实在，偏移量写回 .lrc，切歌和重启都保持。
+        """
+        track = self.player.current_track
+        if track is None:
+            self._toast("当前没有播放中的歌曲", 2000)
+            return
+        synced, _plain, source = self._lyrics_cache.get(track.id, ([], [], ""))
+        if not synced:
+            self._toast("这首还没有带时间轴的歌词，无法微调偏移", 2800)
+            return
+        sidecar = sidecar_lrc_path(track.path)
+        if not os.path.isfile(sidecar):
+            self._toast("请先把歌词转成 .lrc 文件，再微调偏移", 3200)
+            return
+        try:
+            with open(sidecar, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            self._toast("读取 .lrc 失败，无法微调", 3000)
+            return
+        shifted, applied = shift_lrc(text, delta_ms)
+        if applied == 0:
+            self._toast("已经是 0 秒，无法再提前", 2500)
+            return
+        if write_sidecar_lrc(track.path, shifted) is None:
+            self._toast("无法写入歌曲目录（可能只读），未保存", 4000)
+            return
+        new_synced, _ = lyrics_from_text(shifted)
+        self._lyrics_cache[track.id] = (new_synced, [], source)
+        self.now_playing.set_synced(new_synced)
+        self.now_playing.set_source(source)
+        # 位移后按当前播放位置重新高亮，避免停在旧的那一句上
+        self.now_playing.lyrics.update_position(self.player.position_ms)
+        word = "提前" if applied < 0 else "延后"
+        self._toast(f"已整体{word} {abs(applied) / 1000:.1f} 秒，已写回 .lrc", 2500)
+
     def _align_lyrics_local_for_current(self) -> None:
         """歌词区右键「转成 .lrc 文件（本地对齐）」：离线把纯文本转成带时间轴的 LRC。"""
         track = self.player.current_track
@@ -758,7 +803,8 @@ class MainWindow(QMainWindow):
             return
         key = (self.store.settings.lyrics_align_api_key or "").strip()
         if not key:
-            self._toast("未填写歌词对齐 Key，请到「设置 → 歌词与统计」填写", 4000)
+            self._toast("联网精确对齐需要 API Key（设置 → 歌词与统计）；"
+                        "暂时可先用「本地近似对齐」", 5000)
             return
         if track.id in self._align_workers:
             self._toast("这首歌正在对齐中，请稍候", 2000)
@@ -796,10 +842,11 @@ class MainWindow(QMainWindow):
         self._apply_aligned_lrc(track_id, lrc, soft_fail=True, source_label="来源：联网对齐")
 
     def _on_align_done_local(self, track_id: str, lrc: str) -> None:
-        self._apply_aligned_lrc(track_id, lrc, soft_fail=False, source_label="来源：本地对齐")
+        self._apply_aligned_lrc(track_id, lrc, soft_fail=False,
+                                source_label="来源：本地对齐", approx=True)
 
     def _apply_aligned_lrc(self, track_id: str, lrc: str, soft_fail: bool,
-                           source_label: str) -> None:
+                           source_label: str, approx: bool = False) -> None:
         """对齐结果落地：写成歌曲同目录同名 .lrc + 解除纯文本绑定 + 立即刷新滚动。"""
         synced, _plain = lyrics_from_text(lrc)
         if not synced:
@@ -832,6 +879,11 @@ class MainWindow(QMainWindow):
             self.now_playing.set_source(source_label)
         if soft_fail:
             self._toast("已生成 .lrc，但结果可能不准，请核对", 4000)
+        elif approx:
+            # 本地对齐是「有声段 + 字数」估算，前奏长会整体偏早，必须把话说清楚，
+            # 否则用户会以为拿到了精确时间轴（实测过有人以为跑的是联网对齐）。
+            self._toast("已生成 .lrc（本地近似对齐，可能整体差几秒）。"
+                        "不准可右键「整体提前/延后」微调，或配 Key 用联网精确对齐", 6000)
         else:
             self._toast(f"已生成同名 .lrc：{os.path.basename(sidecar)}，切歌自动识别", 3500)
 

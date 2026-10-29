@@ -254,6 +254,60 @@ def format_lrc(lines: list[LyricLine]) -> str:
     return "\n".join(out) + "\n"
 
 
+_STAMP_ONE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
+
+
+def _stamp_ms(match: re.Match) -> int:
+    """把正则匹配到的时间标签换算成毫秒（百分秒与毫秒两种写法都认）。"""
+    ms = int(match.group(1)) * 60000 + int(match.group(2)) * 1000
+    frac = match.group(3)
+    if frac:
+        ms += int(frac.ljust(3, "0")[:3])
+    return ms
+
+
+def shift_lrc(lrc: str, delta_ms: int) -> tuple[str, int]:
+    """把 LRC 里**所有**时间戳整体平移 `delta_ms`（负=提前），返回 `(新文本, 实际增量)`。
+
+    为什么要这个：本地对齐只能按「有声段 + 字数」估算，前奏一长整条时间轴就会整体
+    偏早（实测《何者》首句早 5.8 秒）。这种**系统性偏移**没法靠算法猜准，让用户
+    听一遍、按 ±0.5s 步进推到位最实在——所以偏移量要写回 .lrc，切歌/重启仍然生效。
+
+    只动「行首连续的时间标签」，正文里的方括号不碰；同时间戳的两行（双语）一起平移。
+    钳位规则：不许把任何时间戳推成负数，实际增量取 `max(delta_ms, -最早时间戳)`，
+    否则第一句会被压到 0 秒，后面几句糊在同一时刻。
+    """
+    lines = (lrc or "").splitlines()
+    parsed: list[tuple[int, list[tuple[int, int, int]]]] = []
+    for idx, line in enumerate(lines):
+        stamps: list[tuple[int, int, int]] = []
+        pos = 0
+        while True:
+            match = _STAMP_ONE.match(line, pos)
+            if match is None:
+                break
+            stamps.append((match.start(), match.end(), _stamp_ms(match)))
+            pos = match.end()
+        if stamps:
+            parsed.append((idx, stamps))
+    if not parsed:
+        return lrc, 0
+
+    earliest = min(ms for _idx, stamps in parsed for _s, _e, ms in stamps)
+    actual = max(int(delta_ms), -earliest)
+    if actual == 0:
+        return lrc, 0
+    for idx, stamps in parsed:
+        line = lines[idx]
+        for start, end, ms in reversed(stamps):   # 从后往前替换，前面标签位置不受影响
+            line = line[:start] + format_lrc_stamp(ms + actual) + line[end:]
+        lines[idx] = line
+    out = "\n".join(lines)
+    if lrc.endswith("\n"):
+        out += "\n"
+    return out, actual
+
+
 def lyric_index_at(lines: list[LyricLine], position_ms: int) -> int:
     """返回 position_ms 时应高亮的歌词行下标；在第一行之前返回 -1。"""
     lo, hi, ans = 0, len(lines) - 1, -1

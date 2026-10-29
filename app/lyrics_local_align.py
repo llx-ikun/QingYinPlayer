@@ -179,27 +179,52 @@ def detect_speech(rms: list[float], hop_ms: int = HOP_MS,
 # ---------- 时间戳分配 ----------
 
 
+def line_weight(text: str) -> int:
+    """一句歌词的「时长权重」：按可见字符数（忽略空白），至少 1。
+
+    为什么不按句数均分：长句要唱更久。实测《何者》30 句把「均匀铺」换成按字数
+    加权，逐句绝对误差中位数 7.24s → 5.84s（真值为联网歌词）。注意这只是缓解，
+    拖音/句内间奏在文本里完全没有信息，所以**加权也到不了「逐句卡准」**。
+    """
+    return max(1, len("".join(text.split())))
+
+
 def assign_timestamps(lines: list[str], segments: list[tuple[int, int]],
                       total_ms: int) -> list[tuple[str, int]]:
-    """把歌词行均匀铺在「有声段」上，返回 `[(行文本, 时间ms)]`。
+    """把歌词行按字数加权铺在「有声段」上，返回 `[(行文本, 时间ms)]`。
 
     无有声段（纯音乐/整首都有声没测出静音）时退化为「全时长均分」。
     每行取「它在有声时间轴上的中点」映射回实际时间——歌词不会铺在前奏/间奏/尾奏上。
+
+    权重用 `line_weight()`：等长句子退化成原来的均匀铺，所以旧行为不变；
+    长短混杂时，长句分到更长的时间槽。
     """
     n = len(lines)
     if n == 0:
         return []
-    if not segments:
-        return [(text, int(i * total_ms / n)) for i, text in enumerate(lines)]
     speech_total = sum(e - s for s, e in segments)
-    if speech_total <= 0:
-        return [(text, int(i * total_ms / n)) for i, text in enumerate(lines)]
+    if not segments or speech_total <= 0:
+        # 无有声段（纯音乐 / 整首测不出静音）：退化为「全时长按字数加权」
+        weights = [line_weight(text) for text in lines]
+        total_weight = float(sum(weights)) or 1.0
+        flat: list[tuple[str, int]] = []
+        acc = 0.0
+        for weight, text in zip(weights, lines, strict=True):
+            flat.append((text, int(acc * total_ms / total_weight)))
+            acc += weight
+        return flat
+
+    weights = [line_weight(text) for text in lines]
+    total_weight = float(sum(weights))
 
     result: list[tuple[str, int]] = []
     seg_idx = 0
     accum_before = 0.0
-    for i, text in enumerate(lines):
-        pos = (i + 0.5) * speech_total / n
+    accum_weight = 0.0
+    for weight, text in zip(weights, lines, strict=True):
+        # 权重中点：等权时等价于原来的 (i + 0.5) / n
+        pos = (accum_weight + weight * 0.5) * speech_total / total_weight
+        accum_weight += weight
         while seg_idx < len(segments) - 1:
             s, e = segments[seg_idx]
             if pos <= accum_before + (e - s):
