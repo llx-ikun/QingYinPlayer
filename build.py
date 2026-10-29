@@ -132,6 +132,21 @@ def _pyinstaller(onefile: bool) -> str:
         # ModuleNotFoundError: No module named '_cffi_backend'（v2.6.9 实测，
         # 而且 windowed 产物还会弹错误框，把构建挂在 smoke 上）。必须显式声明。
         "--hidden-import", "_cffi_backend",
+        # 瘦身（v2.7.0）：miniaudio 顶层 `try: import numpy / except: numpy = None`
+        # 是可选依赖，PyInstaller 却顺着它把 numpy + numpy.libs（onedir 里约 27MB）
+        # 整包打进去。本程序不用 numpy（本地对齐是纯 Python 算 RMS），显式排除后
+        # miniaudio 会自动退化为 array 路径，exe 体积直接瘦一圈。
+        "--exclude-module", "numpy",
+        "--exclude-module", "numpy.libs",
+        # 其余绝不使用的重量级库（未安装时为无害 no-op，装了也不会被打进去）
+        "--exclude-module", "scipy",
+        "--exclude-module", "pandas",
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "PIL",
+        "--exclude-module", "tkinter",
+        "--exclude-module", "soundfile",
+        "--exclude-module", "lameenc",
+        "--exclude-module", "pypinyin",
     ]
     if onefile:
         cmd.append("--onefile")
