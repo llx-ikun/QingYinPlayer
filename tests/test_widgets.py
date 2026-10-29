@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """ElidedLabel 省略行为单测（延后省略 + full_text + 销毁安全）。"""
+import itertools
 import os
 import re
 import sys
@@ -112,9 +113,12 @@ class TestPlayerBarLayout(unittest.TestCase):
         self.assertLessEqual(12 + fb.sizeHint().width(),
                              pb.layout().contentsMargins().left(),
                              "浮动条右端不得超过播放栏左缩进，避免压封面")
-        # 设置齿轮必须在主题圆钮下方（v2.2.2 布局：左列竖排两个圆钮）
-        self.assertLess(fb.theme_toggle.geometry().top(), fb.settings_btn.geometry().top(),
-                        "设置齿轮应位于主题按钮下方")
+        # v2.6.1 单行布局：四个控件同一条水平线，整条高度 = 圆钮直径
+        tops = {w.geometry().top() for w in
+                (fb.theme_toggle, fb.settings_btn, fb.import_btn, fb.dir_btn)}
+        self.assertEqual(len(tops), 1, f"四个控件应在同一行，实测 top={tops}")
+        self.assertEqual(fb.sizeHint().height(), fb.theme_toggle.height(),
+                         "整条高度应等于圆钮直径")
 
     def test_player_bar_fits_min_window_with_long_title(self):
         """长标题/长艺人名不得把最小宽度顶爆（v2.1.5 复查发现 1185 > 1100）。
@@ -188,8 +192,8 @@ class TestSliderKnob(unittest.TestCase):
         self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
                         "进度手柄应绘制为强调色实心圆，不能在浅色底上隐形")
 
-    def test_handle_visible_on_dark(self):
-        pixels = self._knob_pixels("dark", "SeekSlider", 0)
+    def test_handle_visible_on_columbina(self):
+        pixels = self._knob_pixels("columbina", "SeekSlider", 0)
         self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
                         "深色主题下进度手柄同样必须是强调色实心圆")
 
@@ -293,7 +297,7 @@ class TestTrackListLayout(unittest.TestCase):
     def test_header_shows_total_duration(self):
         from ui.track_list import TrackList
         list_widget = TrackList()
-        list_widget.set_header("资料库", 3, 3_600_000)
+        list_widget.set_header("音乐库", 3, 3_600_000)
         # count_label 保持原有「共 N 首」格式（E2E 依赖）
         self.assertEqual(list_widget.count_label.text(), "共 3 首")
         self.assertIn("1:00:00", list_widget.stats_label.text())
@@ -302,7 +306,7 @@ class TestTrackListLayout(unittest.TestCase):
     def test_header_hides_stats_when_empty(self):
         from ui.track_list import TrackList
         list_widget = TrackList()
-        list_widget.set_header("资料库", 0, 0)
+        list_widget.set_header("音乐库", 0, 0)
         self.assertTrue(list_widget.stats_label.isHidden())
 
     def test_row_shows_size_column(self):
@@ -346,7 +350,7 @@ class TestThemeSizes(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication(sys.argv[:1])
         from ui.theme import apply_theme
-        apply_theme(cls.app, "dark")
+        apply_theme(cls.app, "columbina")
 
     @classmethod
     def tearDownClass(cls):
@@ -375,10 +379,11 @@ class TestThemeSizes(unittest.TestCase):
         fb.adjustSize()
         self.assertLessEqual(12 + fb.sizeHint().width(),
                              pb.layout().contentsMargins().left())
-        # 每个文字按钮都得有正宽度，不能因父控件过窄被裁掉
+        # 每个文字按钮都得有正宽度，不能因父控件过窄被裁掉。
+        # v2.6.1 单行后宽 65（4 个 12px 中文字 ≈ 48 + 左右内边距），下限 60。
         for btn in (fb.import_btn, fb.dir_btn):
-            self.assertGreater(btn.sizeHint().width(), 70, btn.text())
-            self.assertGreaterEqual(btn.width(), 70, btn.text())
+            self.assertGreaterEqual(btn.sizeHint().width(), 60, btn.text())
+            self.assertGreaterEqual(btn.width(), 60, btn.text())
 
     def test_sidebar_nickname_not_truncated(self):
         """昵称列不能被徽标卡死：「音乐爱好者」曾只显示「音乐爱…」。"""
@@ -437,16 +442,40 @@ class TestFloatBarStyle(unittest.TestCase):
                 return float(m.group(1))
         raise AssertionError(f"{selector} 没有声明 border-radius")
 
-    def test_left_column_has_two_circle_buttons(self):
-        """左列竖排：主题在上、设置齿轮在下，且都是正圆图标钮。"""
+    def test_two_circle_buttons_same_size_and_row(self):
+        """两个圆钮（主题 / 设置）同尺寸、同一水平线，且都是正圆图标钮。"""
         from ui.float_bar import FloatBar
         fb = FloatBar()
         fb.adjustSize()
-        self.assertLess(fb.theme_toggle.geometry().top(), fb.settings_btn.geometry().top(),
-                        "设置齿轮应在主题按钮下方")
+        # v2.6.1 单行布局：由「上下竖排」改为「左右并排」
+        self.assertEqual(fb.theme_toggle.geometry().top(), fb.settings_btn.geometry().top(),
+                         "设置齿轮应与主题按钮同处一行")
+        self.assertLess(fb.theme_toggle.geometry().left(), fb.settings_btn.geometry().left(),
+                        "主题钮在左、设置齿轮在右")
         self.assertEqual(fb.theme_toggle.width(), fb.settings_btn.width())
         self.assertEqual(fb.theme_toggle.width(), fb.theme_toggle.height(), "主题钮应为正圆")
         self.assertEqual(fb.settings_btn.width(), fb.settings_btn.height(), "设置钮应为正圆")
+
+    def test_single_row_layout_is_exactly_sidebar_width(self):
+        """四个入口并成一排：总宽必须刚好 224，且互不重叠。
+
+        38 + 6 + 38 + 6 + 65 + 6 + 65 = 224 = 侧栏内容宽。
+        改任何一个尺寸都会破坏「右缘与侧栏内容右边界齐平」，所以锁死。
+        """
+        from ui.float_bar import FloatBar
+        fb = FloatBar()
+        fb.adjustSize()
+        widgets = [fb.theme_toggle, fb.settings_btn, fb.import_btn, fb.dir_btn]
+        # 依次排列、无重叠、无反向
+        for prev, nxt in itertools.pairwise(widgets):
+            self.assertLessEqual(prev.geometry().right(), nxt.geometry().left() + 1,
+                                 f"{prev.toolTip() or prev.text()} 与右侧控件重叠")
+        self.assertEqual(widgets[0].geometry().left(), 0)
+        # QRect.right() 是「x + 宽 - 1」（含端点），所以要 +1 才是真正占到的右边界
+        self.assertEqual(widgets[-1].geometry().right() + 1, fb.width(),
+                         "最后一个控件应顶到整条右缘")
+        self.assertEqual(fb.width(), 224, "整条宽必须等于侧栏内容宽")
+        self.assertEqual(fb.height(), 38, "单行高度应等于圆钮直径 38")
 
     def test_settings_uses_gear_icon(self):
         """「设置」必须是齿轮图标，不是旧的三条推子线。"""
@@ -463,17 +492,17 @@ class TestFloatBarStyle(unittest.TestCase):
         fb = FloatBar()
         fb.adjustSize()
         self.assertFalse(hasattr(fb, "tray"), "不应再有分段托盘容器")
-        self.assertEqual(fb.import_btn.text(), "导入音乐")
-        self.assertEqual(fb.dir_btn.text(), "数据目录")
+        self.assertEqual(fb.import_btn.text().replace("\n", ""), "导入音乐")
+        self.assertEqual(fb.dir_btn.text().replace("\n", ""), "数据目录")
         # 两者是不同的控件，且都直接挂在浮动条上（没有中间托盘容器）
         self.assertIsNot(fb.import_btn, fb.dir_btn)
         for btn in (fb.import_btn, fb.dir_btn):
             self.assertIs(btn.parent(), fb, f"{btn.text()} 应直接挂在浮动条上")
-        # 并排在右半部分：导入在左、数据目录在右，且都位于圆钮右侧
+        # 与两个圆钮同处一行：导入在数据目录左边，且都在圆钮右侧
         self.assertLess(fb.import_btn.geometry().left(), fb.dir_btn.geometry().left())
         self.assertGreater(fb.import_btn.geometry().left(),
-                           fb.theme_toggle.geometry().right(),
-                           "导入按钮应在左侧圆钮列的右边")
+                           fb.settings_btn.geometry().right(),
+                           "文字按钮应在两个圆钮的右边")
 
     def test_width_matches_sidebar_content(self):
         """整条宽度必须等于侧边栏内容宽度，右缘才能与内容右边界对齐。"""
@@ -537,7 +566,7 @@ class TestTrackListAlignment(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication(sys.argv[:1])
         from ui.theme import apply_theme
-        apply_theme(cls.app, "dark")
+        apply_theme(cls.app, "columbina")
 
     @classmethod
     def tearDownClass(cls):
@@ -594,7 +623,7 @@ class TestLyricsThemeColor(unittest.TestCase):
 
     def tearDown(self):
         from ui.theme import apply_theme
-        apply_theme(self.app, "dark")
+        apply_theme(self.app, "columbina")
 
     def _foreground_after(self, theme_name: str):
         from app.lyrics import LyricLine
@@ -610,14 +639,14 @@ class TestLyricsThemeColor(unittest.TestCase):
         actual, expected = self._foreground_after("light")
         self.assertEqual(actual.lower(), expected.lower())
 
-    def test_normal_color_follows_dark_theme(self):
-        actual, expected = self._foreground_after("dark")
+    def test_normal_color_follows_columbina_theme(self):
+        actual, expected = self._foreground_after("columbina")
         self.assertEqual(actual.lower(), expected.lower())
 
     def test_switching_theme_changes_color(self):
         """同一进程内先浅后深，颜色必须真的变化（冻结 bug 的核心表现）。"""
         light, _ = self._foreground_after("light")
-        dark, _ = self._foreground_after("dark")
+        dark, _ = self._foreground_after("columbina")
         self.assertNotEqual(light, dark)
 
     def test_plain_lyrics_also_themed(self):
@@ -645,6 +674,168 @@ class TestLyricsThemeColor(unittest.TestCase):
         self.assertEqual(panel.empty_label.text(), "正在联网匹配歌词…")
         panel.set_empty()
         self.assertEqual(panel.empty_label.text(), EMPTY_HINT)
+
+
+class TestLyricsEffect(unittest.TestCase):
+    """歌词播放动效（v2.6.4）：none/zoom/typewriter/karaoke 单选，非法值回落。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def test_default_and_invalid_fall_back_to_none(self):
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        self.assertEqual(panel._effect, "none")
+        panel.set_effect("bogus")
+        self.assertEqual(panel._effect, "none")
+
+    def test_set_effect_accepts_all_valid_values(self):
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        for effect in ("zoom", "typewriter", "karaoke", "none"):
+            panel.set_effect(effect)
+            self.assertEqual(panel._effect, effect)
+
+    def test_line_progress_mid_line_and_last_line(self):
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_synced([LyricLine(0, "a"), LyricLine(2000, "b"), LyricLine(4000, "c")])
+        # 第一行 0~2000ms，500ms 处进度 0.25
+        self.assertAlmostEqual(panel._line_progress(0, 500), 0.25, places=2)
+        # 最后一行无下一行，按固定 3000ms 行时长：5500ms 处进度 0.5
+        self.assertAlmostEqual(panel._line_progress(2, 5500), 0.5, places=2)
+
+    def test_update_position_advances_progress_for_karaoke(self):
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_effect("karaoke")
+        panel.set_synced([LyricLine(0, "第一行"), LyricLine(2000, "第二行")])
+        panel.update_position(500)
+        self.assertEqual(panel._current_index, 0)
+        self.assertAlmostEqual(panel._progress_in_line, 0.25, places=2)
+
+    def test_plain_mode_ignores_effect_for_current_line(self):
+        """纯文本歌词没有时间轴，动效不应生效（不产生「当前行」）。"""
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_effect("zoom")
+        panel.set_plain(["纯文本歌词"])
+        panel.update_position(1000)
+        self.assertEqual(panel._current_index, -1)
+
+
+class TestIconRendering(unittest.TestCase):
+    """图标按设备像素渲染（v2.5）：高分屏上不能把 16px 位图放大糊掉。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def test_paint_scales_bitmap_with_dpr(self):
+        from PySide6.QtGui import QColor
+
+        from ui.icons import _paint
+
+        base = _paint("gear", 16, QColor("#2c3552"), 1.0)
+        self.assertEqual((base.width(), base.height()), (16, 16))
+        self.assertAlmostEqual(base.devicePixelRatio(), 1.0)
+
+        hidpi = _paint("gear", 16, QColor("#2c3552"), 1.5)
+        self.assertEqual((hidpi.width(), hidpi.height()), (24, 24),
+                         "125%/150% 屏应渲染 24 设备像素，而不是放大 16px 位图")
+        self.assertAlmostEqual(hidpi.devicePixelRatio(), 1.5)
+
+    def test_make_icon_returns_dpr_aware_pixmap(self):
+        from ui.icons import device_ratio, make_icon
+
+        dpr = device_ratio()
+        icon = make_icon("gear", "#2c3552", 16)
+        pixmap = icon.pixmap(16, 16)
+        # 逻辑尺寸始终是 16，物理尺寸随屏幕缩放
+        self.assertLessEqual(pixmap.width(), round(16 * dpr) + 1)
+        self.assertGreaterEqual(pixmap.width(), 16)
+
+    def test_gear_has_hollow_center_and_solid_ring(self):
+        """齿轮必须"实心环 + 镂空轴孔"。
+
+        `subtracted()` 写错（比如两个 QPainterPath 没交集）时会退化成实心圆，
+        整窗里就变成一个点，这是 v2.2 出现过的症状。
+        """
+        from PySide6.QtGui import QColor
+
+        from ui.icons import _paint
+
+        size = 72
+        img = _paint("gear", size, QColor("#000000"), 1.0).toImage()
+        center = img.pixelColor(size // 2, size // 2)
+        self.assertEqual(center.alpha(), 0, "轴孔必须镂空")
+        ring = img.pixelColor(size // 2, size // 2 - round(size * 0.22))
+        self.assertGreater(ring.alpha(), 200, "轴孔外侧应当是实心环体")
+        corner = img.pixelColor(2, 2)
+        self.assertEqual(corner.alpha(), 0, "图标四周必须留白")
+
+    def test_gear_teeth_reach_near_canvas_edge(self):
+        """齿顶要接近画布边缘，否则图标在按钮里显得小。"""
+        from PySide6.QtGui import QColor
+
+        from ui.icons import _paint
+
+        size = 72
+        img = _paint("gear", size, QColor("#000000"), 1.0).toImage()
+        widest = max(x for x in range(size)
+                     if any(img.pixelColor(x, y).alpha() > 40 for y in range(size)))
+        self.assertGreaterEqual(widest, round(size * 0.92),
+                                "齿顶应占到画布的 92% 以上")
+
+
+    def test_moon_is_crescent_not_disc(self):
+        """月亮必须是月牙：被"咬掉"的那一侧镂空，另一侧是实体。
+
+        用 arcMoveTo + arcTo 拼两段弧会在弧端点之间连一条直线弦，月牙被削平成
+        "灰色 D"；用一个圆上叠一个背景色圆则会遮住别的元素。所以这里既查「缺口
+        真的透了」也查「实体那边真的实」。
+        """
+        from PySide6.QtGui import QColor
+
+        from ui.icons import _paint
+
+        size = 96
+        img = _paint("moon", size, QColor("#000000"), 1.0).toImage()
+        # 整体转了 -30°，缺口方向是屏幕上的右上（0.866, -0.5）
+        bite = (round(size * (0.5 + 0.30 * 0.866)), round(size * (0.5 - 0.30 * 0.5)))
+        body = (round(size * (0.5 - 0.30 * 0.866)), round(size * (0.5 + 0.30 * 0.5)))
+        self.assertEqual(img.pixelColor(*bite).alpha(), 0, "缺月的那一侧必须镂空")
+        self.assertGreater(img.pixelColor(*body).alpha(), 200, "另一侧必须是实体")
+
+    def test_moon_fills_the_canvas(self):
+        """既不裁切、也不画得太小（图标在按钮里显小的典型原因）。"""
+        from PySide6.QtGui import QColor
+
+        from ui.icons import _paint
+
+        size = 96
+        img = _paint("moon", size, QColor("#000000"), 1.0).toImage()
+        xs, ys = [], []
+        for y in range(size):
+            for x in range(size):
+                if img.pixelColor(x, y).alpha() > 40:
+                    xs.append(x)
+                    ys.append(y)
+        self.assertGreater(min(xs), 0, "左缘贴边 → 被画布裁掉了")
+        self.assertLess(max(xs), size - 1, "右缘贴边 → 被画布裁掉了")
+        self.assertGreater(min(ys), 0)
+        self.assertLess(max(ys), size - 1)
+        # 实测（20/24/72/96 一致）：横向占 ~77~80%、纵向 ~85~90%（斜开口导致偏窄）
+        self.assertGreaterEqual(max(xs) - min(xs), round(size * 0.72), "横向没占满")
+        self.assertGreaterEqual(max(ys) - min(ys), round(size * 0.80), "纵向没占满")
 
 
 if __name__ == "__main__":

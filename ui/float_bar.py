@@ -1,33 +1,36 @@
 # -*- coding: utf-8 -*-
 """左下浮动工具条。
 
-布局（v2.2.2）：
-    左列：主题圆钮（上）+ 齿轮设置圆钮（下），竖排
-    右侧：导入音乐 / 数据目录 两个**独立**按钮并排（不再共用分段托盘）
+布局（v2.6.1 起：单行四列）：
+    [主题圆钮] [设置齿轮] [导入音乐] [数据目录]
 整条宽度固定为侧边栏内容宽度（248 - 左右 12 边距 = 224），右缘与侧边栏内容右边界
-对齐，不跨进内容区。
+对齐，不跨进内容区：38 + 4 + 38 + 4 + 68 + 4 + 68 = 224，高度 = 圆钮直径 38。
+
+v2.6.1 之前是「左列竖排两个圆钮 + 右侧两个竖排文字按钮」的 224×82 网格。改成一行
+的理由：整条从 82 压到 38，几乎不占播放栏高度，四个入口在同一水平线上、视线不用
+上下扫；文字按钮也由竖排两行改回单行四字。
 
 为什么把「正在播放」从浮动条移除：列表页头已有一个等价入口（`TrackList.np_btn`，
 同样切到正在播放页），且点击播放栏封面也能切页，所以这里不再是唯一入口。
-空出来的横向空间给「导入音乐」，让主操作离手更近。
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 from ui import icons as ic
 
-_FLOAT_W = 224        # 与侧边栏内容宽度对齐（侧栏 248 - 左右各 12 边距）
-_CIRCLE = 38          # 左列圆钮直径
-_BTN_W = 86           # 右侧独立按钮宽
-_BTN_H = 38           # 右侧独立按钮高（与圆钮同高，横向读成一行）
+_FLOAT_W = 224        # 与侧栏内容宽度对齐（侧栏 248 - 左右各 12 边距）
+_CIRCLE = 38          # 两个圆钮直径（也是整条高度）
+_BTN_W = 68           # 文字按钮宽：见下方「为什么是 68 而不是 65」
 _ICON = 16            # 图标尺寸（比 14 更醒目）
-_GAP_V = 6            # 左列两个圆钮的竖向间距
-_GAP_H = 8            # 左右两列的水平间距
-_GAP_BTN = 6          # 右侧两个按钮的水平间距
-# 38 + 8 + 86 + 6 + 86 = 224，刚好铺满整条宽度，不需要 stretch
-# 高度 = 38 + 6 + 38 = 82（播放栏 84，仍放得下，不会被窗口底边裁掉）
+_GAP = 4              # 四个控件之间的水平间距：38+4+38+4+68+4+68 = 224
+# 整条宽 224 刚好铺满侧栏内容宽；高 38 = 圆钮直径，单行为主、不侵占播放栏高度
+#
+# 为什么是 68 而不是 65：圆钮 2×38 + 3 个间距 = 224 里剩下的宽度全给两个文字按钮。
+# 「导入音乐」4 个中文字在 12px 下 48px，但设置里字号可放大到 1.30 倍（12 → 16px），
+# 那时 4 字 = 64px，65 宽扣掉 1px 边框只剩 63 → 会被裁掉一点点。68 留出安全余量，
+# 配合 QSS 里 `padding: 0px`（否则基础 QPushButton 的左右 10px 内边距会再吃掉 20px）。
 
 
 class _HoverIconButton(QPushButton):
@@ -58,17 +61,18 @@ class _HoverIconButton(QPushButton):
         super().leaveEvent(event)
 
 
-class _IconTextButton(_HoverIconButton):
-    """图标 + 文字按钮：右侧的独立入口，固定宽高。"""
+class _TextButton(QPushButton):
+    """纯文字按钮（无图标）：固定宽高，文字单行居中。"""
 
-    def __init__(self, kind: str, text: str, parent=None) -> None:
-        super().__init__(kind, text, parent)
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setObjectName("FloatTextBtn")
-        self.setToolTip(text)
-        self.setFixedSize(_BTN_W, _BTN_H)
+        self.setToolTip(text.replace("\n", ""))
+        self.setFixedSize(_BTN_W, _CIRCLE)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(_BTN_W, _BTN_H)
+        return QSize(_BTN_W, _CIRCLE)
 
 
 class _CircleButton(_HoverIconButton):
@@ -92,55 +96,36 @@ class FloatBar(QWidget):
         self.setFixedWidth(_FLOAT_W)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
+        row.setSpacing(_GAP)    # 38 + 4 + 38 + 4 + 68 + 4 + 68 = 224
 
-        # ---- 左列：主题（上）+ 设置齿轮（下），竖排 ----
-        left = QVBoxLayout()
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(_GAP_V)
-
-        self.theme_toggle = _CircleButton("sun")
+        # 四个控件同一条水平线：主题 / 设置 / 导入音乐 / 数据目录
+        self.theme_toggle = _CircleButton("moon")
         self.theme_toggle.setCheckable(True)
         self.theme_toggle.clicked.connect(self.theme_clicked.emit)
-        left.addWidget(self.theme_toggle)
+        row.addWidget(self.theme_toggle)
 
         self.settings_btn = _CircleButton("gear", "设置")
         self.settings_btn.clicked.connect(self.settings_clicked.emit)
-        left.addWidget(self.settings_btn)
-        left.addStretch(1)
-        row.addLayout(left)
-        row.addSpacing(_GAP_H)
+        row.addWidget(self.settings_btn)
 
-        # ---- 右侧：导入音乐 / 数据目录，两个独立按钮并排，与主题钮同一行 ----
-        right_wrap = QVBoxLayout()
-        right_wrap.setContentsMargins(0, 0, 0, 0)
-        right_wrap.setSpacing(0)
-        right = QHBoxLayout()
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(_GAP_BTN)
-
-        self.import_btn = _IconTextButton("plus", "导入音乐")
+        self.import_btn = _TextButton("导入音乐")
         self.import_btn.clicked.connect(self.import_clicked.emit)
-        right.addWidget(self.import_btn)
+        row.addWidget(self.import_btn)
 
-        self.dir_btn = _IconTextButton("folder", "数据目录")
+        self.dir_btn = _TextButton("数据目录")
         self.dir_btn.clicked.connect(self.data_dir_clicked.emit)
-        right.addWidget(self.dir_btn)
-
-        right_wrap.addLayout(right)
-        right_wrap.addStretch(1)
-        row.addLayout(right_wrap, 1)
+        row.addWidget(self.dir_btn)
 
         self.set_theme_icon("columbina")
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(_FLOAT_W, _CIRCLE * 2 + _GAP_V)
+        return QSize(_FLOAT_W, _CIRCLE)
 
     def set_theme_icon(self, theme_name: str) -> None:
         """主题钮：图标与提示都指向「点下去会切到哪个主题」。
 
-        三态循环 空月 → 深色 → 浅色 → 空月，所以按钮上画的不是当前主题，
-        而是下一个目标（羽毛=空月 / 月亮=深色 / 太阳=浅色）。
+        两态循环 深色 ↔ 浅色，所以按钮上画的不是当前主题，
+        而是下一个目标（月亮=深色 / 太阳=浅色）。
         """
         from ui.theme import THEME_ICON, THEME_LABEL, THEME_NEXT
 

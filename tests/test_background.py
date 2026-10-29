@@ -185,37 +185,45 @@ class TestScrimStylesheet(unittest.TestCase):
     """有背景时面板必须半透明——否则背景被完全盖住，用户会以为"设了没反应"。"""
 
     def test_panels_become_translucent(self):
-        from ui.theme import DARK, build_stylesheet
+        from ui.theme import COLUMBINA, build_stylesheet
 
-        sheet = build_stylesheet(DARK, scrim=0.78)
+        sheet = build_stylesheet(COLUMBINA, scrim=0.78)
         self.assertIn("rgba(", sheet)
-        self.assertNotIn(f"QWidget#Sidebar {{ background: {DARK.SURFACE}; }}", sheet)
+        self.assertNotIn(f"QWidget#Sidebar {{ background: {COLUMBINA.SURFACE}; }}", sheet)
 
     def test_window_root_stays_opaque(self):
-        """窗口根底色必须不透明：否则降低背景不透明度时透出的是桌面。"""
-        from ui.theme import DARK, build_stylesheet
+        """窗口根底色必须不透明：否则降低背景不透明度时透出的是桌面。
 
-        sheet = build_stylesheet(DARK, scrim=0.78)
-        self.assertIn(f"QWidget#WindowRoot {{ background: {DARK.BG}; }}", sheet)
+        深色主题是渐变底（BG_ALT），兜底段的 WindowRoot 也是渐变，但只要是
+        不透明的实色渐变（不含 rgba）就符合要求——断言因此检查「兜底段里的
+        WindowRoot 不含 rgba」，而不是写死纯色。
+        """
+        from ui.theme import COLUMBINA, build_stylesheet
+
+        sheet = build_stylesheet(COLUMBINA, scrim=0.78)
+        tail = sheet[sheet.index("自定义背景下的不透明兜底"):]
+        idx = tail.index("QWidget#WindowRoot { background:")
+        end = tail.index("}", idx)
+        self.assertNotIn("rgba(", tail[idx:end], "窗口根底色不能透出桌面")
 
     def test_dialogs_stay_opaque(self):
         """对话框是独立顶层窗口，半透明会直接看到桌面。"""
-        from ui.theme import DARK, build_stylesheet
+        from ui.theme import COLUMBINA, build_stylesheet
 
-        sheet = build_stylesheet(DARK, scrim=0.78)
+        sheet = build_stylesheet(COLUMBINA, scrim=0.78)
         self.assertIn(f"QDialog#SettingsDialog, QDialog#QueuePanel, QMenu, QToolTip, QMessageBox,\n"
                       f"QLineEdit, QTextEdit, QComboBox, QComboBox QAbstractItemView,\n"
-                      f"QLabel#Toast {{ background: {DARK.SURFACE}; }}", sheet)
+                      f"QLabel#Toast {{ background: {COLUMBINA.SURFACE}; }}", sheet)
 
     def test_no_scrim_keeps_original_stylesheet(self):
-        from ui.theme import DARK, build_stylesheet
+        from ui.theme import COLUMBINA, build_stylesheet
 
-        self.assertEqual(build_stylesheet(DARK), build_stylesheet(DARK, scrim=None))
-        self.assertNotIn("rgba(", build_stylesheet(DARK))
+        self.assertEqual(build_stylesheet(COLUMBINA), build_stylesheet(COLUMBINA, scrim=None))
+        self.assertNotIn("rgba(", build_stylesheet(COLUMBINA))
 
 
 class TestThemeDecor(unittest.TestCase):
-    """v2.3「空月」主题的底层装饰：淡月牙 + 星点。
+    """v2.3「深色」主题的底层装饰：淡月牙 + 星点。
 
     只验证「该画时画了、不该画时什么都没画」，好不好看交给真实平台截图。
     注意不能用 grab()：它先铺不透明白底，测不出「透明」与「极淡」。
@@ -240,7 +248,7 @@ class TestThemeDecor(unittest.TestCase):
         return count
 
     def test_decor_paints_when_enabled(self):
-        self.assertGreater(self._non_black_samples("columbina"), 8, "空月装饰没有画出来")
+        self.assertGreater(self._non_black_samples("columbina"), 8, "深色主题装饰没有画出来")
 
     def test_no_decor_paints_nothing(self):
         self.assertEqual(self._non_black_samples(""), 0, "没有装饰时不该画任何东西")
@@ -251,6 +259,9 @@ class TestThemeDecor(unittest.TestCase):
         layer.set_config(BackgroundConfig())
         layer.set_decor("columbina", "#7ec8e8")
         self.assertFalse(layer.is_active(), "主题装饰不算自定义背景，不该触发面板半透明")
+
+    def test_light_decor_paints_when_enabled(self):
+        self.assertGreater(self._non_black_samples("light"), 8, "浅色主题装饰没有画出来")
 
 
 if __name__ == "__main__":

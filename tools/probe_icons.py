@@ -19,21 +19,29 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from ui.icons import _paint  # noqa: E402
+from ui.icons import _paint, device_ratio  # noqa: E402
 
-# 顺序按「界面上相邻关系」排：齿轮紧挨主题钮，主题三态（羽毛/月亮/太阳）连成一排，
-# 这样 16px 那一行能直接看出相邻图标会不会撞形。
+# 顺序按「界面上相邻关系」排：齿轮紧挨主题钮，主题两态（羽毛/太阳）连成一排，
+# 这样 16px 那一行能直接看出相邻图标会不会撞形。（moon 已不被主题使用，仍列出备查。）
 KINDS = ["gear", "settings", "feather", "moon", "sun", "folder", "plus"]
+DPR = 1.0
 BIG, SMALL, ZOOM = 72, 16, 8
+# 16px 只是逻辑尺寸；真实界面按 16×DPR 渲染（DPR 1.25 → 20 设备像素）。
+# 只验 16px 会漏掉「小尺寸糊掉」这类问题，所以多出一行设备像素版。
 PAD = 14
 LABEL_H = 16
 
 
 def render(bg: str, fg: str) -> QImage:
     cols = len(KINDS)
-    cell_w = BIG + PAD
+    # 格宽要跟最宽的那一行走：设备像素行是 round(16×DPR)×ZOOM，比 72px 还宽。
+    # 早期按 BIG+PAD 算，放大行会溢出到隔壁列、互相压住（看着像图标被裁了）。
+    zoom_w = max(SMALL, round(SMALL * DPR)) * ZOOM
+    cell_w = max(BIG, zoom_w) + PAD
     width = PAD + cols * cell_w
-    height = PAD + BIG + PAD + SMALL * ZOOM + LABEL_H + PAD
+    small_h = SMALL * ZOOM
+    dev_h = round(SMALL * DPR) * ZOOM
+    height = PAD + BIG + PAD + small_h + PAD + dev_h + LABEL_H + PAD
     img = QImage(width, height, QImage.Format.Format_ARGB32)
     img.fill(QColor(bg))
 
@@ -55,6 +63,12 @@ def render(bg: str, fg: str) -> QImage:
                               Qt.AspectRatioMode.IgnoreAspectRatio,
                               Qt.TransformationMode.FastTransformation)
         p.drawPixmap(x, PAD + BIG + PAD, zoomed)
+        # 第三行：设备像素渲染（16 × DPR），放大同样倍数
+        dev = _paint(kind, SMALL, color, DPR)
+        dev_zoomed = dev.scaled(int(dev.width() * ZOOM), int(dev.height() * ZOOM),
+                                Qt.AspectRatioMode.IgnoreAspectRatio,
+                                Qt.TransformationMode.FastTransformation)
+        p.drawPixmap(x, PAD + BIG + PAD + SMALL * ZOOM + PAD, dev_zoomed)
         # 标签
         p.setPen(color)
         p.drawText(x, height - PAD, kind)
@@ -68,6 +82,9 @@ def main() -> int:
     args = ap.parse_args()
 
     app = QApplication(sys.argv[:1])  # noqa: F841  渲染图标需要 QApplication
+    global DPR
+    DPR = device_ratio()
+    print(f"当前屏幕缩放比 {DPR}，第三行按 {round(SMALL * DPR)} 设备像素渲染")
     out = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
 

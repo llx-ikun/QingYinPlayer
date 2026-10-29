@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""双主题（默认深色 / 浅色浅蓝）：调色板 + QSS + 主题应用。
+"""双主题（默认浅色薰衣草 / 深色夜空）：调色板 + QSS + 主题应用。
 
 - Theme 为不可变数据类；THEMES 注册全部主题；build_stylesheet(theme) 生成 QSS。
 - apply_theme(app, name)：切换主题 = 换 QSS + 重绘全部主题化图标 + 均衡器条换色。
@@ -38,54 +38,45 @@ class Theme:
     HEART: str            # 爱心红
     ON_ACCENT: str        # 强调色上的文字/图标
     # 非空时窗口底用 BG → BG_ALT 的斜向渐变（默认空 = 纯色 BG）。
-    # 给「空月」主题做夜空层次用：纯色深紫太容易糊成一块黑。
+    # 给「深色」主题做夜空层次用：纯色深紫太容易糊成一块黑。
     BG_ALT: str = ""
 
 
-DARK = Theme(
-    name="dark",
-    BG="#0f0f14", SURFACE="#16161f", SURFACE_HOVER="#1e1e2a", SURFACE_ACTIVE="#262633",
-    BORDER="#2a2a38", TEXT="#f0f0f4", TEXT_DIM="#8f8fa3",
-    ACCENT="#6c8cff", ACCENT_HOVER="#829fff", ACCENT_DIM="#3d4f8f",
-    ACCENT_SOFT="#232b47", DANGER="#ff6b6b", HEART="#ff5c7a", ON_ACCENT="#ffffff",
-)
-
 LIGHT = Theme(
     name="light",
-    # 浅蓝风：中性灰底改为淡蓝灰，悬浮/选中/边框都带一点蓝，与深色主题的蓝紫强调色、
-    # 应用图标（蓝紫渐变）保持一致。原先的 QQ 绿（#31c27c）与图标不同色系，已替换。
-    BG="#f3f6fc", SURFACE="#ffffff", SURFACE_HOVER="#eef3fb", SURFACE_ACTIVE="#e3ecfb",
-    BORDER="#dde5f3", TEXT="#1f2329", TEXT_DIM="#7f8b9e",
-    ACCENT="#3b82f6", ACCENT_HOVER="#2f74ea", ACCENT_DIM="#2563eb",
-    ACCENT_SOFT="#e7f0fe", DANGER="#e14a4a", HEART="#ec4141", ON_ACCENT="#ffffff",
+    # 「浅色」主题：冷调月白（image 1）。底色取参考图采样值 #eef2fb —— 蓝通道最高、
+    # 带一点 periwinkle，不是粉紫也不是中性灰；面板只比底色亮极小一档（参考图里
+    # 侧栏/内容/播放栏几乎同色，层次靠细边框和文字，而不是白卡片压浅底）。
+    # 强调色比原 #7c83f0 更蓝更柔（参考图播放键 ~#7f97d6），但压深到 #7389cb：
+    # 白字对比 3.4:1、在面板上 3.2:1，两处都守住可读性下限（#7f97d6 只有 2.9 / 2.8）。
+    BG="#eef2fb", SURFACE="#f5f8fd", SURFACE_HOVER="#e6ecfa", SURFACE_ACTIVE="#dbe3f7",
+    BORDER="#d9e1f5", TEXT="#2c3552", TEXT_DIM="#6d7897",
+    ACCENT="#7389cb", ACCENT_HOVER="#6179be", ACCENT_DIM="#4f66a8",
+    ACCENT_SOFT="#e2e9fa", DANGER="#d9455a", HEART="#e8455c", ON_ACCENT="#ffffff",
 )
 
 COLUMBINA = Theme(
     name="columbina",
-    # 「空月」主题：取自《原神》「空月之歌」哥伦比娅的**视觉语言**——
-    # 深紫夜空的底、冰蓝与月白的冷光、莓粉（发色挑染与命之座）的点缀。
-    # 只复刻配色与气质，不嵌入任何官方立绘（版权素材不随程序分发）。
-    # 背景装饰（ui/background.py）画的是她背后那枚**符文圆环**、头饰披风上的
-    # **羽饰**，以及月牙与星点 —— 全部抽象成矢量形状，alpha 压在 8~18 只做氛围。
-    # ON_ACCENT 用近黑：冰蓝 #7ec8e8 很亮，白字对比只有 1.9:1，必须压深。
-    # BG_ALT 让窗口底从深紫斜向过渡到墨蓝，避免整屏糊成一块黑（#55：纯色深底
-    # 靠「更黑」做不出层次，深度要来自光——面板整体提亮 + 斜向渐变）。
-    BG="#120e22", SURFACE="#1d1738", SURFACE_HOVER="#251d42", SURFACE_ACTIVE="#312857",
-    BORDER="#3c3060", TEXT="#f4effd", TEXT_DIM="#a89dc2",
-    ACCENT="#7ec8e8", ACCENT_HOVER="#9ad9f3", ACCENT_DIM="#4a7f99",
-    ACCENT_SOFT="#2b2450", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
-    BG_ALT="#0a1220",
+    # 「深色」主题（image 2）：午夜深蓝夜空。底色从深蓝紫斜向过渡到更深的墨蓝
+    # （BG_ALT），避免整屏糊成一块黑；面板比底色略亮一档，读成「半透明浮在夜空上」。
+    # 强调色用长春花蓝（periwinkle），与浅色主题同源，月牙 / 星点 / 羽饰都取这个色。
+    # ON_ACCENT 用近黑：长春花蓝较亮，白字对比仅 ~2.3:1，必须压深。
+    BG="#141c3e", SURFACE="#1e2648", SURFACE_HOVER="#29335c", SURFACE_ACTIVE="#333e70",
+    BORDER="#37426f", TEXT="#eef0ff", TEXT_DIM="#9aa1cc",
+    ACCENT="#8b9cf8", ACCENT_HOVER="#a6b2fb", ACCENT_DIM="#5d6ac2",
+    ACCENT_SOFT="#2c3560", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
+    BG_ALT="#0b1228",
 )
 
-THEMES = {"columbina": COLUMBINA, "dark": DARK, "light": LIGHT}
+THEMES = {"columbina": COLUMBINA, "light": LIGHT}
 
-# 主题钮的循环顺序（点一下切到下一个）
-THEME_ORDER = ("columbina", "dark", "light")
-THEME_NEXT = {"columbina": "dark", "dark": "light", "light": "columbina"}
+# 主题钮的循环顺序（点一下切到下一个）——两态循环：深色 ↔ 浅色
+THEME_ORDER = ("columbina", "light")
+THEME_NEXT = {"columbina": "light", "light": "columbina"}
 # 每个主题自己的代表图标；切换按钮显示的是「下一个主题」的图标
-THEME_ICON = {"columbina": "feather", "dark": "moon", "light": "sun"}
-THEME_LABEL = {"columbina": "空月", "dark": "深色", "light": "浅色"}
-DEFAULT_THEME = "columbina"      # v2.3：新装默认「空月」主题
+THEME_ICON = {"columbina": "moon", "light": "sun"}
+THEME_LABEL = {"columbina": "深色", "light": "浅色"}
+DEFAULT_THEME = "light"      # 新装默认「浅色」主题
 
 FONT_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif'
 
@@ -180,7 +171,7 @@ def _scale_font_sizes(css: str, scale: float) -> str:
     )
 
 
-_current: Theme = DARK
+_current: Theme = LIGHT
 _base_name: str = DEFAULT_THEME
 _accent_override: str | None = None
 _font_scale: float = FONT_SCALE_DEFAULT
@@ -190,7 +181,7 @@ _scrim: float | None = None
 BG_SCRIM = 0.78
 
 # 供 from ui.theme import ACCENT 使用的字段名
-_FIELD_NAMES = tuple(DARK.__dataclass_fields__)
+_FIELD_NAMES = tuple(COLUMBINA.__dataclass_fields__)
 
 
 def current_theme() -> Theme:
@@ -316,6 +307,7 @@ QLabel#VideoTitle {{ font-size: 16px; font-weight: bold; color: {t.TEXT}; }}
 /* ---------- 标签 ---------- */
 QLabel {{ background: transparent; }}
 QLabel#Dim {{ color: {t.TEXT_DIM}; }}
+QLabel#LyricsSource {{ color: {t.TEXT_DIM}; font-size: 11px; padding: 4px 0; }}
 QLabel#Logo {{ font-size: 15px; font-weight: bold; color: {t.TEXT}; }}
 QLabel#TrackTitle {{ font-size: 13px; font-weight: bold; color: {t.TEXT}; }}
 QLabel#TrackSub {{ color: {t.TEXT_DIM}; font-size: 12px; }}
@@ -446,12 +438,14 @@ QPushButton#RowBtn {{
 }}
 QPushButton#RowBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; }}
 QPushButton#RowBtn[active="true"] {{ color: {t.HEART}; }}
-/* 浮动工具条：左侧圆形图标钮（主题 / 设置齿轮）+ 右侧两个独立按钮。
+/* 浮动工具条：一行四列（主题 / 设置齿轮 / 导入音乐 / 数据目录），四个控件同为 38 高。
    圆钮同底色同尺寸，读成同一族；不按 checked 变色（图标本身已表明会切到什么
    主题，再加一圈强调色边框只会抢走内容注意力）。
    注意：`border-radius` 不得超过控件短边的一半（QSS 里超了 Qt 会直接不圆，
    退化成直角方块 —— 旧版 #FloatTextBtn radius 16 配 28px 高就踩了这个坑）。
-   现在按钮高 38：圆钮 radius 19（= 38/2 正圆），文字按钮 radius 13（≤ 19 合规）。 */
+   v2.6.1 单行布局：圆钮 radius 19（= 38/2 正圆），文字按钮 radius 13（≤ 半高 19 合规）。
+   文字按钮必须显式 `padding: 0px`：基础 QPushButton 带 6px 10px 内边距，会把
+   4 个中文字（字号放大到 1.30 倍时 64px）挤到 68px 的按钮外面被裁掉。 */
 QPushButton#CircleBtn {{
     background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 19px;
     color: {t.TEXT_DIM};
@@ -460,7 +454,7 @@ QPushButton#CircleBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.ACCENT};
 QPushButton#CircleBtn:pressed {{ background: {t.SURFACE_ACTIVE}; }}
 QPushButton#FloatTextBtn {{
     background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 13px;
-    padding: 0px 4px; color: {t.TEXT_DIM}; font-size: 12px;
+    padding: 0px; color: {t.TEXT_DIM}; font-size: 12px;
 }}
 QPushButton#FloatTextBtn:hover {{ background: {t.SURFACE_HOVER}; color: {t.TEXT}; border-color: {t.ACCENT}; }}
 QPushButton#FloatTextBtn:pressed {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; }}

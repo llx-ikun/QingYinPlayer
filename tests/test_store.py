@@ -90,7 +90,7 @@ class TestStore(unittest.TestCase):
     def test_views(self):
         s = self._store()
         self.assertEqual(len(s.view_tracks(PLAYLIST_LIBRARY)), 3)
-        self.assertEqual(s.view_name(PLAYLIST_LIBRARY), "资料库")
+        self.assertEqual(s.view_name(PLAYLIST_LIBRARY), "音乐库")
         self.assertEqual(s.view_name(PLAYLIST_RECENT), "最近播放")
         pl = s.create_playlist("我的歌单")
         self.assertEqual(s.view_name(pl.id), "我的歌单")
@@ -168,7 +168,7 @@ class TestStore(unittest.TestCase):
         """旧 data.json 无 theme/nickname/favorites：无损升级。"""
         self._store()
         s2 = LibraryStore(self.db)
-        self.assertEqual(s2.settings.theme, "columbina")
+        self.assertEqual(s2.settings.theme, "light")
         self.assertEqual(s2.settings.nickname, "音乐爱好者")
 
     def test_appearance_settings_roundtrip(self):
@@ -201,6 +201,26 @@ class TestStore(unittest.TestCase):
         with open(self.db, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         self.assertAlmostEqual(LibraryStore(self.db).settings.font_scale, 1.0)
+
+    def test_lyrics_effect_roundtrip(self):
+        """v2.6.4 歌词动效要能存能读，默认 none。"""
+        s = self._store()
+        self.assertEqual(s.settings.lyrics_effect, "none")
+        s.set_setting("lyrics_effect", "karaoke")
+        s.save()
+        self.assertEqual(LibraryStore(self.db).settings.lyrics_effect, "karaoke")
+
+    def test_bad_lyrics_effect_in_json_falls_back(self):
+        import json
+
+        s = self._store()
+        s.save()
+        with open(self.db, encoding="utf-8") as f:
+            data = json.load(f)
+        data["settings"]["lyrics_effect"] = "flashy"
+        with open(self.db, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        self.assertEqual(LibraryStore(self.db).settings.lyrics_effect, "none")
 
 
 if __name__ == "__main__":

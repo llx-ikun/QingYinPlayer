@@ -465,23 +465,21 @@ class TestE2EV2(unittest.TestCase):
 
     def test_theme_switch_applies_and_persists(self):
         from PySide6.QtWidgets import QApplication
-        from ui.theme import COLUMBINA, DARK, LIGHT
+        from ui.theme import COLUMBINA, LIGHT
         app = QApplication.instance()
         self._import()
-        # v2.3：新装默认「空月」主题
+        # 新装默认「浅色」主题
+        self.assertEqual(self.store.settings.theme, "light")
+        self.assertIn(LIGHT.ACCENT, app.styleSheet())
+        self.window._apply_theme("columbina")
         self.assertEqual(self.store.settings.theme, "columbina")
         self.assertIn(COLUMBINA.ACCENT, app.styleSheet())
-        self.window._apply_theme("light")
-        self.assertEqual(self.store.settings.theme, "light")
-        self.assertIn(LIGHT.ACCENT, app.styleSheet())  # 浅色强调色进入 QSS
-        self.window._apply_theme("dark")
-        self.assertIn(DARK.ACCENT, app.styleSheet())
         # 重启后主题保持
         self.window.close()
         from ui.main_window import MainWindow
         window2 = MainWindow()
         try:
-            self.assertEqual(window2.store.settings.theme, "dark")
+            self.assertEqual(window2.store.settings.theme, "columbina")
         finally:
             window2.player.stop()
             window2.close()
@@ -490,48 +488,46 @@ class TestE2EV2(unittest.TestCase):
         from ui.theme import THEME_NEXT
         self._import()
         fb = self.window.float_bar
-        # v2.3 三态循环：空月 → 深色 → 浅色 → 空月。
-        # 按钮图标与提示都指向「点下去会切到哪个」，初始目标是深色。
-        self.assertEqual(self.store.settings.theme, "columbina")
+        # 两态循环：浅色 ↔ 深色。按钮图标/提示指向「点下去会切到哪个」，
+        # 初始（当前=浅色）目标是深色（月亮）。
+        self.assertEqual(self.store.settings.theme, "light")
         self.assertEqual(fb.theme_toggle._kind, "moon")
         self.assertIn("切换到深色主题", fb.theme_toggle.toolTip())
-        self.assertFalse(fb.theme_toggle.isChecked())
+        self.assertTrue(fb.theme_toggle.isChecked())   # 浅色主题 = 开关打开
 
         self.window._toggle_theme()
-        self.assertEqual(self.store.settings.theme, "dark")
+        self.assertEqual(self.store.settings.theme, "columbina")
         self.assertEqual(fb.theme_toggle._kind, "sun")
         self.assertIn("切换到浅色主题", fb.theme_toggle.toolTip())
         self.assertFalse(fb.theme_toggle.isChecked())
 
         self.window._toggle_theme()
-        self.assertEqual(self.store.settings.theme, "light")
-        self.assertIn("切换到空月主题", fb.theme_toggle.toolTip())
-        self.assertTrue(fb.theme_toggle.isChecked())  # 浅色主题 = 开关打开
-
-        self.window._toggle_theme()
-        self.assertEqual(self.store.settings.theme, "columbina")  # 闭环回到起点
+        self.assertEqual(self.store.settings.theme, "light")  # 闭环回到起点
         self.assertEqual(fb.theme_toggle._kind, "moon")
-        self.assertFalse(fb.theme_toggle.isChecked())
+        self.assertTrue(fb.theme_toggle.isChecked())
 
         # v2.2.2 布局：左列主题圆钮 + 齿轮设置，右侧导入音乐 / 数据目录两个独立按钮
         self.assertTrue(fb.theme_toggle.isCheckable())
         self.assertEqual(fb.settings_btn._kind, "gear")
-        self.assertEqual(fb.import_btn.text(), "导入音乐")
-        self.assertEqual(fb.dir_btn.text(), "数据目录")
-        self.assertEqual(THEME_NEXT["columbina"], "dark")  # 循环表不写反
+        self.assertEqual(fb.import_btn.text().replace("\n", ""), "导入音乐")
+        self.assertEqual(fb.dir_btn.text().replace("\n", ""), "数据目录")
+        self.assertEqual(THEME_NEXT["columbina"], "light")  # 循环表不写反
 
     def test_sidebar_nav_aligned_with_float_bar(self):
-        """侧栏「我喜欢 / 资料库」两个圆钮要与浮动条左列的圆钮同尺寸、左缘同一条竖线。"""
+        """侧栏「我喜欢 / 音乐库」圆钮要与浮动条首个圆钮同尺寸、左缘同一条竖线。
+
+        v2.6.1 起浮动条四控件单行并排，只有最左的主题钮还在 x=12；
+        设置齿轮跟着排到 x=44，不再与侧栏导航同列 —— 所以只比主题钮。
+        """
         from PySide6.QtCore import QPoint
 
         self._import()
         nav = next(iter(self.window.sidebar._nav_buttons.values()))
-        bars = (self.window.float_bar.theme_toggle, self.window.float_bar.settings_btn)
+        bar = self.window.float_bar.theme_toggle
         nav_pt = nav.mapTo(self.window._root, QPoint(0, 0))
-        for bar in bars:
-            self.assertEqual(bar.width(), nav.width(), bar.toolTip())
-            self.assertEqual(bar.height(), nav.height(), bar.toolTip())
-            self.assertEqual(bar.mapTo(self.window._root, QPoint(0, 0)).x(), nav_pt.x())
+        self.assertEqual(bar.width(), nav.width())
+        self.assertEqual(bar.height(), nav.height())
+        self.assertEqual(bar.mapTo(self.window._root, QPoint(0, 0)).x(), nav_pt.x())
 
     # ---------- 我喜欢 ----------
 
@@ -682,7 +678,7 @@ class TestE2EV2(unittest.TestCase):
     def test_settings_dialog_signals(self):
         from ui.settings_dialog import SettingsDialog, stats_for
         self._import()
-        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window)
+        dialog = SettingsDialog("columbina", "音乐爱好者", stats_for(self.store), self.window)
         themes = []
         dialog.theme_changed.connect(themes.append)
         dialog.light_radio.setChecked(True)
@@ -702,6 +698,29 @@ class TestE2EV2(unittest.TestCase):
         self.assertGreater(geom.y(), self.window._root.height() - 120)
         # 右缘对齐侧边栏内容右边界（不跨进内容区）
         self.assertLessEqual(geom.x() + geom.width(), 236)
+
+    def test_edge_detection_and_qt_edge_mapping(self):
+        """边缘缩放：6px 判定 + 内部边位到 Qt.Edges 的映射（纯逻辑，不启动原生手势）。
+
+        拖动边缘时窗口会移位的根因是手动 setGeometry 累加，改为 startSystemResize
+        后这里只需守住「哪条边、映射成哪个 Qt.Edge」别再写错。
+        """
+        from PySide6.QtCore import QPoint, Qt
+        from ui.main_window import _EDGE_BOTTOM, _EDGE_LEFT, _EDGE_RIGHT, _EDGE_TOP
+
+        w = self.window
+        w._root.resize(1000, 700)
+        rw, rh = w._root.width(), w._root.height()
+        self.assertEqual(w._edge_at(QPoint(2, 2)), _EDGE_LEFT | _EDGE_TOP)
+        self.assertEqual(w._edge_at(QPoint(rw - 2, 2)), _EDGE_RIGHT | _EDGE_TOP)
+        self.assertEqual(w._edge_at(QPoint(2, rh - 2)), _EDGE_LEFT | _EDGE_BOTTOM)
+        self.assertEqual(w._edge_at(QPoint(rw - 2, rh - 2)), _EDGE_RIGHT | _EDGE_BOTTOM)
+        self.assertEqual(w._edge_at(QPoint(2, rh // 2)), _EDGE_LEFT)
+        self.assertEqual(w._edge_at(QPoint(rw // 2, 2)), _EDGE_TOP)
+        self.assertEqual(w._edge_at(QPoint(rw // 2, rh // 2)), 0)
+        self.assertEqual(w._qt_edges(_EDGE_LEFT), Qt.Edge.LeftEdge)
+        self.assertEqual(w._qt_edges(_EDGE_LEFT | _EDGE_TOP), Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
+        self.assertEqual(w._qt_edges(_EDGE_RIGHT | _EDGE_BOTTOM), Qt.Edge.RightEdge | Qt.Edge.BottomEdge)
 
     def test_version_label_at_bottom_right(self):
         """版本号从侧边栏底部挪到窗口右下角（v2.1.8）。"""
@@ -762,13 +781,13 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(added, sorted(added, reverse=True))
 
     def test_sort_choice_survives_view_switch(self):
-        """各视图分别记住排序：切走再切回资料库，不会被重置回默认值。"""
+        """各视图分别记住排序：切走再切回音乐库，不会被重置回默认值。"""
         from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY
         self._import()
         self.window._on_sort_changed("size:asc")
         self.window.set_view(PLAYLIST_FAVORITES)   # 另一个视图用各自默认
         self.assertEqual(self.window._sort_id, "added:desc")
-        self.window.set_view(PLAYLIST_LIBRARY)     # 切回资料库
+        self.window.set_view(PLAYLIST_LIBRARY)     # 切回音乐库
         self.assertEqual(self.window._sort_id, "size:asc")
         self.assertEqual(self.window.track_list.sort_combo.currentData(), "size:asc")
 
@@ -826,13 +845,18 @@ class TestE2ELyricsOnline(unittest.TestCase):
 
         class FakeWorker(QObject):
             found = Signal(str, str)
+            missed = Signal(str)
+            aborted = Signal(str)
+            progress = Signal(int, int)
             finished = Signal()
 
-            def __init__(self, track_id, title, artist, duration_ms=0, parent=None):
+            def __init__(self, track_id, title, artist, duration_ms=0,
+                         album="", parent=None):
                 super().__init__(parent)
                 self.track_id = track_id
                 self.title = title
                 self.artist = artist
+                self.album = album
 
             def start(self):
                 starts.append(self.track_id)
@@ -893,7 +917,7 @@ class TestE2ELyricsOnline(unittest.TestCase):
         # 假装后台线程抓到了歌词
         self.window._on_online_lyrics(track.id, "[00:01.00]故事的小黄花")
         self.assertEqual(read_cache(track.id), "[00:01.00]故事的小黄花")
-        synced, _ = self.window._lyrics_cache[track.id]
+        synced, _, _ = self.window._lyrics_cache[track.id]
         self.assertEqual([line.text for line in synced], ["故事的小黄花"])
 
         # 清掉内存缓存后重新加载：走「本地缓存」这一级，面板能显示歌词
@@ -926,13 +950,55 @@ class TestE2ELyricsOnline(unittest.TestCase):
             self.assertFalse(self.window._start_online_lyrics(video))
         self.assertEqual(starts, [])
 
+    def test_miss_cache_suppresses_retry_until_manual_retry(self):
+        """v2.4 负缓存：查不到的歌 7 天内不自动重打；右键「重新联网匹配」强制重来。
+
+        没有这层记忆时，每启动一次就为一首冷门歌打四个请求，既慢又吃速率配额。
+        """
+        import ui.main_window as mw
+        from app.lyrics_online import clear_miss, read_miss, write_miss
+
+        track = self._bare_track()
+        starts = []
+        write_miss(track.id)
+        self.assertTrue(read_miss(track.id))
+
+        with mock.patch.object(mw, "LyricsFetchWorker", self._fake_worker(starts)):
+            self.assertFalse(self.window._start_online_lyrics(track),
+                             "负缓存有效期内不该再发起检索")
+            self.assertEqual(starts, [])
+
+            # 手动重试：清负缓存 → 绕过「本次已试过」→ 真的发起，并显示等待提示
+            # （`current_track` 是只读属性，直接改内部字段；这里不真的播放音频）
+            self.window.player._current = track
+            self.window._retry_online_lyrics()
+        self.assertFalse(read_miss(track.id), "重试前必须清掉负缓存，否则下次又被挡住")
+        self.assertEqual(starts, [track.id])
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
+                         "正在联网匹配歌词…")
+        clear_miss(track.id)
+
+    def test_online_aborted_shows_retry_hint_but_no_negative_cache(self):
+        """联网被中断（超时/限流）：歌词区不再卡在「正在找」，显示可重试提示，
+        且**不写负缓存**——一次网络抖动不等于这首歌没有歌词。"""
+        import ui.main_window as mw
+        from app.lyrics_online import read_miss
+
+        track = self._bare_track()
+        self.window.player._current = track
+        self.window.now_playing.set_empty(mw.ONLINE_PENDING_HINT)
+        self.window._on_online_lyrics_aborted(track.id)
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
+                         mw.ONLINE_ABORTED_HINT)
+        self.assertFalse(read_miss(track.id), "中止时绝不能落负缓存")
+
     def test_settings_dialog_online_lyrics_toggle_persists(self):
         from app.paths import data_file
         from app.store import LibraryStore
         from ui.settings_dialog import SettingsDialog, stats_for
 
         self.assertTrue(self.store.settings.online_lyrics)
-        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window,
+        dialog = SettingsDialog("columbina", "音乐爱好者", stats_for(self.store), self.window,
                                 online_lyrics=True)
         dialog.online_lyrics_changed.connect(self.window._on_settings_online_lyrics)
         dialog.online_lyrics_box.setChecked(False)
@@ -982,7 +1048,7 @@ class TestE2EAppearance(unittest.TestCase):
         self.window._on_settings_accent("#ff7a45")
         self.window._on_settings_accent("")
         self.assertEqual(self.store.settings.accent_color, "")
-        # v2.3 起默认主题是「空月」，默认强调色不能再写死 DARK
+        # 默认主题是「浅色」，默认强调色要跟主题表走，别写死某个主题
         self.assertEqual(current_theme().ACCENT, THEMES[theme_name].ACCENT)
 
     def test_accent_survives_theme_switch(self):
@@ -1034,7 +1100,7 @@ class TestE2EAppearance(unittest.TestCase):
     def test_unknown_font_scale_snaps_to_nearest_option(self):
         from ui.settings_dialog import SettingsDialog, stats_for
 
-        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window,
+        dialog = SettingsDialog("columbina", "音乐爱好者", stats_for(self.store), self.window,
                                 font_scale=1.1)      # 1.1 不是任何一档
         self.assertAlmostEqual(dialog.font_combo.currentData(), 1.15)
         self.assertEqual(dialog.font_combo.currentText(), "较大")
@@ -1130,7 +1196,7 @@ class TestE2EAppearance(unittest.TestCase):
                                            color2="#7c3aed"),
                    "library": BackgroundConfig(),
                    "now_playing": BackgroundConfig()}
-        dialog = SettingsDialog("dark", "音乐爱好者", stats_for(self.store), self.window,
+        dialog = SettingsDialog("columbina", "音乐爱好者", stats_for(self.store), self.window,
                                 bg_configs=configs, bg_scope="all")
         self.assertEqual(dialog.bg_type_combo.currentData(), "gradient")
         # 用 isHidden()：非当前页签的控件本来就不"可见"，isVisibleTo 会误报
@@ -1141,6 +1207,23 @@ class TestE2EAppearance(unittest.TestCase):
         self.assertEqual(dialog._bg_scope, "now_playing")
         self.assertFalse(dialog.bg_inherit_box.isHidden())
         self.assertTrue(dialog._current_bg().inherit)
+        dialog.deleteLater()
+
+    def test_settings_dialog_has_storage_tab(self):
+        """v2.6：设置里能改数据目录，并且显示的就是当前真正生效的位置。"""
+        from app import paths
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store), self.window)
+        titles = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+        self.assertIn("存储", titles)
+        self.assertEqual(os.path.normcase(dialog.storage_path_edit.text()),
+                         os.path.normcase(paths.current_root()),
+                         "显示的路径必须等于实际解析出来的根目录")
+        self.assertTrue(dialog.storage_path_edit.isReadOnly())
+        # 源码运行时便携模式会被忽略，按钮必须禁用 —— 否则用户点了会把数据
+        # 搬进仓库目录、程序却不认（这是一个真实的坑）
+        self.assertFalse(dialog.portable_storage_btn.isEnabled())
         dialog.deleteLater()
 
 

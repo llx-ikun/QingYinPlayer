@@ -38,6 +38,10 @@ _MODE_TIP = {
     MODE_SHUFFLE: "随机播放",
 }
 
+# 播放栏固定高度。窗口用它算「底部条」的纵向位置（如左下浮动工具条居中），
+# 所以必须是常量而不是散落在各处的字面量 84。
+PLAYER_BAR_HEIGHT = 84
+
 
 class PlayerBar(QWidget):
     play_clicked = Signal()
@@ -56,7 +60,7 @@ class PlayerBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(84)
+        self.setFixedHeight(PLAYER_BAR_HEIGHT)
         self.setObjectName("PlayerBar")
         self._seeking = False
         self._vol_dragging = False

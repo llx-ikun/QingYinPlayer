@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""主题调色板单测：浅蓝主题的色相/对比度约束（纯逻辑，不依赖 Qt）。
+"""主题调色板单测：浅色（薰衣草）主题的色相/对比度约束（纯逻辑，不依赖 Qt）。
 
 背景：浅色主题原本是 QQ 绿（#31c27c），与深色主题的蓝紫强调色、应用图标的
-蓝紫渐变都不一致，用户要求改为浅蓝。这里把「浅色 = 蓝色系」固化成断言，
-避免以后被随手改回绿色或换成低对比色。
+蓝紫渐变都不一致，用户要求改为冷调蓝/薰衣草。这里把「浅色 = 冷色系」固化成
+断言，避免以后被随手改回绿色或换成低对比色。
 """
 import os
 import sys
@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ui.theme import DARK, LIGHT, THEMES, build_stylesheet  # noqa: E402
+from ui.theme import COLUMBINA, LIGHT, THEMES, build_stylesheet  # noqa: E402
 
 
 def _rgb(color: str) -> tuple[int, int, int]:
@@ -36,7 +36,7 @@ def _contrast(fg: str, bg: str) -> float:
 
 class TestPaletteFormat(unittest.TestCase):
     def test_all_themes_registered(self):
-        self.assertEqual(set(THEMES), {"columbina", "dark", "light"})
+        self.assertEqual(set(THEMES), {"columbina", "light"})
 
     def test_every_field_is_hex_rgb(self):
         for theme in THEMES.values():
@@ -48,10 +48,10 @@ class TestPaletteFormat(unittest.TestCase):
 
 
 class TestLightIsBlue(unittest.TestCase):
-    """浅色主题必须是浅蓝（不能回到 QQ 绿）。"""
+    """浅色主题必须是浅冷色（薰衣草蓝，不能回到 QQ 绿）。"""
 
     def test_accent_is_blue_dominant(self):
-        for theme in (LIGHT, DARK):
+        for theme in (LIGHT, COLUMBINA):
             r, g, b = _rgb(theme.ACCENT)
             self.assertGreater(b, r, f"{theme.name} 强调色应偏蓝：{theme.ACCENT}")
             self.assertGreater(b, g, f"{theme.name} 强调色应偏蓝：{theme.ACCENT}")
@@ -108,17 +108,17 @@ class TestAccentOverride(unittest.TestCase):
     def test_derived_theme_keeps_other_tokens(self):
         from ui.theme import derive_accent
 
-        custom = derive_accent(DARK, "#ff7a45")
-        self.assertEqual(custom.name, DARK.name)
-        self.assertEqual(custom.BG, DARK.BG)
-        self.assertEqual(custom.TEXT, DARK.TEXT)
+        custom = derive_accent(COLUMBINA, "#ff7a45")
+        self.assertEqual(custom.name, COLUMBINA.name)
+        self.assertEqual(custom.BG, COLUMBINA.BG)
+        self.assertEqual(custom.TEXT, COLUMBINA.TEXT)
         self.assertEqual(custom.ACCENT, "#ff7a45")
 
     def test_hover_and_dim_are_distinguishable(self):
         """hover/dim 与主色必须肉眼可分（通道差 ≥ 12，回归浮动条同款阈值）。"""
         from ui.theme import _rgb, derive_accent
 
-        for base in (DARK, LIGHT):
+        for base in (COLUMBINA, LIGHT):
             for accent in ("#6c8cff", "#ff7a45", "#22c55e", "#e11d48", "#0ea5e9"):
                 custom = derive_accent(base, accent)
                 for field in ("ACCENT_HOVER", "ACCENT_DIM"):
@@ -131,7 +131,7 @@ class TestAccentOverride(unittest.TestCase):
         """任意强调色上，ON_ACCENT 都必须有 ≥3:1 对比度（播放键图标靠它可见）。"""
         from ui.theme import derive_accent
 
-        for base in (DARK, LIGHT):
+        for base in (COLUMBINA, LIGHT):
             for accent in ("#6c8cff", "#ff7a45", "#22c55e", "#e11d48",
                            "#0ea5e9", "#facc15", "#111827", "#f8fafc"):
                 custom = derive_accent(base, accent)
@@ -144,7 +144,7 @@ class TestAccentOverride(unittest.TestCase):
         from ui.theme import derive_accent
 
         for bad in ("", None, "red", "#12", "#1234567", "javascript:alert(1)"):
-            self.assertEqual(derive_accent(DARK, bad).ACCENT, DARK.ACCENT, repr(bad))
+            self.assertEqual(derive_accent(COLUMBINA, bad).ACCENT, COLUMBINA.ACCENT, repr(bad))
 
     def test_soft_is_a_tint_between_surface_and_accent(self):
         from ui.theme import derive_accent, luminance
@@ -160,16 +160,16 @@ class TestFontScale(unittest.TestCase):
     def test_scale_one_keeps_original_sizes(self):
         from ui.theme import build_stylesheet
 
-        self.assertEqual(build_stylesheet(DARK, font_scale=1.0), build_stylesheet(DARK))
+        self.assertEqual(build_stylesheet(COLUMBINA, font_scale=1.0), build_stylesheet(COLUMBINA))
 
     def test_scaling_multiplies_every_font_size(self):
         import re
 
         from ui.theme import build_stylesheet
 
-        base = [int(n) for n in re.findall(r"font-size:\s*(\d+)px", build_stylesheet(DARK))]
+        base = [int(n) for n in re.findall(r"font-size:\s*(\d+)px", build_stylesheet(COLUMBINA))]
         big = [int(n) for n in re.findall(
-            r"font-size:\s*(\d+)px", build_stylesheet(DARK, font_scale=1.25))]
+            r"font-size:\s*(\d+)px", build_stylesheet(COLUMBINA, font_scale=1.25))]
         self.assertEqual(len(base), len(big))
         for a, b in zip(base, big, strict=True):
             self.assertEqual(b, max(9, round(a * 1.25)), f"{a} → {b}")
@@ -190,21 +190,21 @@ class TestFontScale(unittest.TestCase):
         from ui.theme import FONT_SCALE_MIN, build_stylesheet
 
         sizes = [int(n) for n in re.findall(
-            r"font-size:\s*(\d+)px", build_stylesheet(DARK, font_scale=FONT_SCALE_MIN))]
+            r"font-size:\s*(\d+)px", build_stylesheet(COLUMBINA, font_scale=FONT_SCALE_MIN))]
         self.assertTrue(sizes)
         self.assertGreaterEqual(min(sizes), 9)
 
 
 class TestThemeCycle(unittest.TestCase):
-    """v2.3「星月」主题接入后，主题是**三态循环**而不是深浅二态。
+    """主题是**两态循环**（深色 ↔ 浅色），不是深浅二态也不是三态。
 
     这里钉住三件容易改坏的事：默认主题、循环闭环、每个主题都有图标与中文名。
     改漏任何一个，主题钮都会出现「点了没反应」或「图标与目标主题对不上」。
     """
 
-    def test_default_is_columbina(self):
+    def test_default_is_light(self):
         from ui.theme import DEFAULT_THEME
-        self.assertEqual(DEFAULT_THEME, "columbina")
+        self.assertEqual(DEFAULT_THEME, "light")
 
     def test_cycle_covers_all_themes_and_closes(self):
         from ui.theme import THEME_NEXT, THEME_ORDER, THEMES
@@ -221,11 +221,21 @@ class TestThemeCycle(unittest.TestCase):
         self.assertEqual(set(THEME_ICON), set(THEMES))
         self.assertEqual(set(THEME_LABEL), set(THEMES))
 
+    def test_theme_icons_are_moon_and_sun(self):
+        """主题钮画的是**下一个目标**：浅色→月亮（去深色夜空）、深色→太阳（去浅色）。
+
+        v2.5.1 之前深色目标用的是羽毛，16px 下糊成一团认不出来，用户圈图要求
+        「画成月亮」。这两个图标也是彼此最好区分的组合（月牙 vs 圆点+细射线）。
+        """
+        from ui.theme import THEME_ICON
+        self.assertEqual(THEME_ICON["columbina"], "moon")
+        self.assertEqual(THEME_ICON["light"], "sun")
+
     def test_bg_gradient_only_for_columbina(self):
-        """渐变底只给星月主题；深浅两色主题必须仍是纯色（否则 QSS 里多出无谓渐变）。"""
+        """渐变底只给深色主题；浅色主题必须仍是纯色（否则 QSS 里多出无谓渐变）。"""
         from ui.theme import THEMES, build_stylesheet
         self.assertIn("qlineargradient", build_stylesheet(THEMES["columbina"]))
-        for name in ("dark", "light"):
+        for name in ("light",):
             self.assertNotIn("qlineargradient", build_stylesheet(THEMES[name]), name)
 
 

@@ -2,7 +2,7 @@
 """侧边栏（v2.0 QQ 音乐风）：用户卡片 / 图标导航 / 最近播放 / 歌单封面列表 / 导入。
 
 - 用户卡片：首字母圆形头像 + 昵称 + 「本地模式」徽标，点击请求修改昵称；
-- 图标导航：♥ 我喜欢 / ⌂ 资料库（方形图标按钮，激活态淡强调底）；
+- 图标导航：♥ 我喜欢 / ⌂ 音乐库（方形图标按钮，激活态淡强调底）；
 - 歌单列表：封面缩略图（歌单内第一首歌）+ 名称 + 数量，右键重命名/删除。
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ class Sidebar(QWidget):
         icon_nav.setSpacing(8)
         for view_id, kind, tip in (
             (PLAYLIST_FAVORITES, "heart", "我喜欢"),
-            (PLAYLIST_LIBRARY, "home", "资料库"),
+            (PLAYLIST_LIBRARY, "home", "音乐库"),
         ):
             btn = QPushButton()
             btn.setObjectName("IconNav")
@@ -192,7 +192,7 @@ class Sidebar(QWidget):
                 cover.setPixmap(pixmap)
             else:
                 from ui.theme import current_theme
-                cover.setPixmap(ic.make_icon("note", current_theme().TEXT_DIM, 18).pixmap(18, 18))
+                cover.setPixmap(ic.make_pixmap("note", current_theme().TEXT_DIM, 18))
             row_layout.addWidget(cover)
 
             text_col = QVBoxLayout()

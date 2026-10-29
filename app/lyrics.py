@@ -63,8 +63,7 @@ def parse_lrc(text: str) -> list[LyricLine]:
         content = rest.strip()
         if not content:
             continue
-        for t in times:
-            lines.append(LyricLine(t + offset_ms, content))
+        lines.extend(LyricLine(t + offset_ms, content) for t in times)
     lines.sort(key=lambda line: line.time_ms)
     return lines
 
@@ -79,15 +78,60 @@ def parse_plain(text: str) -> list[str]:
     return out
 
 
+# 纯文本歌词里的元数据行标签（后跟冒号，如「作词 : 音融三喜」）。
+# 浏览器下载的 .txt 歌词常在开头带一段 歌名 + 作词/作曲/编曲 的元数据，
+# 识别时应剔除，否则会把「作词 : xxx」当歌词行显示。
+_PLAIN_META_LABEL = re.compile(
+    r"^\s*(?:作词|作曲|编曲|填词|词曲|作词者|作曲者|编曲者|演唱|演唱者|歌手|主唱|"
+    r"混音|混音师|制作|制作人|监制|录音|和声|和音|吉他|贝斯|鼓|键盘|弦乐|钢琴|"
+    r"出品|出品人|发行|发行方|企划|统筹|旁白)\s*[:：]"
+)
+
+
+def _next_is_meta(lines: list[str], start: int) -> bool:
+    """从 start 起找第一个非空行，判断它是不是元数据行（「作词 : xxx」这种）。"""
+    for j in range(start, len(lines)):
+        line = lines[j].strip()
+        if not line:
+            continue
+        return bool(_PLAIN_META_LABEL.match(line))
+    return False
+
+
+def strip_meta_lines(text: str) -> str:
+    """剔除纯文本歌词开头的元数据块（歌名 + 作词/作曲/编曲等）。
+
+    浏览器下载的 .txt 歌词常见：
+        唯有追赶风的方向 (Only By Chasing the)
+        作词 : 音融三喜
+        作曲 : 音融三喜
+        编曲 : 音融三喜
+        歌词正文...
+    首行「歌名」靠「后面紧跟元数据行」这条信号剔除，避免把正文第一句误删。
+    """
+    lines = (text or "").splitlines()
+    out: list[str] = []
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if _PLAIN_META_LABEL.match(line):
+            continue
+        # 首行是歌名：其后的第一个非空行若是元数据行，首行也是元数据，剔除
+        if i == 0 and _next_is_meta(lines, 1):
+            continue
+        out.append(raw)
+    return "\n".join(out)
+
+
 def lyrics_from_text(text: str) -> tuple[list[LyricLine], list[str]]:
     """歌词原文分流：含时间标签走同步解析，否则按纯文本。
 
     返回 (同步行列表, 纯文本行列表)，两者必有且只有一个非空。
+    纯文本路径会先剔除「作词/作曲/编曲」这类元数据行。
     """
     synced = parse_lrc(text)
     if synced:
         return synced, []
-    return [], parse_plain(text)
+    return [], parse_plain(strip_meta_lines(text))
 
 
 def lyric_index_at(lines: list[LyricLine], position_ms: int) -> int:

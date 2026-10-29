@@ -218,5 +218,8 @@ class NowPlayingPage(QWidget):
     def set_empty(self, hint: str | None = None) -> None:
         self.lyrics.set_empty(hint)
 
+    def set_source(self, text: str | None) -> None:
+        self.lyrics.set_source(text)
+
     def update_position(self, position_ms: int) -> None:
         self.lyrics.update_position(position_ms)

@@ -47,7 +47,7 @@ SORT_PRESETS: tuple[SortPreset, ...] = (
     SortPreset("album:desc", "album", True, "专辑（Z→A）", "text"),
 )
 
-# 资料库/我喜欢/最近添加 的默认排序；歌单默认保持自定义序（可拖拽）
+# 音乐库/我喜欢/最近添加 的默认排序；歌单默认保持自定义序（可拖拽）
 DEFAULT_SORT = "added:desc"
 DEFAULT_PLAYLIST_SORT = "custom:asc"
 

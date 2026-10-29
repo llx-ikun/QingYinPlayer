@@ -4,7 +4,7 @@
 - 无 Qt 依赖，便于单测（测试传入临时目录路径）；
 - 原子写入（tmp + os.replace），避免崩溃写坏数据；
 - 数据文件损坏时自动备份并重建，不阻塞启动；
-- 资料库 = 全部 tracks；「最近播放」为虚拟视图，均不落盘 track_ids。
+- 音乐库 = 全部 tracks；「最近播放」为虚拟视图，均不落盘 track_ids。
 """
 from __future__ import annotations
 
@@ -263,7 +263,7 @@ class LibraryStore:
 
     def view_name(self, view_id: str) -> str:
         if view_id == PLAYLIST_LIBRARY:
-            return "资料库"
+            return "音乐库"
         if view_id == PLAYLIST_RECENT:
             return "最近播放"
         if view_id == PLAYLIST_FAVORITES:

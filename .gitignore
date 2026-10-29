@@ -21,3 +21,6 @@ build_*.log
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 静态检查缓存
+.ruff_cache/

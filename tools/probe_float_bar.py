@@ -6,7 +6,7 @@
 
 用法：
     env -u PYTHONPATH .venv/Scripts/python.exe tools/probe_float_bar.py --out shots/float.png
-    env -u PYTHONPATH .venv/Scripts/python.exe tools/probe_float_bar.py --theme dark --scale 6
+    env -u PYTHONPATH .venv/Scripts/python.exe tools/probe_float_bar.py --theme columbina --scale 6
 
 注意：
 - 必须用真实平台（不要设 QT_QPA_PLATFORM=offscreen，否则字体库为空、中文全方块）
@@ -30,7 +30,7 @@ PAD = 12
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="shots/float_bar.png")
-    ap.add_argument("--theme", default="columbina", choices=["columbina", "dark", "light"])
+    ap.add_argument("--theme", default="columbina", choices=["columbina", "light"])
     ap.add_argument("--scale", type=int, default=4, help="放大倍数（最近邻，看边缘是否锐利）")
     ap.add_argument("--hover", default="", choices=["", "import", "dir", "settings", "theme"],
                     help="模拟某个按钮的悬停外观（直接灌底色，不触发真实 :hover）")

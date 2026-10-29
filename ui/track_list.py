@@ -284,7 +284,7 @@ class TrackList(QWidget):
         # 第一行：标题 + 主操作
         row1 = QHBoxLayout()
         row1.setSpacing(10)
-        self.title_label = QLabel("资料库")
+        self.title_label = QLabel("音乐库")
         self.title_label.setObjectName("PageTitle")
         row1.addWidget(self.title_label)
         row1.addStretch(1)
@@ -510,10 +510,10 @@ class TrackList(QWidget):
             ("remove_from_playlist", "从歌单移除", self._in_playlist),
             ("move_up", "上移", self._in_playlist),
             ("move_down", "下移", self._in_playlist),
-            ("bind_lyrics", "选择歌词文件…", True),
+            ("bind_lyrics", "导入歌词文件…", True),
             ("refresh", "重新读取歌曲信息", True),
             ("locate", "在文件资源管理器中显示", True),
-            ("remove_from_library", "移除出资料库", True),
+            ("remove_from_library", "移除出音乐库", True),
         ]
 
     def _build_menu(self, tid: str) -> tuple[QMenu, dict]:

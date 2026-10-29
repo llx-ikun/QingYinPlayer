@@ -11,12 +11,13 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import random
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter,
-                           QPainterPath, QPen, QPixmap)
+                           QPainterPath, QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import QWidget
 
 from app.models import BackgroundConfig
@@ -83,124 +84,445 @@ def prepare_pixmap(path: str, width: int, height: int, blur: int) -> QPixmap | N
     return result
 
 
-def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str) -> None:
-    """画「空月」主题的底层装饰：星点 + 符文圆环 + 羽饰 + 月牙。
+def _paint_four_point_star(painter: QPainter, cx: float, cy: float, r: float) -> None:
+    """画一枚四角星（sparkle）：外端在上下左右、内凹点在四角，读起来像发光星点。"""
+    k = r * 0.32
+    path = QPainterPath()
+    path.moveTo(cx, cy - r)
+    path.lineTo(cx + k, cy - k)
+    path.lineTo(cx + r, cy)
+    path.lineTo(cx + k, cy + k)
+    path.lineTo(cx, cy + r)
+    path.lineTo(cx - k, cy + k)
+    path.lineTo(cx - r, cy)
+    path.lineTo(cx - k, cy - k)
+    path.closeSubpath()
+    painter.drawPath(path)
 
-    元素全部取自哥伦比娅（《原神》空月之歌）的视觉语言：
-      符文圆环 —— 她背后那枚多层法阵，抽象成三层同心圆 + 八枚刻度 + 中心淡点；
-      羽饰     —— 头饰与披风上的白羽，抽象成左上三片斜向羽片；
-      月牙星点 —— 夜空与月光。
 
-    为什么不用官方立绘：那是版权素材，不该随程序分发。这里只复刻形状与气质。
+def _lighten(color: QColor, amount: float) -> QColor:
+    """把颜色往白混 amount（0=原色，1=白）。用于提亮月牙/光晕，保留一点蓝紫调。"""
+    amount = max(0.0, min(1.0, amount))
+    return QColor(int(color.red() + (255 - color.red()) * amount),
+                  int(color.green() + (255 - color.green()) * amount),
+                  int(color.blue() + (255 - color.blue()) * amount))
 
-    alpha 定档经过一轮返工：初版圆环 13 / 羽饰 11 / 月牙 14，在真实底色上
-    （BG #120e22 → BG_ALT #0a1220）**几乎完全看不见**，等于白画。现在外环 30 /
-    刻度 34 / 中心 40 / 羽饰 22 / 月牙 28 —— 形状必须锐利（细线 + 清晰轮廓），
-    亮度靠 alpha 而不是靠「涂一大块」，才既看得出又不会糊成污渍（记忆 #56）。
+
+def _paint_theme_decor(painter: QPainter, rect: QRectF, color: str,
+                       style: str = "columbina") -> None:
+    """主题底层装饰的分发入口。
+
+    style="columbina"（深色）：午夜深蓝夜空——四角星 + 月牙 + 漂浮羽饰。
+    style="light"（浅色·薰衣草）：玻璃质感——细线羽饰 + 低透明度四角星点缀。
+
+    都只取主题强调色（color），alpha 压住，做氛围不抢内容。
     """
-    import math
+    if style == "light":
+        _paint_light_decor(painter, rect, color)
+    else:
+        _paint_columbina_decor(painter, rect, color)
 
+
+def _paint_concave_star(painter: QPainter, cx: float, cy: float, r: float,
+                        concave: float = 0.15) -> QPainterPath:
+    """四角星，边向内凹（「魔法闪光」那种形）。返回 path 供调用方决定描边/填充。"""
+    path = QPainterPath()
+    path.moveTo(cx, cy - r)
+    path.quadTo(cx + r * concave, cy - r * concave, cx + r, cy)
+    path.quadTo(cx + r * concave, cy + r * concave, cx, cy + r)
+    path.quadTo(cx - r * concave, cy + r * concave, cx - r, cy)
+    path.quadTo(cx - r * concave, cy - r * concave, cx, cy - r)
+    path.closeSubpath()
+    return path
+
+
+def _paint_soft_feather(painter: QPainter, cx: float, cy: float, length: float,
+                        angle: float, ink: QColor, alpha: int = 70) -> None:
+    """一片**柔和**的羽毛：横向渐变填充（边缘透明、中线有色）+ 一根亮羽轴。
+
+    参考图的浮羽是柔焦的写实羽毛，不是线描 —— 用「轮廓 + 细线」画出来会变成
+    线稿插图，气质完全不同。所以这里靠渐变做柔边，不画硬轮廓。
+    """
+    half = length * 0.135
+    painter.save()
+    painter.translate(cx, cy)
+    painter.rotate(angle)
+
+    def half_width(u: float) -> float:
+        """基部窄、中段（约 4 成处）最宽、羽尖渐收 —— 对称的 sin 会读成刀片/树叶。"""
+        u = min(1.0, max(0.0, u))
+        return half * math.sin(math.pi * u ** 0.82) ** 0.72
+
+    blade = QPainterPath()
+    blade.moveTo(0, 0)
+    steps = 26
+    for i in range(1, steps + 1):
+        u = i / steps
+        blade.lineTo(length * u, -half_width(u))
+    for i in range(steps, -1, -1):
+        u = i / steps
+        blade.lineTo(length * u, half_width(u))
+    blade.closeSubpath()
+
+    edge = QColor(ink)
+    edge.setAlpha(0)
+    mid = QColor(ink)
+    mid.setAlpha(alpha)
+    grad = QLinearGradient(0, -half, 0, half)      # 局部坐标：横跨羽片
+    grad.setColorAt(0.0, edge)
+    grad.setColorAt(0.42, mid)
+    grad.setColorAt(0.58, mid)
+    grad.setColorAt(1.0, edge)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(grad)
+    painter.drawPath(blade)
+
+    # 羽枝：只要极淡几根，让柔化的羽片还读得出「羽毛」而不是「刀片」
+    barb = QColor(ink)
+    barb.setAlpha(max(20, int(alpha * 0.7)))
+    bpen = QPen(barb)
+    bpen.setWidthF(0.9)
+    painter.setPen(bpen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for i in range(10):
+        u = 0.14 + 0.74 * i / 9
+        x = length * u
+        for sign in (1, -1):
+            w_u = half_width(u) * 0.9
+            painter.drawLine(QPointF(x, 0), QPointF(x + w_u * 0.75, sign * w_u))
+
+    # 羽轴：基部最亮、朝羽尖渐隐（参考图的浮羽就是「羽根发光」）
+    shaft_grad = QLinearGradient(0, 0, length * 0.9, 0)
+    s0 = QColor(ink)
+    s0.setAlpha(min(255, alpha + 110))
+    s1 = QColor(ink)
+    s1.setAlpha(max(0, int(alpha * 0.25)))
+    shaft_grad.setColorAt(0.0, s0)
+    shaft_grad.setColorAt(0.45, s0)
+    shaft_grad.setColorAt(1.0, s1)
+    pen = QPen(QBrush(shaft_grad), 1.2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawLine(QPointF(0, 0), QPointF(length * 0.88, 0))
+    painter.restore()
+
+
+def _paint_columbina_decor(painter: QPainter, rect: QRectF, color: str) -> None:
+    """深色夜空（image 2）：玻璃月牙 + 轨道环 + 罗盘星 + 漂浮柔羽。
+
+    从下往上分五层：径向辉光 → 星尘 → 轨道环（带刻度）→ 月牙 → 罗盘星 → 浮羽。
+
+    月牙是**半透明玻璃**：亮的是那圈 1.6px 冷白描边，内部是低 alpha 的渐变填充。
+    上一版是 alpha 205 的实心冷白块，在深底上读成"贴纸"而不是"发光体"——
+    发光感来自**边缘比内部亮**，不是整体涂白。
+
+    元素取自《原神》「空月之歌」的视觉语言（月与星、头饰披风的白羽），只复刻
+    形状气质、不嵌入官方立绘（版权素材不随程序分发）。主题对外名字是「深色」。
+    """
     w, h = rect.width(), rect.height()
     if w <= 0 or h <= 0:
         return
-    painter.setPen(Qt.PenStyle.NoPen)
-
-    # ---- 星点：位置/大小/亮度都由固定种子决定，窗口缩放时不会乱跳 ----
-    rnd = random.Random(_DECOR_SEED)
-    star = QColor(color)
-    for _ in range(56):
-        x, y = rnd.uniform(0, 1) * w, rnd.uniform(0, 1) * h
-        r = rnd.uniform(0.6, 1.9)
-        star.setAlpha(rnd.randint(22, 72))
-        painter.setBrush(star)
-        painter.drawEllipse(QPointF(x, y), r, r)
-
-    # ---- 符文圆环：右上半区，三层同心圆 + 八枚刻度 + 中心淡点 ----
-    # 圆环放右上半区、月牙放右下半区（v2.3.1 把月牙下移到「行下空白带」是有意为之），
-    # 两者在 y 方向故意错开 —— 两个淡圆一旦叠在一起，就会糊成一团说不清是什么的
-    # 「污渍」。圆环半径因此要收着点（0.23min），否则下沿会伸进月牙那一带。
-    cx, cy = w * 0.78, h * 0.26
-    ring_r = min(w, h) * 0.23
-    ring = QColor(color)
-    ring.setAlpha(30)
-    pen = QPen(ring)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    for radius, width, alpha in ((ring_r, 1.8, 30), (ring_r * 0.76, 1.1, 22),
-                                 (ring_r * 0.52, 1.1, 18)):
-        ring.setAlpha(alpha)
-        pen.setColor(ring)
-        pen.setWidthF(max(0.7, width))
-        painter.setPen(pen)
-        painter.drawEllipse(QPointF(cx, cy), radius, radius)
-    # 八枚刻度：沿最外一圈均布的短线段，读作「法阵的刻度」
-    ring.setAlpha(34)
-    pen.setColor(ring)
-    pen.setWidthF(1.6)
-    painter.setPen(pen)
-    for i in range(8):
-        a = math.pi * i / 4
-        ca, sa = math.cos(a), math.sin(a)
-        painter.drawLine(QPointF(cx + ring_r * 0.90 * ca, cy + ring_r * 0.90 * sa),
-                         QPointF(cx + ring_r * 1.12 * ca, cy + ring_r * 1.12 * sa))
-    # 中心一枚淡点（月之心）
-    ring.setAlpha(40)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(ring)
-    painter.drawEllipse(QPointF(cx, cy), ring_r * 0.09, ring_r * 0.09)
-
-    # ---- 羽饰：内容区右上三片斜向羽片，羽尖朝右下，与圆环组成「光环 + 羽翼」 ----
-    # 位置两次返工：① 放左上（侧栏内）→ 被半透明面板（不透明度 0.78）盖得几乎
-    # 看不见，alpha 26 透过去只剩 5；② 骑侧栏/内容区分界线 → 仍有一半在面板下。
-    # 最终放内容区右上空白处（页头标题与「播放全部」之间），与圆环同侧呼应 ——
-    # 只有**没有面板盖着**的区域，装饰才真的看得见。
-    # 画法也用「描边叶片 + 羽轴中线」而不是实心填充：实心淡块在深底上会糊成一
-    # 片说不清是什么的影（首版就这样），线条才有「羽」的辨识度。
-    feather = QColor(color)
-    feather.setAlpha(50)
-    fpen = QPen(feather)
-    fpen.setWidthF(1.5)
-    fpen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.setPen(fpen)
     unit = min(w, h)
-    for fx, fy, ln, ang in ((0.520, 0.130, 0.100, -38),
-                            (0.565, 0.080, 0.070, -54),
-                            (0.535, 0.215, 0.055, -22)):
+    accent = QColor(color)
+    glow_ink = _lighten(accent, 0.72)
+    rim_ink = _lighten(accent, 0.90)      # 月牙/星芒的边缘：近冷白
+
+    diameter = unit * 0.44
+    cx, cy = w * 0.77, h * 0.40
+    r_moon = diameter * 0.5
+    ring_r = r_moon * 1.32
+
+    # ---- 1) 月亮背后的径向辉光：让月亮「照亮」周围，而不是贴上去 ----
+    halo_r = ring_r * 2.55          # 参考图的月光是**大范围**洗亮右半侧，不是贴着月亮的圈
+    grad = QRadialGradient(QPointF(cx, cy), halo_r)
+    for pos, alpha in ((0.0, 58), (0.34, 26), (0.62, 10), (1.0, 0)):
+        c = QColor(glow_ink)
+        c.setAlpha(alpha)
+        grad.setColorAt(pos, c)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(grad)
+    painter.drawEllipse(QPointF(cx, cy), halo_r, halo_r)
+
+    # ---- 2) 星尘：固定种子，缩放不乱跳 ----
+    rnd = random.Random(_DECOR_SEED)
+    for _ in range(24):
+        x, y = rnd.uniform(0.02, 0.99) * w, rnd.uniform(0.03, 0.99) * h
+        c = QColor(_lighten(accent, 0.60))
+        c.setAlpha(rnd.randint(30, 85))
+        painter.setBrush(c)
+        _paint_four_point_star(painter, x, y, rnd.uniform(1.8, 5.5))
+    for _ in range(36):
+        x, y = rnd.uniform(0, 1) * w, rnd.uniform(0, 1) * h
+        c = QColor(_lighten(accent, 0.60))
+        c.setAlpha(rnd.randint(20, 55))
+        painter.setBrush(c)
+        rr = rnd.uniform(0.6, 1.5)
+        painter.drawEllipse(QPointF(x, y), rr, rr)
+
+    # ---- 3) 轨道环 + 刻度：参考图里月牙外面套着一圈很细的轨道 ----
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    ring_c = QColor(_lighten(accent, 0.55))
+    ring_c.setAlpha(44)
+    ring_pen = QPen(ring_c)
+    ring_pen.setWidthF(1.0)
+    painter.setPen(ring_pen)
+    painter.drawEllipse(QPointF(cx, cy), ring_r, ring_r)
+    tick_c = QColor(_lighten(accent, 0.70))
+    tick_c.setAlpha(78)
+    tick_pen = QPen(tick_c)
+    tick_pen.setWidthF(1.2)
+    painter.setPen(tick_pen)
+    for i in range(24):
+        ang = math.radians(i * 15)
+        inner_r = ring_r * (0.945 if i % 2 == 0 else 0.965)
+        painter.drawLine(QPointF(cx + math.cos(ang) * inner_r, cy + math.sin(ang) * inner_r),
+                         QPointF(cx + math.cos(ang) * ring_r * 1.035,
+                                 cy + math.sin(ang) * ring_r * 1.035))
+
+    # ---- 4) 月牙：两圆的**差集** + 淡填充 + 软内带 + 亮边 ----
+    # 用两段圆弧拼（arcTo）会在两个弧的端点之间留一条直线弦，月牙的尖角被削平；
+    # addEllipse().subtracted() 直接求差集，尖角是两个圆真实相交处，天然锐利。
+    left, top = cx - r_moon, cy - r_moon
+    outer_disc = QPainterPath()
+    outer_disc.addEllipse(QRectF(left, top, diameter, diameter))
+    inner_scale = 0.86
+    inner_disc = QPainterPath()
+    inner_disc.addEllipse(QRectF(left + diameter * 0.32,
+                                 top + diameter * (1 - inner_scale) / 2,
+                                 diameter * inner_scale, diameter * inner_scale))
+    moon = outer_disc.subtracted(inner_disc)
+
+    # 软内带：宽笔沿轮廓走一遍，让边缘往里"化"开，形成一个发光带
+    for band_w, band_a, band_light in ((0.030, 9, 0.55), (0.012, 40, 0.72)):
+        band_c = _lighten(accent, band_light)
+        band_c.setAlpha(band_a)
+        band = QPen(band_c)
+        band.setWidthF(unit * band_w)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(band)
+        painter.drawPath(moon)
+
+    moon_fill = QLinearGradient(QPointF(left, top), QPointF(left + diameter, top))
+    for pos, alpha, light in ((0.0, 10, 0.62), (0.55, 7, 0.42), (1.0, 4, 0.30)):
+        c = _lighten(accent, light)
+        c.setAlpha(alpha)
+        moon_fill.setColorAt(pos, c)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(moon_fill)
+    painter.drawPath(moon)
+
+    rim_pen_c = QColor(rim_ink)
+    rim_pen_c.setAlpha(196)
+    rim = QPen(rim_pen_c)
+    rim.setWidthF(1.6)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(rim)
+    painter.drawPath(moon)
+
+    # ---- 5) 罗盘星：坐在轨道环正下方交点，带竖杆与刻度 ----
+    # 参考图里它在环的**右侧**，但右侧整片都是列表列（时长/编辑），星会压在图标上；
+    # 挪到环的正下方：同样"骑在轨道上"，那片是空的，竖杆还正好接上环的竖直轴。
+    sx, sy = cx, cy + ring_r
+    r_star = unit * 0.048
+    staff_c = QColor(_lighten(accent, 0.68))
+    staff_c.setAlpha(84)
+    staff_pen = QPen(staff_c)
+    staff_pen.setWidthF(1.0)
+    painter.setPen(staff_pen)
+    painter.drawLine(QPointF(sx, sy - r_star * 3.6), QPointF(sx, sy + r_star * 1.5))
+    painter.drawLine(QPointF(sx - r_star * 2.3, sy), QPointF(sx + r_star * 1.7, sy))
+    for k in (-3.0, -2.45, -1.9, -1.35):
+        y = sy + r_star * k
+        painter.drawLine(QPointF(sx - r_star * 0.17, y + r_star * 0.15),
+                         QPointF(sx, y))
+        painter.drawLine(QPointF(sx + r_star * 0.17, y + r_star * 0.15),
+                         QPointF(sx, y))
+
+    body = _paint_concave_star(painter, sx, sy, r_star, concave=0.14)
+    body_c = QColor(rim_ink)
+    body_c.setAlpha(140)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(body_c)
+    painter.drawPath(body)
+    edge_pen = QPen(QColor(_lighten(accent, 0.96)))
+    edge_pen.setWidthF(1.2)
+    painter.setPen(edge_pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(body)
+    # 四个斜向短尖，读出「罗盘」而不是普通闪点
+    for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        painter.drawLine(QPointF(sx + dx * r_star * 0.26, sy + dy * r_star * 0.26),
+                         QPointF(sx + dx * r_star * 0.52, sy + dy * r_star * 0.52))
+
+    # ---- 6) 漂浮柔羽：几片散在夜空里，位置固定（缩放不乱跳）----
+    feather_ink = _lighten(accent, 0.55)
+    for fx, fy, ln, ang, alpha in ((0.315, 0.215, 0.170, -45, 44),
+                                   (0.635, 0.110, 0.100, -20, 32),
+                                   (0.945, 0.700, 0.230, 58, 50),
+                                   (0.500, 0.870, 0.130, 14, 36)):
+        _paint_soft_feather(painter, w * fx, h * fy, unit * ln, ang, feather_ink, alpha)
+
+
+def _paint_light_decor(painter: QPainter, rect: QRectF, color: str) -> None:
+    """浅色装饰（image 1）：右侧一支细线大羽毛 + 一枚带光环的罗盘星。
+
+    参考图的疏朗感来自「少而大」：一支约 3/4 窗高的羽毛、一枚星、几点微光，
+    其余全是留白。之前撒几十颗碎星铺满全窗，读起来是噪点，反而不像。
+
+    羽毛轴线由羽尖 (0.955w, 0.155h) 与羽根 (0.795w, 1.02h) 决定（羽根落在窗口外，
+    裸羽轴伸出画面）。倾角 ≈ 16°、长度 ≈ 0.9h，按参考图逐点量出来的比例。
+
+    **线色不是强调色本身**：把强调色压深到 75% 再配高 alpha。用强调色 + 低 alpha
+    试过，最深的线只到 173（背景 244），参考图是 140 —— 差 1.4 倍浓度，看着"发虚"。
+    浅底上「看得见但不抢字」靠**线细 + 颜色深**，不靠涂大块（记忆 #51）。
+    """
+    w, h = rect.width(), rect.height()
+    if w <= 0 or h <= 0:
+        return
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(Qt.PenStyle.NoPen)
+
+    accent = QColor(color)
+    ink = QColor(int(accent.red() * 0.75), int(accent.green() * 0.75),
+                 int(accent.blue() * 0.75))
+    tip = QPointF(w * 0.955, h * 0.155)
+    root = QPointF(w * 0.795, h * 1.020)   # 羽根落在窗口外：裸羽轴伸出画面（参考图同）
+
+    def pen_of(alpha: int, width: float = 1.0) -> QPen:
+        c = QColor(ink)
+        c.setAlpha(alpha)
+        pen = QPen(c)
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        return pen
+
+    # ---- 羽毛（局部坐标：原点 = 羽根，+x 指向羽尖）----
+    length = math.hypot(tip.x() - root.x(), tip.y() - root.y())
+    lean = math.degrees(math.atan2(root.y() - tip.y(), tip.x() - root.x()))
+    half = length * 0.135          # 最宽处半宽（参考图 羽宽/羽长 ≈ 0.26）
+    VANE_START = 0.14              # 这根轴的 14% 之前是裸羽轴，羽片从 0 宽度长起
+
+    def half_width(t: float) -> float:
+        """沿轴 t(0~1) 处的半宽。
+
+        先把 t 重映射到「羽片自己的 0~1」再取形，这样羽片根部是**从 0 长起来**、
+        收拢成裸羽轴；直接对全轴取形会在 t=0.14 处留一个 36% 宽的硬截断，
+        两条边悬在空中像被剪过。
+        指数 1.15 让羽根收得细（羽片 10% 处只有峰值 26%）——参考图的羽毛从根部
+        渐宽、到 6 成处最宽再收尖；用 t^0.72 会在根部就撑开，读成叶子。
+        """
+        u = (t - VANE_START) / (1.0 - VANE_START)
+        u = min(1.0, max(0.0, u))
+        return half * math.sin(math.pi * u ** 1.15) ** 0.9
+
+    painter.save()
+    painter.translate(root)
+    painter.rotate(-lean)
+
+    def silhouette(sign: int, scale: float = 1.0, t0: float = 0.0,
+                   t1: float = 1.0, steps: int = 48) -> QPainterPath:
+        """沿轴生成一侧边缘。轮廓线与羽枝共用它 —— 各画一套贝塞尔会让
+        「边」和「梳齿」对不上，读成梯子（踩过）。
+
+        两侧不等宽（右侧 100% / 左侧 92%）：真实羽毛的羽片不是左右对称的，
+        完全对称会读成树叶/胶囊。
+        """
+        bulge = 1.0 if sign > 0 else 0.92
+        path = QPainterPath()
+        path.moveTo(length * t0, sign * half_width(t0) * scale * bulge)
+        for i in range(1, steps + 1):
+            t = t0 + (t1 - t0) * i / steps
+            path.lineTo(length * t, sign * half_width(t) * scale * bulge)
+        return path
+
+    # 轮廓：两侧分开，右侧更实（参考图右缘最清楚），左侧淡一档。
+    # 羽片从 t=0.14 才开始 —— 根部那一段是裸羽轴。
+    for sign, alpha in ((1, 100), (-1, 78)):
+        painter.setPen(pen_of(alpha, 1.1))
+        painter.drawPath(silhouette(sign, t0=0.14))
+
+    # 内侧嵌套一道细弧（参考图的「蚀刻感」：边缘里面还有一条平行线）
+    painter.setPen(pen_of(46, 0.9))
+    painter.drawPath(silhouette(1, scale=0.62, t0=0.20, t1=0.97))
+    painter.drawPath(silhouette(-1, scale=0.66, t0=0.20, t1=0.97))
+
+    # 羽枝：从羽轴向羽尖方向**斜扫**，到轮廓前收住（不碰到边线，否则成横档）。
+    # 疏密按参考图一侧约 16 根。
+    painter.setPen(pen_of(66, 0.9))
+    steps = 16
+    for i in range(steps):
+        t = 0.17 + 0.78 * i / (steps - 1)
+        x = length * t
+        for sign in (1, -1):
+            w_t = half_width(t) * 0.88
+            painter.drawLine(QPointF(x, 0), QPointF(x + w_t * 0.85, sign * w_t))
+
+    # 羽轴：比羽枝实一档，从羽根（画外）通到羽尖；带一点弧度，笔直的轴有塑料感
+    painter.setPen(pen_of(140, 1.3))
+    shaft = QPainterPath()
+    shaft.moveTo(0, 0)
+    shaft.quadTo(length * 0.50, -length * 0.008, length * 0.99, 0)
+    painter.drawPath(shaft)
+    painter.restore()
+
+    # ---- 罗盘星 + 光环（贴在羽毛左侧，那一带有面板盖不着）----
+    # 位置教训：装饰层在控件**下面**，星若落在标题栏/排序下拉框/按钮后面就只剩
+    # 一个孤零零的圆点（被不透明面板切掉一半）—— 必须挑「没有控件」的空档。
+    cx, cy = w * 0.800, h * 0.580
+    halo = h * 0.080
+    painter.setPen(pen_of(40, 1.0))
+    painter.drawEllipse(QPointF(cx, cy), halo, halo)
+    # 十字准线：横线贯穿并伸出光环，上方一小段竖线 —— 读成「罗盘」而非闪点
+    painter.setPen(pen_of(34, 1.0))
+    painter.drawLine(QPointF(cx - halo * 1.5, cy), QPointF(cx + halo * 1.5, cy))
+    painter.drawLine(QPointF(cx, cy - halo * 1.32), QPointF(cx, cy - halo * 0.52))
+
+    # 星必须是**细长实心尖刺**（腰部 waist 只有 7%），不是「肥星描边」也不是
+    # 「四角星填充」—— 后两者在 80px 尺度下会读成一坨菱形/蜘蛛网（都试过）。
+    r_star = h * 0.052
+    waist = 0.07
+
+    def spike_path(r: float) -> QPainterPath:
+        path = QPainterPath()
+        path.moveTo(cx, cy - r)
+        path.lineTo(cx + r * waist, cy - r * waist * 0.35)
+        path.lineTo(cx + r, cy)
+        path.lineTo(cx + r * waist, cy + r * waist * 0.35)
+        path.lineTo(cx, cy + r)
+        path.lineTo(cx - r * waist, cy + r * waist * 0.35)
+        path.lineTo(cx - r, cy)
+        path.lineTo(cx - r * waist, cy - r * waist * 0.35)
+        path.closeSubpath()
+        return path
+
+    for tint, alpha in ((0.0, 130), (45.0, 70)):
+        c = QColor(ink)
+        c.setAlpha(alpha)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(c)
         painter.save()
-        painter.translate(w * fx, h * fy)
-        painter.rotate(ang)
-        s = unit * ln
-        blade = QPainterPath()
-        blade.moveTo(0, 0)
-        blade.cubicTo(s * 0.30, -s * 0.34, s * 0.86, -s * 0.30, s, 0)
-        blade.cubicTo(s * 0.86, s * 0.30, s * 0.30, s * 0.34, 0, 0)
-        blade.closeSubpath()
-        painter.drawPath(blade)
-        painter.drawLine(QPointF(0, 0), QPointF(s * 0.90, 0))   # 羽轴
+        painter.translate(cx, cy)
+        painter.rotate(tint)                 # 45° 那层是短的斜向刻度
+        painter.translate(-cx, -cy)
+        painter.drawPath(spike_path(r_star if not tint else r_star * 0.42))
         painter.restore()
 
-    # ---- 月牙：右下半区的「行下空白带」上，与圆环在 y 方向错开 ----
-    # 位置三次试错：① 贴右下角被 84px 播放栏压成残弧；② 右上角裁掉弧的缺口；
-    # ③ 移到行下空白带（v2.3.1，alpha 同时 18→14）。尺寸/alpha 沿用那一版，
-    # 这里只把它和圆环的占位错开，不重复调氛围浓度。
-    diameter = min(w, h) * 0.38
-    cx2, cy2 = w * 0.87, h * 0.70
-    left = cx2 - diameter * 0.5
-    top = cy2 - diameter * 0.5
-    outer = QRectF(left, top, diameter, diameter)
-    path = QPainterPath()
-    path.arcMoveTo(outer, 75)
-    path.arcTo(outer, 75, 210)
-    inner = QRectF(left + diameter * 0.30, top + diameter * 0.10,
-                   diameter * 0.82, diameter * 0.94)
-    path.arcTo(inner, 285, -210)
-    path.closeSubpath()
+    core = QColor(ink)
+    core.setAlpha(190)
+    painter.setBrush(core)
+    painter.drawEllipse(QPointF(cx, cy), r_star * 0.10, r_star * 0.10)
 
-    moon_color = QColor(color)
-    moon_color.setAlpha(14)
-    painter.setBrush(moon_color)
-    painter.drawPath(path)
+    # ---- 几点微光：固定位置，不再撒满全窗 ----
+    painter.setPen(pen_of(70, 1.0))
+    for fx, fy, dashes, angle in ((0.905, 0.340, 6, 20), (0.965, 0.440, 5, -35),
+                                 (0.945, 0.620, 7, 65), (0.975, 0.720, 5, 80),
+                                 (0.885, 0.800, 4, -60)):
+        painter.save()
+        painter.translate(w * fx, h * fy)
+        painter.rotate(angle)
+        painter.drawLine(QPointF(-dashes / 2, 0), QPointF(dashes / 2, 0))
+        painter.restore()
 
 
 class BackgroundLayer(QWidget):
@@ -257,11 +579,12 @@ class BackgroundLayer(QWidget):
         if self.width() <= 0 or self.height() <= 0:
             return
         if cfg.type == "none":
-            # 没有自定义背景时，主题可以放自己的底层装饰（空月）
-            if self._decor == "columbina":
+            # 没有自定义背景时，主题可以放自己的底层装饰（深色 / 浅色）
+            if self._decor in ("columbina", "light"):
                 painter = QPainter(self)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                _paint_theme_decor(painter, QRectF(self.rect()), self._decor_color)
+                _paint_theme_decor(painter, QRectF(self.rect()), self._decor_color,
+                                   self._decor)
                 painter.end()
             return
         painter = QPainter(self)

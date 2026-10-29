@@ -63,7 +63,7 @@ class QueuePanel(QDialog):
             row_layout.setSpacing(8)
             if i == current_index:
                 icon = QLabel()
-                icon.setPixmap(ic.make_icon("playing", theme.ACCENT, 13).pixmap(13, 13))
+                icon.setPixmap(ic.make_pixmap("playing", theme.ACCENT, 13))
                 icon.setFixedWidth(18)
                 row_layout.addWidget(icon)
             else:

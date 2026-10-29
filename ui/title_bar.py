@@ -43,7 +43,7 @@ class TitleBar(QWidget):
 
         # ---- logo + 名称 ----
         logo_icon = QLabel()
-        logo_icon.setPixmap(ic.make_icon("note", current_theme().ACCENT, 20).pixmap(20, 20))
+        logo_icon.setPixmap(ic.make_pixmap("note", current_theme().ACCENT, 20))
         root.addWidget(logo_icon)
         logo = QLabel("轻音")
         logo.setObjectName("Logo")

@@ -13,20 +13,39 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 _cache: dict[tuple, QIcon] = {}
 
 
-def _paint(kind: str, size: int, color: QColor) -> QPixmap:
-    pm = QPixmap(size, size)
+def device_ratio() -> float:
+    """当前屏幕的缩放比（125% → 1.25）。
+
+    图标必须按**设备像素**渲染再标上 DPR，否则 16px 位图会在高分屏上被放大
+    1.25~1.5 倍绘制，抗锯齿一糊，齿轮这种多齿形状就变成一团灰点（v2.5 实测：
+    125% 下 16px 齿轮的有效深色区域只剩 ~11 设备像素，整窗截图里读成脏点）。
+    没有 QGuiApplication 时（构建脚本 / 纯逻辑测试）退回 1.0。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    app = QGuiApplication.instance()
+    screen = app.primaryScreen() if app is not None else None
+    if screen is None:
+        return 1.0
+    return max(1.0, float(screen.devicePixelRatio()))
+
+
+def _paint(kind: str, size: int, color: QColor, dpr: float = 1.0) -> QPixmap:
+    # 画布用设备像素；`size` 仍是逻辑尺寸，两处分开才能让笔画边界落在整像素上。
+    px = max(1, round(size * dpr))
+    pm = QPixmap(px, px)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     pen = p.pen()
     pen.setColor(color)
-    pen.setWidthF(max(1.2, size * 0.085))
+    pen.setWidthF(max(1.2 * dpr, px * 0.085))
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     p.setPen(pen)
     p.setBrush(color)
 
-    u = size  # 画布单位
+    u = px  # 画布单位（设备像素）
     m = u * 0.16  # 边距
 
     if kind == "play":
@@ -255,10 +274,11 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         path.closeSubpath()
         p.drawPath(path)
     elif kind == "feather":
-        # 羽毛（「空月」主题钮）：**实心羽片 + 镂空羽轴 + 两侧羽枝缺口**。
+        # 羽毛：实心羽片 + 镂空羽轴 + 两侧羽枝缺口。
+        # **v2.5.1 起主题钮不再用它**（改成月亮，16px 下羽毛仍读不出形状），
+        # 保留这个字形作为备选（深色主题的装饰语汇里仍有羽毛）。
         # 首版是「羽轴 + 8 条细羽枝」（纯线条），出验收表后发现 16px 下糊成一小团
-        # 灰点，和相邻的 settings（细横线）撞气质 —— 主题钮是最常被点到的按钮，
-        # 必须靠实心轮廓才站得住（同 gear 的教训）。
+        # 灰点，和相邻的 settings（细横线）撞气质 —— 必须靠实心轮廓才站得住。
         p.save()
         p.translate(u * 0.5, u * 0.5)
         p.rotate(-42)  # 羽尖朝右上，和界面里其他斜向元素同方向
@@ -278,28 +298,43 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         p.fillPath(blade.subtracted(cuts), color)
         p.restore()
     elif kind == "gear":
-        # 齿轮：实心 + 锯齿外轮廓 + 中心镂空圆孔。
+        # 齿轮：实心厚环 + 8 个「短而宽」的梯形齿 + 镂空轴孔。
+        #
         # 为什么不用「圆环 + 8 条短射线」：那样在 16px 下与 sun（实心圆点 + 细长
         # 射线）几乎无法区分，而齿轮就排在主题钮正下方，用户会以为两个都是换主题的。
-        # 靠「宽齿的锯齿轮廓」而不是「细线」来识别，小尺寸下才站得住。
+        #
+        # v2.5 重画（用户圈图「优化一下图案」）。旧版 8 齿但齿深 0.16、齿顶平台只占
+        # 0.28 步、轴孔 Ø0.28 —— 齿又长又尖、齿谷和齿一样宽，轮廓读成多角星；再叠加
+        # 高分屏把 16px 位图放大绘制（见 `device_ratio()`），整窗截图里就是一团灰点。
+        # 现在按「厚环 + 短宽齿」重排，三处关键参数：
+        #   ① 齿深 0.16 → 0.12（齿顶 0.47 / 齿根 0.35）：环体明显占主导，
+        #      齿只是环上的凸起，才不会读成星星；
+        #   ② 齿顶平台 0.28 → 0.44 步、齿面斜边收到 0.09 步：齿顶是宽平面，
+        #      不是尖角——这是「齿轮」而不是「星形」的决定性特征；
+        #   ③ 轴孔 Ø0.28 → Ø0.30 且环体加厚：20px 下孔径 6px、环宽 4px，
+        #      孔和环都稳定（孔再小会被抗锯齿填掉一半）。
+        # 参数是在 20px / 24px 设备像素上逐个比过才定的（16px 判断会得出错误结论）。
         import math
         teeth = 8
-        r_root, r_tip = 0.29, 0.45
+        r_tip, r_root = 0.47, 0.35
+        plateau, flank = 0.44, 0.09
         step = 2 * math.pi / teeth
+        # 齿根 → 齿顶平台起 → 齿顶平台止 → 回落齿根；末点到下一齿起点之间即齿谷
+        profile = ((0.00, r_root), (flank, r_tip),
+                   (flank + plateau, r_tip), (flank * 2 + plateau, r_root))
         outline = QPainterPath()
         for i in range(teeth):
-            a0 = i * step
-            # 齿根 → 上升沿 → 齿顶平台 → 下降沿，回到齿根
-            for frac, r in ((0.0, r_root), (0.16, r_tip), (0.44, r_tip), (0.60, r_root)):
-                ang = a0 + frac * step
-                x, y = 0.5 + r * math.cos(ang), 0.5 + r * math.sin(ang)
+            for frac, radius in profile:
+                angle = i * step + frac * step
+                point = QPointF(0.5 + radius * math.cos(angle),
+                                0.5 + radius * math.sin(angle))
                 if outline.elementCount() == 0:
-                    outline.moveTo(u * x, u * y)
+                    outline.moveTo(u * point.x(), u * point.y())
                 else:
-                    outline.lineTo(u * x, u * y)
+                    outline.lineTo(u * point.x(), u * point.y())
         outline.closeSubpath()
         hole = QPainterPath()
-        hole.addEllipse(QRectF(u * 0.36, u * 0.36, u * 0.28, u * 0.28))
+        hole.addEllipse(QRectF(u * 0.35, u * 0.35, u * 0.30, u * 0.30))
         p.setBrush(color)
         p.fillPath(outline.subtracted(hole), color)
     elif kind == "settings":
@@ -315,12 +350,30 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
             x1, y1 = 0.5 + 0.40 * math.cos(a), 0.5 + 0.40 * math.sin(a)
             p.drawLine(QPointF(u * x0, u * y0), QPointF(u * x1, u * y1))
     elif kind == "moon":
-        path = QPainterPath()
-        path.arcMoveTo(QRectF(u * 0.14, u * 0.14, u * 0.72, u * 0.72), 75)
-        path.arcTo(QRectF(u * 0.14, u * 0.14, u * 0.72, u * 0.72), 75, 210)
-        path.arcTo(QRectF(u * 0.36, u * 0.20, u * 0.52, u * 0.60), 285, -210)
-        path.closeSubpath()
-        p.drawPath(path)
+        # 月亮（v2.5.1 起作为「切到深色」的主题钮图标；原来这里用的是羽毛，
+        # 16px 下糊成一团认不出，用户圈图要求「画成月亮」）。
+        #
+        # 用**两圆差集**画月牙：尖角是两个圆真实相交处，天然锐利。
+        # 千万别用 arcMoveTo + arcTo 拼两段弧——两个弧端点之间会连一条直线弦，
+        # 月牙被削平成"灰色 D"（v2.3.6 深色背景装饰踩过同一个坑，见 DESIGN §17.2）。
+        #
+        # 参数在 20/24 设备像素上比过：外圆 R=0.42（占满画布）、内圆 0.90R 右移 0.16、
+        # 整体转 -30°（经典月亮的斜开口）。太薄（k>0.95）小尺寸下会断成一弯细线。
+        p.save()
+        p.translate(u * 0.5, u * 0.5)
+        p.rotate(-30)
+        p.translate(-u * 0.5, -u * 0.5)
+        r_out = 0.42
+        r_in = r_out * 0.90
+        dx = 0.16
+        outer = QPainterPath()
+        outer.addEllipse(QRectF(u * (0.5 - r_out), u * (0.5 - r_out),
+                                u * r_out * 2, u * r_out * 2))
+        inner = QPainterPath()
+        inner.addEllipse(QRectF(u * (0.5 + dx - r_in), u * (0.5 - r_in),
+                                u * r_in * 2, u * r_in * 2))
+        p.fillPath(outer.subtracted(inner), color)
+        p.restore()
     elif kind == "home":
         path = QPainterPath()
         path.moveTo(u * 0.50, u * 0.16)
@@ -368,6 +421,7 @@ def _paint(kind: str, size: int, color: QColor) -> QPixmap:
         p.drawEllipse(QRectF(u * 0.35, u * 0.35, u * 0.30, u * 0.30))
 
     p.end()
+    pm.setDevicePixelRatio(dpr)   # 告诉 Qt：这是 dpr 倍的位图，按逻辑尺寸绘制
     return pm
 
 
@@ -434,10 +488,24 @@ def refresh_icons() -> None:
 
 
 def make_icon(kind: str, color: str, size: int = 16) -> QIcon:
-    """生成（带缓存的）QIcon。color 为 '#rrggbb'。"""
-    key = (kind, color, size)
+    """生成（带缓存的）QIcon。color 为 '#rrggbb'。
+
+    位图按当前屏幕缩放比渲染并标记 DPR，高分屏上才不会被放大糊掉
+    （见 `device_ratio()`）。缓存键带上 dpr，换屏幕不会拿到旧比例的小图。
+    """
+    dpr = device_ratio()
+    key = (kind, color, size, dpr)
     icon = _cache.get(key)
     if icon is None:
-        icon = QIcon(_paint(kind, size, QColor(color)))
+        icon = QIcon(_paint(kind, size, QColor(color), dpr))
         _cache[key] = icon
     return icon
+
+
+def make_pixmap(kind: str, color: str, size: int = 16) -> QPixmap:
+    """直接给 QLabel.setPixmap 用（不走 QIcon）。
+
+    `QIcon.pixmap(18, 18)` 的两参重载默认按 DPR=1 取图，会把高分屏位图又降采样
+    回去；这里直接拿 `_paint` 的 DPR 位图，QLabel 会按逻辑尺寸正确显示。
+    """
+    return _paint(kind, size, QColor(color), device_ratio())

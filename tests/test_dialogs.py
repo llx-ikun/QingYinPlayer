@@ -36,4 +36,4 @@ class TestImportDialog(unittest.TestCase):
         dlg.finish(3, 3)
         self.assertTrue(dlg._finished)
         self.assertEqual(dlg.cancel_btn.text(), "关闭")
-        self.assertIn("资料库新增 3 首", dlg.detail.text())
+        self.assertIn("音乐库新增 3 首", dlg.detail.text())

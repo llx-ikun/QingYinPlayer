@@ -46,7 +46,7 @@ def parse_bg_spec(spec: str):
     return cfg
 
 
-def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "dark",
+def _prepare_data(appdata: str, with_tracks: bool = True, theme: str = "columbina",
                   with_video: bool = False, accent: str = "",
                   font_scale: float = 1.0, bg_spec: str = "") -> None:
     """在隔离 APPDATA 中构造演示数据。"""
@@ -145,7 +145,7 @@ def _play_first_video(window) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="./shots")
-    parser.add_argument("--theme", default=None, choices=["columbina", "dark", "light"])
+    parser.add_argument("--theme", default=None, choices=["columbina", "light"])
     parser.add_argument("--accent", default="", help="自定义强调色，如 #ff7a45（默认跟随主题）")
     parser.add_argument("--font-scale", type=float, default=1.0, dest="font_scale")
     parser.add_argument("--tag", default="", help="文件名后缀，便于同主题多套外观对比")

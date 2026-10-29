@@ -6,7 +6,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.lyrics import LyricLine, format_time, lyric_index_at, parse_lrc, parse_plain
+from app.lyrics import (LyricLine, format_time, lyric_index_at, lyrics_from_text,
+                        parse_lrc, parse_plain, strip_meta_lines)
 
 
 class TestParseLrc(unittest.TestCase):
@@ -98,6 +99,36 @@ class TestPlainAndTime(unittest.TestCase):
         self.assertEqual(format_time(61000), "1:01")
         self.assertEqual(format_time(3661000), "1:01:01")
         self.assertEqual(format_time(-5), "0:00")
+
+
+class TestStripMetaLines(unittest.TestCase):
+    """纯文本歌词开头的「歌名 + 作词/作曲/编曲」元数据块要能被剔除。"""
+
+    def test_strips_title_and_credit_block(self):
+        text = (
+            "唯有追赶风的方向 (Only By Chasing the)\n"
+            "作词 : 音融三喜\n"
+            "作曲 : 音融三喜\n"
+            "编曲 : 音融三喜\n"
+            "Who can surely know\n"
+            "风将吹向何方\n"
+        )
+        synced, plain = lyrics_from_text(text)
+        self.assertEqual(synced, [])
+        self.assertEqual(plain, ["Who can surely know", "风将吹向何方"])
+
+    def test_strips_fullwidth_colon(self):
+        text = "作曲：张三\n作词：李四\n第一句歌词"
+        self.assertEqual(strip_meta_lines(text).splitlines(), ["第一句歌词"])
+
+    def test_keeps_plain_lyrics_without_meta(self):
+        text = "第一句\n第二句\n第三句"
+        self.assertEqual(strip_meta_lines(text).splitlines(), ["第一句", "第二句", "第三句"])
+
+    def test_first_line_not_dropped_without_meta_signal(self):
+        """首行只在「后面紧跟元数据行」时才当歌名剔除；否则保留。"""
+        text = "第一句歌词\n第二句歌词"
+        self.assertEqual(strip_meta_lines(text).splitlines(), ["第一句歌词", "第二句歌词"])
 
 
 if __name__ == "__main__":

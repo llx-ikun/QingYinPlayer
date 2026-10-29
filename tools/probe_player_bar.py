@@ -42,7 +42,7 @@ def _fake_cover(size: int = 96, radius: int = 12) -> QPixmap:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="shots/player_bar.png")
-    ap.add_argument("--theme", default="light", choices=["light", "dark"])
+    ap.add_argument("--theme", default="light", choices=["columbina", "light"])
     ap.add_argument("--scale", type=int, default=2, help="放大倍数（便于看清 1-2px 细节）")
     args = ap.parse_args()
 
