@@ -126,6 +126,9 @@ class MainWindow(QMainWindow):
         self._resizing = False
         self._resize_start_geo: QRect | None = None
         self._resize_start_pos: QPoint | None = None
+        # 边缘缩放光标临时挂在哪、挂之前长什么样（见 _set_edge_cursor）
+        self._cursor_widget: QWidget | None = None
+        self._cursor_original: tuple[bool, Qt.CursorShape] | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -615,12 +618,17 @@ class MainWindow(QMainWindow):
         worker.start()
         return True
 
-    def _on_online_lyrics_progress(self, track_id: str, cur: int, total: int) -> None:
-        """联网匹配进度：只更新「正在找」的空状态文案，不打断已有歌词。"""
+    def _on_online_lyrics_progress(self, cur: int = 0, total: int = 0) -> None:
+        """联网匹配进度：只更新「正在找」的空状态文案，不打断已有歌词。
+
+        签名与 `MultiSourceWorker.progress = Signal(int, int)` 一致——别再塞
+        track_id：多一个参数会让每次 emit 都抛 TypeError，进度文案永远不更新
+        （v2.7.2 修）。进度只服务于「当前曲目」，直接看 current_track 即可。
+        """
         current = self.player.current_track
-        if current is None or current.id != track_id:
+        if current is None:
             return
-        if self._lyrics_cache.get(track_id) is not None:
+        if self._lyrics_cache.get(current.id) is not None:
             return                      # 已经拿到歌词了，别再覆盖
         self.now_playing.set_empty(f"正在联网匹配歌词…（{cur}/{total}）")
 
@@ -1499,6 +1507,42 @@ class MainWindow(QMainWindow):
             edges |= Qt.Edge.BottomEdge
         return edges
 
+    def _set_edge_cursor(self, widget: QWidget, cursor) -> None:
+        """把边缘缩放光标临时挂到 widget 上，并记住它原来的样子。
+
+        **不能**直接在每次 MouseMove 上 unsetCursor()：那会清掉控件在 __init__
+        里设的 PointingHandCursor（WA_SetCursor 被一并清掉），全应用的小手光标
+        当场失效，而且之后没有任何地方会把它设回来。所以只在「该改」且「换了
+        控件」时动手，还原时按控件原本是「自带光标」还是「继承光标」分别处理
+        （v2.7.2 修）。
+        """
+        if cursor is None or widget is self._cursor_widget:
+            return
+        self._restore_edge_cursor()
+        try:
+            had_own = widget.testAttribute(Qt.WidgetAttribute.WA_SetCursor)
+            self._cursor_original = (had_own, widget.cursor().shape())
+        except RuntimeError:  # 控件已被销毁（切页/行重建）
+            return
+        self._cursor_widget = widget
+        widget.setCursor(cursor)
+
+    def _restore_edge_cursor(self) -> None:
+        """把上一次临时改过的控件还原成它自己的光标。"""
+        widget, original = self._cursor_widget, self._cursor_original
+        self._cursor_widget = None
+        self._cursor_original = None
+        if widget is None or original is None:
+            return
+        had_own, shape = original
+        try:
+            if had_own:
+                widget.setCursor(shape)
+            else:
+                widget.unsetCursor()
+        except RuntimeError:  # 控件先一步没了，没什么可还原的
+            pass
+
     def eventFilter(self, obj, event):  # noqa: N802
         """应用级事件过滤：本窗口内任意控件上的鼠标移动都参与边缘缩放判定。"""
         if not isinstance(obj, QWidget) or obj.window() is not self:
@@ -1508,11 +1552,10 @@ class MainWindow(QMainWindow):
             local = self._root.mapFromGlobal(event.globalPosition().toPoint())
             edge = self._edge_at(local)
             self._resize_edge = edge
-            cursor = self._cursor_for_edge(edge)
-            if cursor is not None:
-                obj.setCursor(cursor)
+            if edge:
+                self._set_edge_cursor(obj, self._cursor_for_edge(edge))
             else:
-                obj.unsetCursor()
+                self._restore_edge_cursor()
         elif etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
             if self._resize_edge:
                 # 用系统原生缩放：无边框窗口手动 setGeometry 累加会造成整体移位，
@@ -1527,6 +1570,9 @@ class MainWindow(QMainWindow):
             if self._resizing:
                 self._resizing = False
                 self._resize_edge = 0
+                # 手动缩放兜底路径没有系统接管光标，松开后自己收拾干净，
+                # 免得指针停在 ↔ 上（原生 startSystemResize 由系统复位）
+                self._restore_edge_cursor()
         elif etype == QEvent.Type.MouseMove and self._resizing:
             self._apply_resize(event.globalPosition().toPoint())
         return False

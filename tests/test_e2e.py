@@ -722,6 +722,111 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(w._qt_edges(_EDGE_LEFT | _EDGE_TOP), Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
         self.assertEqual(w._qt_edges(_EDGE_RIGHT | _EDGE_BOTTOM), Qt.Edge.RightEdge | Qt.Edge.BottomEdge)
 
+    # ---------- 鼠标指针（v2.7.2） ----------
+
+    def _send_move(self, widget, local, global_point):
+        """给 widget 投递 MouseMove（会经过应用级 eventFilter）。"""
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QApplication
+
+        ev = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(local),
+            QPointF(global_point),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(widget, ev)
+
+    def _move_on_widget_center(self, widget):
+        """在控件中心（远离窗口四边）移动一次鼠标。"""
+        from PySide6.QtCore import QPoint
+        center = QPoint(max(1, widget.width() // 2), max(1, widget.height() // 2))
+        self._send_move(widget, center, widget.mapToGlobal(center))
+
+    def _feed_move(self, widget, at_left_edge: bool):
+        """直接喂给 eventFilter 一次移动事件，绕开 Qt 的事件冒泡。
+
+        真实投递时 QWidget 不处理 MouseMove 会把事件冒泡给父控件，过滤器会对
+        祖先再跑一遍，导致「强制光标落在哪个控件上」不确定。测逻辑就直接调。
+        """
+        from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        local = QPoint(max(1, widget.width() // 2), max(1, widget.height() // 2))
+        if at_left_edge:
+            gpos = self.window._root.mapToGlobal(QPoint(1, self.window._root.height() // 2))
+        else:
+            gpos = widget.mapToGlobal(local)
+        ev = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(local),
+            QPointF(gpos),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        self.window.eventFilter(widget, ev)
+
+    def test_mouse_move_keeps_own_cursor(self):
+        """坑点：eventFilter 曾在每次 MouseMove 上 unsetCursor()，把控件自己设的
+        PointingHandCursor 全抹成箭头（全应用小手失效）。移动鼠标不得改控件光标。
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QPushButton
+
+        self.window.resize(1185, 760)
+        buttons = [
+            self.window.player_bar.play_btn,
+            self.window.player_bar.prev_btn,
+            self.window.player_bar.queue_btn,
+            self.window.sidebar.recent_btn,
+            self.window.title_bar.findChildren(QPushButton)[0],
+        ]
+        for btn in buttons:
+            self.assertEqual(btn.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+            self._move_on_widget_center(btn)
+            self.assertEqual(
+                btn.cursor().shape(), Qt.CursorShape.PointingHandCursor,
+                "鼠标移动后按钮的小手光标被抹掉了",
+            )
+            self.assertTrue(
+                btn.testAttribute(Qt.WidgetAttribute.WA_SetCursor),
+                "控件自身的光标属性（WA_SetCursor）被清掉了",
+            )
+
+    def test_edge_cursor_applies_then_restores(self):
+        """贴边显示缩放箭头，离开边缘后恢复控件自己设的（小手）光标。"""
+        from PySide6.QtCore import Qt
+
+        self.window.resize(1185, 760)
+        btn = self.window.player_bar.play_btn
+        self._feed_move(btn, at_left_edge=True)
+        self.assertEqual(btn.cursor().shape(), Qt.CursorShape.SizeHorCursor)
+        self._feed_move(btn, at_left_edge=False)
+        self.assertEqual(btn.cursor().shape(), Qt.CursorShape.PointingHandCursor,
+                         "离开边缘后没有恢复成小手光标")
+        self.assertTrue(btn.testAttribute(Qt.WidgetAttribute.WA_SetCursor),
+                        "恢复后控件应重新是「自带光标」状态")
+
+    def test_edge_cursor_does_not_leak_to_other_widget(self):
+        """贴边改了 A 的光标后移到 B：A 必须还原，B 不能被留下显式光标。"""
+        from PySide6.QtCore import Qt
+
+        self.window.resize(1185, 760)
+        btn = self.window.player_bar.play_btn
+        plain = self.window.track_list  # 自身没设光标，走「继承」分支
+        self._feed_move(btn, at_left_edge=True)
+        self.assertEqual(btn.cursor().shape(), Qt.CursorShape.SizeHorCursor)
+        self._feed_move(plain, at_left_edge=False)
+        self.assertEqual(btn.cursor().shape(), Qt.CursorShape.PointingHandCursor,
+                         "上一个控件残留了缩放箭头")
+        self.assertFalse(plain.testAttribute(Qt.WidgetAttribute.WA_SetCursor),
+                         "不该给没自带光标的控件留下显式光标")
+
+
     def test_version_label_at_bottom_right(self):
         """版本号从侧边栏底部挪到窗口右下角（v2.1.8）。"""
         self._import()
@@ -925,6 +1030,17 @@ class TestE2ELyricsOnline(unittest.TestCase):
         self.window._load_lyrics(track)
         self.assertEqual(self.window.now_playing.lyrics.list.count(), 1)
         self.assertEqual(self.window.now_playing.lyrics.list.item(0).text(), "故事的小黄花")
+
+    def test_progress_slot_matches_worker_signal(self):
+        """v2.7.2 修：槽签名比 `MultiSourceWorker.progress = Signal(int, int)` 多一个
+        track_id，导致每次上报都抛 TypeError，「正在联网匹配歌词…（2/3）」从未显示过。
+        """
+        track = self._bare_track()
+        self.window.player._current = track
+        self.window._lyrics_cache.pop(track.id, None)
+        self.window._on_online_lyrics_progress(2, 3)
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
+                         "正在联网匹配歌词…（2/3）")
 
     def test_online_result_ignored_for_other_track(self):
         """异步结果回来时用户已切歌：不能把歌词串到当前这首上。"""
