@@ -68,7 +68,7 @@ python -m venv .venv
 # 2. 运行（开发模式）
 .venv/Scripts/python.exe main.py
 
-# 3. 运行测试（576 项：单测 + offscreen E2E，28 个独立进程）
+# 3. 运行测试（579 项：单测 + offscreen E2E，28 个独立进程）
 .venv/Scripts/python.exe run_tests.py
 # 无显示器的 headless 环境（如 CI）自动加 QT_QPA_PLATFORM=offscreen
 

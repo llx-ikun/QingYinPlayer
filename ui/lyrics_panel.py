@@ -344,14 +344,30 @@ class LyricsPanel(QWidget):
         self.list.setVisible(has)
         self.empty_label.setVisible(not has)
 
-    def _smooth_scroll_to(self, item: QListWidgetItem) -> None:
-        bar = self.list.verticalScrollBar()
+    def _scroll_target(self, item: QListWidgetItem) -> int | None:
+        """算出「让这一项垂直居中」需要把滚动条挪到哪个值。
+
+        ⚠️ 这里是踩过的坑：`visualItemRect()` 返回的是**视口坐标**（该项相对当前
+        可视区左上角的位置，会随滚动变化），而 `bar.value()` 是**内容坐标**（像素
+        偏移）。直接拿 `rect.top()` 当目标会漏掉已经滚过的距离 —— 结果是每句只往前
+        挪一点点，当前唱的句子永远沉在视口下方被裁掉，用户看到的就是「歌词一直往上
+        滚动但始终滚不到位」。必须先换算成内容坐标（value + top）。
+
+        动画进行中再次调用也安全：`bar.value()` 与 `rect.top()` 的中间值相加，仍等于
+        该项的内容坐标，不会因为半路重算而漂移。
+        """
         rect = self.list.visualItemRect(item)
         if rect.height() == 0:
-            return
-        target = rect.top() + rect.height() // 2 - self.list.viewport().height() // 2
-        target = max(bar.minimum(), min(bar.maximum(), target))
-        if target == bar.value():
+            return None
+        bar = self.list.verticalScrollBar()
+        target = (bar.value() + rect.top() + rect.height() // 2
+                  - self.list.viewport().height() // 2)
+        return max(bar.minimum(), min(bar.maximum(), target))
+
+    def _smooth_scroll_to(self, item: QListWidgetItem) -> None:
+        bar = self.list.verticalScrollBar()
+        target = self._scroll_target(item)
+        if target is None or target == bar.value():
             return
         if self._anim is None:
             self._anim = QPropertyAnimation(bar, b"value", self)

@@ -817,6 +817,75 @@ class TestBilingualLyricsPanel(unittest.TestCase):
 
 
 
+class TestLyricsAutoscroll(unittest.TestCase):
+    """歌词自动滚动定位（v2.6.11）：当前句要滚到视口中央，且不会回跳。
+
+    坑：`visualItemRect()` 返回**视口坐标**（随滚动变化），`bar.value()` 是**内容
+    坐标**。直接把 `rect.top()` 当滚动目标会漏掉已滚过的距离 —— 每句只往前挪一点点，
+    当前句永远沉在视口底部被裁掉，表现为「歌词一直往上滚动但始终滚不到位」。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def _panel(self, rows: int = 20, bilingual: bool = False):
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.resize(300, 340)
+        panel.show()          # 需要真实布局才有 visualItemRect
+        lines = [LyricLine(i * 3000, f"Lyric line {i}",
+                           f"第 {i} 句译文" if bilingual else "")
+                 for i in range(rows)]
+        panel.set_synced(lines)
+        return panel
+
+    def test_target_centers_item_after_already_scrolled(self):
+        """滚到目标值后该项必须**真的居中**——这条直接验证语义，也覆盖「漏加 value」。
+
+        已经滚过一段距离（value>0）时，如果目标只按视口坐标算，设过去后该项会停在
+        视口下方十几行的地方，永远居不了中。
+        """
+        panel = self._panel()
+        bar = panel.list.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0, "20 行歌词应超出一屏，否则测不到滚动")
+        bar.setValue(min(150, bar.maximum()))
+        item = panel.list.item(12)
+        target = panel._scroll_target(item)
+        bar.setValue(target)
+        rect = panel.list.visualItemRect(item)
+        offset = rect.top() + rect.height() // 2 - panel.list.viewport().height() // 2
+        self.assertLessEqual(abs(offset), 2, f"滚到目标后应居中，实际偏差 {offset}px")
+
+    def test_target_uses_content_coordinates(self):
+        """目标必须包含当前滚动偏移（value），否则等于退回「只按视口算」的老 bug。"""
+        panel = self._panel()
+        bar = panel.list.verticalScrollBar()
+        bar.setValue(min(150, bar.maximum()))
+        item = panel.list.item(12)
+        rect = panel.list.visualItemRect(item)
+        target = panel._scroll_target(item)
+        naive = (rect.top() + rect.height() // 2
+                 - panel.list.viewport().height() // 2)
+        self.assertEqual(target, bar.value() + naive)
+        self.assertNotEqual(target, naive)
+
+    def test_scroll_value_never_goes_backwards(self):
+        from PySide6.QtTest import QTest
+
+        panel = self._panel(rows=20, bilingual=True)
+        bar = panel.list.verticalScrollBar()
+        values = []
+        for i in range(6, 14):
+            panel.update_position(i * 3000 + 100)
+            QTest.qWait(300)
+            values.append(bar.value())
+        self.assertEqual(values, sorted(values), f"滚动条回跳了：{values}")
+        self.assertGreater(values[-1], values[0], "整段播放应确实向下滚动")
+
+
 class TestIconRendering(unittest.TestCase):
     """图标按设备像素渲染（v2.5）：高分屏上不能把 16px 位图放大糊掉。"""
 

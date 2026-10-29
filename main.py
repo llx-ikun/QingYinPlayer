@@ -11,7 +11,7 @@ import sys
 from PySide6.QtGui import QIcon
 
 APP_NAME = "轻音播放器"
-APP_VERSION = "2.6.10"
+APP_VERSION = "2.6.11"
 
 
 def _resolve_app_icon() -> str | None:

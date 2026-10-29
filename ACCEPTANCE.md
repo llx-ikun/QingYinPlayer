@@ -747,6 +747,21 @@ QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同
 | 失败日志可读 | ✅ cp936 日志按 utf-8→gbk 回退解码 | `tests/test_build.py` 4 项 |
 | 正式图标未被降级 | ✅ md5 `9f4bdcdf12d625c16cc998e4f7ae40f0` 前后一致 | `md5sum assets/app.ico` |
 
+## v2.6.11 修歌词自动滚动「一直往上滚」
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 问题复现 | 逐句推进录音：滚动条每句只前进 ~8px（一行 36px），`rect.top()` 从 188 涨到 360 | `tools/probe_lyrics_scroll.py` |
+| 根因 | `visualItemRect()` 是**视口坐标**，`bar.value()` 是**内容坐标**；原代码漏加已滚动距离 | 修复前目标值比应有值少整整一个 `bar.value()`（第 10 句 108 vs 208） |
+| 目标值正确 | 滚到 `_scroll_target()` 后该项垂直居中度偏差 ≤2px | `test_target_centers_item_after_already_scrolled` |
+| 坐标语义固化 | 目标 == `bar.value() + 视口偏移`，且 != 视口偏移 | `test_target_uses_content_coordinates` |
+| 不回跳 | 双语条目下连续 8 句滚动值单调不减且确实向下 | `test_scroll_value_never_goes_backwards` |
+| 单语实测 | 目标 28→64→100→136→172→208，`rect.top()` 恒 188（每句推进一行高） | 探针真实平台输出 |
+| 双语实测 | 目标每句 +58（一行高），第 3 句起居中偏差 0 | 探针 `--bilingual` |
+| 动画中途重算安全 | 半路重复调用 `_scroll_target()` 不漂移（`value` 与 `rect.top()` 反相互补） | 探针连续推进观测 |
+| 不影响现有功能 | ✅ | 28 进程 **579 项全绿**；`ruff check .` 干净 |
+| 打包 | 单文件 70.7 MB + 目录版，smoke 与真实平台检查通过 | `build.py` 输出 |
+
 ## v2.6.10 双语歌词（一句 = 原文 + 译文）
 
 | 条目 | 结论 | 证据 |
