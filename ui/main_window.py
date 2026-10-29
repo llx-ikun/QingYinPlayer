@@ -236,10 +236,11 @@ class MainWindow(QMainWindow):
 
         # 歌词逐字动效需要平滑的行内进度，而 QMediaPlayer 的 positionChanged
         # 在 PySide6 里默认约 1s 一次（且无 setNotifyInterval 可调），会让
-        # 「颜色覆盖」一跳一跳。这里用一个 100ms 定时器在播放时主动轮询
-        # position()，只在 playing 态运行，暂停/停止即停，开销可忽略。
+        # 「颜色覆盖」一跳一跳。这里用一个定时器在播放时主动轮询 position()，
+        # 只在 playing 态运行，暂停/停止即停。间隔 33ms≈30fps：100ms(10fps) 下
+        # 逐字动效明显发卡，30fps 才顺滑；配合歌词区只重绘当前行，开销可控。
         self._position_timer = QTimer(self)
-        self._position_timer.setInterval(100)
+        self._position_timer.setInterval(33)
         self._position_timer.timeout.connect(
             lambda: self._on_position(self.player.position_ms))
 

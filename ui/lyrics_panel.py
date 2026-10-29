@@ -13,7 +13,8 @@ v2.6.4 起引入「歌词播放动效」（单选）：
 from __future__ import annotations
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics
+from PySide6.QtGui import (QAction, QBrush, QColor, QFont, QFontMetrics,
+                           QLinearGradient, QPainter, QPen)
 from PySide6.QtWidgets import (QLabel, QListWidget, QListWidgetItem, QMenu,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
@@ -106,15 +107,33 @@ class _LyricDelegate(QStyledItemDelegate):
     def __init__(self, panel: "LyricsPanel"):
         super().__init__(panel)
         self._panel = panel
+        # 字体/度量缓存：原来每帧每行都 new 一遍 QFont + QFontMetrics，是滚动与
+        # 逐字动效的主要开销。一次播放里歌词字体基本不变，缓存命中率极高。
+        self._font_cache: dict[tuple, tuple[QFont, QFontMetrics]] = {}
+
+    def _font(self, base_font, delta: int, bold: bool = False):
+        """按 (字体族, 字号, 字重, 增量, 粗体) 取缓存的 (QFont, QFontMetrics)。"""
+        key = (base_font.family(), base_font.pixelSize(), base_font.pointSizeF(),
+               base_font.weight(), delta, bold)
+        hit = self._font_cache.get(key)
+        if hit is None:
+            font = _bump_font(base_font, delta)
+            if bold:
+                font.setBold(True)
+            hit = (font, QFontMetrics(font))
+            if len(self._font_cache) > 64:      # 拖字号会造很多键，封顶防无限涨
+                self._font_cache.clear()
+            self._font_cache[key] = hit
+        return hit
 
     def sizeHint(self, option, index):  # noqa: N802
         size = super().sizeHint(option, index)
         # 保证能容纳当前行放大后的字号（zoom 加 6px 是上限）
-        metrics = QFontMetrics(_bump_font(option.font, _ZOOM_DELTA))
+        _font, metrics = self._font(option.font, _ZOOM_DELTA)
         height = max(size.height(), metrics.height() + 12)
         # 双语：一层原文 + 一层译文，高度要按两层算，否则译文会被裁掉半截
         if index.data(_TRANSLATION_ROLE):
-            sub_metrics = QFontMetrics(_bump_font(option.font, _ZOOM_DELTA + _SUB_DELTA))
+            _sub_font, sub_metrics = self._font(option.font, _ZOOM_DELTA + _SUB_DELTA)
             height = max(height, metrics.height() + sub_metrics.height() + 14)
         size.setHeight(height)
         return size
@@ -132,15 +151,23 @@ class _LyricDelegate(QStyledItemDelegate):
         effect = panel._effect if is_current else "none"
         progress = panel._progress_in_line if is_current else 0.0
 
-        delta = (_ZOOM_DELTA if effect == "zoom" else _NORMAL_DELTA) if is_current else 0
-        main_font = _bump_font(base_font, delta)
+        # 当前行铺一层很淡的强调色圆角底，让正在唱的这句「浮」起来。
+        # alpha 30 很轻，任何主题/自定义背景下都不抢戏。
         if is_current:
-            main_font.setBold(True)
-        main_metrics = QFontMetrics(main_font)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            bg = QColor(ACCENT)
+            bg.setAlpha(30)
+            painter.setBrush(bg)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rect.adjusted(10, 3, -10, -3), 9, 9)
+            painter.restore()
+
+        delta = (_ZOOM_DELTA if effect == "zoom" else _NORMAL_DELTA) if is_current else 0
+        main_font, main_metrics = self._font(base_font, delta, bold=is_current)
         main_h = main_metrics.height()
 
-        sub_font = _bump_font(base_font, delta + _SUB_DELTA)
-        sub_metrics = QFontMetrics(sub_font)
+        sub_font, sub_metrics = self._font(base_font, delta + _SUB_DELTA)
         sub_h = sub_metrics.height() if sub else 0
 
         top = rect.y() + (rect.height() - (main_h + sub_h)) / 2.0
@@ -175,14 +202,33 @@ class _LyricDelegate(QStyledItemDelegate):
             painter.drawText(x, y, text)
             return
 
-        head, tail = text[:typed], text[typed:]
-        if head:
-            painter.setPen(sung_color)
-            painter.drawText(x, y, head)
-        if tail and effect == "karaoke":
-            # 打字机不画未打出的部分；颜色覆盖则把未唱的字画成半透明
+        if effect == "typewriter":
+            head = text[:typed]
+            if head:
+                painter.setPen(sung_color)
+                painter.drawText(x, y, head)
+            return
+
+        # karaoke：整行一次画出，用一小段水平渐变在「已唱 / 未唱」交界处过渡，
+        # 避免原来硬切两截的突兀；顺带从两次 drawText 变成一次。
+        if typed <= 0:
             painter.setPen(unsung_color)
-            painter.drawText(x + metrics.horizontalAdvance(head), y, tail)
+            painter.drawText(x, y, text)
+            return
+        if typed >= len(text):
+            painter.setPen(sung_color)
+            painter.drawText(x, y, text)
+            return
+        head_w = metrics.horizontalAdvance(text[:typed])
+        span = max(total_w, 1)
+        blend = 6.0
+        grad = QLinearGradient(float(x), 0.0, float(x + total_w), 0.0)
+        grad.setColorAt(0.0, sung_color)
+        grad.setColorAt(max(0.0, (head_w - blend) / span), sung_color)
+        grad.setColorAt(min(1.0, (head_w + blend) / span), unsung_color)
+        grad.setColorAt(1.0, unsung_color)
+        painter.setPen(QPen(QBrush(grad), 1))
+        painter.drawText(x, y, text)
 
 
 class LyricsPanel(QWidget):
@@ -313,17 +359,28 @@ class LyricsPanel(QWidget):
         index = lyric_index_at(self._lines, position_ms)
         progress = self._line_progress(index, position_ms)
         if index == self._current_index:
-            # 行不变：只有逐字效果需要按进度重绘
+            # 行不变：只有逐字效果需要按进度重绘——只重绘当前这一行，别整块刷
             if (self._effect in ("typewriter", "karaoke")
                     and abs(progress - self._progress_in_line) > 0.01):
                 self._progress_in_line = progress
-                self.list.viewport().update()
+                self._update_row(index)
             return
         self._current_index = index
         self._progress_in_line = progress
         if 0 <= index < self.list.count():
             self._smooth_scroll_to(self.list.item(index))
         self.list.viewport().update()
+
+    def _update_row(self, index: int) -> None:
+        """只重绘第 index 行（行内进度更新时用，避免整块 viewport 全量重绘）。"""
+        if not (0 <= index < self.list.count()):
+            self.list.viewport().update()
+            return
+        rect = self.list.visualItemRect(self.list.item(index))
+        if rect.isValid():
+            self.list.viewport().update(rect)
+        else:
+            self.list.viewport().update()
 
     # ---------- 内部 ----------
 
