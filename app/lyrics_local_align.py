@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QThread, Signal
 
-from app.lyrics import lyrics_from_text
+from app.lyrics import lyrics_from_text, pair_bilingual
 
 TARGET_SR = 16000
 FRAME_MS = 20
@@ -238,9 +238,13 @@ def align_local(audio_path: str, lyrics_text: str, progress=None) -> LocalAlignO
     synced, plain = lyrics_from_text(lyrics_text)
     if synced:
         return LocalAlignOutcome(error_code="already_synced")
-    lines = [ln.strip() for ln in plain if ln.strip()]
-    if not lines:
+    # 双语歌词（原文行 / 译文行交替）先配成「句」：时间轴按句分配，译文跟随原文的
+    # 时间戳写在同一行之后。否则行数翻倍会让整首歌的时间轴被压缩一半，译文永远
+    # 比原文晚半句（实测 74 行 / 实际 37 句）。
+    rows = pair_bilingual(plain)
+    if not rows:
         return LocalAlignOutcome(error_code="no_lyrics")
+    lines = [main for main, _sub in rows]
 
     if progress is not None:
         progress(10, "解码音频…")
@@ -263,8 +267,14 @@ def align_local(audio_path: str, lyrics_text: str, progress=None) -> LocalAlignO
 
     if progress is not None:
         progress(70, "分配时间轴…")
-    pairs = assign_timestamps(lines, segments, total_ms)
-    lrc = "\n".join(f"{_format_lrc_time(ms)}{text}" for text, ms in pairs) + "\n"
+    stamped = assign_timestamps(lines, segments, total_ms)
+    out: list[str] = []
+    for (main, sub), (_text, ms) in zip(rows, stamped, strict=True):
+        stamp = _format_lrc_time(ms)
+        out.append(f"{stamp}{main}")
+        if sub:
+            out.append(f"{stamp}{sub}")
+    lrc = "\n".join(out) + "\n"
     if progress is not None:
         progress(100, "完成")
     return LocalAlignOutcome(lrc=lrc)

@@ -669,6 +669,27 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
     md5 仍为 `9f4bdcdf12d625c16cc998e4f7ae40f0`
 
 
+- [x] **Y15** 双语歌词：一句 = 原文 + 译文（v2.6.10）
+  - 需求：用户给双语 `.txt`（英文行 / 中文行交替），反馈「跟歌曲匹配不上，双语歌词的
+    歌词效果应该一起实现」
+  - 根因（实测）：74 行被当 74 句，时间轴压缩一半、译文晚半句、动效各走一遍
+  - 实现：
+    - `app/lyrics.py`：`has_cjk` / `is_bilingual_alternating`（整份文件 ≥85% 交替才
+      判双语，挡住「中文歌夹英文副歌」的误配对）/ `pair_bilingual` /
+      `merge_translations`（同时间戳两行合并）/ `format_lrc` + `format_lrc_stamp`
+    - `LyricLine` 加 `translation` 字段；`lyrics_from_text` 同步分支自动合并
+    - 本地对齐按句铺时间轴，译文同时间戳跟在原文后；联网对齐只上传原文、按行序回填
+      译文（行数不符则原样返回）
+    - `ui/lyrics_panel.py`：delegate 一层两行（译文小 3px + alpha 165）、item 高度
+      自适应、`_typed_split` 按两行字符总数推进逐字、`set_plain` 也按句配对
+  - 测试：`test_lyrics.py` +19、`test_lyrics_local_align.py` +3、
+    `test_lyrics_align.py` +4、`test_widgets.py` +6（新增 `TestBilingualLyricsPanel`）
+  - 视觉验收：`tools/probe_bilingual_lyrics.py` 出浅/深两套四格对比图
+    （`shots/bilingual_lyrics_{light,dark}.png`），确认两行不裁切、整句一起高亮、
+    karaoke 深浅分界、打字机「原文打完才轮到译文」
+  - 验收：28 进程 **576 项全绿**；`ruff check .` 干净；两变体 exe 重新打包通过
+
+
 ## v2.1 验收命令
 
 ```bash

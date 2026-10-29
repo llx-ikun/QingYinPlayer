@@ -747,6 +747,26 @@ QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同
 | 失败日志可读 | ✅ cp936 日志按 utf-8→gbk 回退解码 | `tests/test_build.py` 4 项 |
 | 正式图标未被降级 | ✅ md5 `9f4bdcdf12d625c16cc998e4f7ae40f0` 前后一致 | `md5sum assets/app.ico` |
 
+## v2.6.10 双语歌词（一句 = 原文 + 译文）
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 双语判定 | 严格交替（两种语种各 ≥25% 且相邻异类 ≥85%）才判双语 | `TestIsBilingualAlternating` 4 项 |
+| 误配对防护 | 纯中文歌夹一句英文副歌不配成双语（保持 5 句） | `test_chinese_with_one_english_hook_is_not` |
+| 配对规则 | 先出现者为原文，后一行当译文；奇数尾行单独成句；空行剔除 | `TestPairBilingual` 4 项 |
+| 同步双语 LRC | 同时间戳两行自动合并成一句；同文本重复不合并（副歌不被吞句） | `TestMergeTranslations` 4 项 |
+| LRC 写回 | 写成「同时间戳两行」；读写往返还原成「一句 + 译文」 | `TestFormatLrc` 4 项 |
+| 本地对齐 | 74 行 → 37 句，每句译文同时间戳，时间戳严格递增 | `test_bilingual_pairs_lines_into_sentences` |
+| 联网对齐 | 只上传原文行（译文不进上传体）；返回后按行序回填 | `test_bilingual_uploads_main_lines_only` / `test_bilingual_restores_translations` |
+| 回填安全 | 行数不符时原样返回，不硬配（配错词比没词更糟） | `test_bilingual_skips_restore_when_line_count_differs` |
+| 旧路径不变 | 单语歌词上传内容与旧行为一致 | `test_monolingual_payload_unchanged` |
+| 界面按句渲染 | `set_plain` 双语 8 行 → 4 条；item.text() 仍是原文，译文存独立 role | `TestBilingualLyricsPanel` 2 项 |
+| 条目高度 | 有译文的条目更高（译文层不会被裁掉） | `test_item_height_grows_for_translation` |
+| 逐字跨两行 | 进度按两行字符总数推进：原文打完才轮到译文 | `test_typed_split_spans_both_lines` 3 项 |
+| 视觉 | 浅/深两套主题四格对比图，两行不裁切、整句一起高亮、karaoke 分界清晰 | `shots/bilingual_lyrics_{light,dark}.png` |
+| 打包 | 单文件 67.4 MB + 目录版，smoke 与真实平台检查通过 | `build.py` 输出 |
+| 不影响现有功能 | ✅ | 28 进程 **576 项全绿**；`ruff check .` 干净 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

@@ -31,6 +31,9 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QThread, Signal
 
+from app.lyrics import (format_lrc, pair_bilingual, parse_lrc, parse_plain,
+                        strip_meta_lines)
+
 ALIGN_BASE = "https://api.lyrictimestamps.com"
 USER_AGENT = "QingYinPlayer/2.6.7 (+local desktop music player)"
 
@@ -148,6 +151,22 @@ def _build_multipart(audio_bytes: bytes, filename: str, lyrics_text: str) -> tup
     return f"multipart/form-data; boundary={boundary}", b"".join(parts)
 
 
+def _restore_translations(lrc: str, subs: list[str]) -> str:
+    """把译文按行序回填到对齐结果，写成「同时间戳两行」。
+
+    行数对不上就原样返回：服务端可能合并/拆分行，硬按索引配对会把译文挂到错的
+    句子上——配错词比没词更糟。
+    """
+    if not any(subs or []):
+        return lrc
+    lines = parse_lrc(lrc)
+    if len(lines) != len(subs):
+        return lrc
+    for line, sub in zip(lines, subs, strict=True):
+        line.translation = sub
+    return format_lrc(lines).strip() or lrc
+
+
 def _parse_json(resp: _Response) -> dict:
     try:
         data = json.loads(resp.body.decode("utf-8", "replace"))
@@ -199,6 +218,17 @@ def align_lyrics(audio_path: str, lyrics_text: str, api_key: str, fetch=None,
     api_key = (api_key or "").strip()
     lyrics_text = (lyrics_text or "").strip()
 
+    # 双语歌词（原文行 / 译文行交替）只把**原文**交给服务对齐：把译文也发过去，
+    # 服务端只能按行数分配时间轴，行数翻倍会让整首错位、译文还晚半句。
+    # 拿回 LRC 后再按行序把译文回填成「同时间戳第二行」。
+    rows: list[tuple[str, str]] = []
+    upload_text = lyrics_text
+    if lyrics_text and not parse_lrc(lyrics_text):
+        rows = pair_bilingual(parse_plain(strip_meta_lines(lyrics_text)))
+        if rows:
+            upload_text = "\n".join(main for main, _sub in rows)
+    subs = [sub for _main, sub in rows]
+
     # ---- 本地预检（把能提前拦的拦掉，不白传 30MB）----
     if not api_key:
         return AlignOutcome(error_code="missing_key")
@@ -232,7 +262,7 @@ def align_lyrics(audio_path: str, lyrics_text: str, api_key: str, fetch=None,
     # ---- 1. 创建任务（multipart 上传音频 + 歌词）----
     if progress is not None:
         progress(8, "上传音频与歌词…")
-    content_type, body = _build_multipart(audio_bytes, os.path.basename(audio_path), lyrics_text)
+    content_type, body = _build_multipart(audio_bytes, os.path.basename(audio_path), upload_text)
     try:
         resp = fetch("POST", f"{ALIGN_BASE}/v1/alignments",
                      {**headers, "Content-Type": content_type}, body, timeout=120.0)
@@ -284,6 +314,7 @@ def align_lyrics(audio_path: str, lyrics_text: str, api_key: str, fetch=None,
     lrc = resp.body.decode("utf-8", "replace").strip()
     if not lrc:
         return AlignOutcome(error_code="bad_response")
+    lrc = _restore_translations(lrc, subs)
     if progress is not None:
         progress(100, "完成")
     message = f"对齐完成，但结果可能不准（{soft_fail_code}），请核对" if soft_fail else ""

@@ -6,7 +6,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.lyrics import (LyricLine, format_time, lyric_index_at, lyrics_from_text,
+from app.lyrics import (LyricLine, format_lrc, format_lrc_stamp, format_time,
+                        has_cjk, is_bilingual_alternating, lyric_index_at,
+                        lyrics_from_text, merge_translations, pair_bilingual,
                         parse_lrc, parse_plain, strip_meta_lines)
 
 
@@ -129,6 +131,144 @@ class TestStripMetaLines(unittest.TestCase):
         """首行只在「后面紧跟元数据行」时才当歌名剔除；否则保留。"""
         text = "第一句歌词\n第二句歌词"
         self.assertEqual(strip_meta_lines(text).splitlines(), ["第一句歌词", "第二句歌词"])
+
+
+# 双语歌词（原文行 / 译文行交替）—— 取自真实场景的形态：
+# 浏览器下载的 .txt 里英文原文一行、中文译文一行。
+BILINGUAL_SAMPLE = [
+    "Who can surely know", "风将吹向何方",
+    "How the wind blows,", "谁也捉摸不透",
+    "When showers of notes", "当音符的骤雨",
+    "Fall like sparkles", "如星辉般洒落",
+]
+
+
+class TestHasCjk(unittest.TestCase):
+    def test_detects_chinese_japanese_korean(self):
+        self.assertTrue(has_cjk("风将吹向何方"))
+        self.assertTrue(has_cjk("あいうえお"))
+        self.assertTrue(has_cjk("안녕하세요"))
+
+    def test_latin_and_punctuation_are_not_cjk(self):
+        self.assertFalse(has_cjk("Who can surely know"))
+        self.assertFalse(has_cjk("(Lento, presto)"))
+        self.assertFalse(has_cjk(""))
+        self.assertFalse(has_cjk(None))
+
+
+class TestIsBilingualAlternating(unittest.TestCase):
+    def test_strict_alternation_is_bilingual(self):
+        self.assertTrue(is_bilingual_alternating(BILINGUAL_SAMPLE))
+
+    def test_pure_chinese_is_not(self):
+        self.assertFalse(is_bilingual_alternating(["第一句", "第二句", "第三句", "第四句"]))
+
+    def test_chinese_with_one_english_hook_is_not(self):
+        """纯中文歌里夹一句英文副歌：不能当双语，否则会少一句、整首错位。"""
+        mixed = ["第一句歌词", "第二句歌词", "Yeah yeah", "第三句歌词", "第四句歌词"]
+        self.assertFalse(is_bilingual_alternating(mixed))
+
+    def test_too_short_is_not(self):
+        self.assertFalse(is_bilingual_alternating(["Who can surely know", "风将吹向何方"]))
+
+
+class TestPairBilingual(unittest.TestCase):
+    def test_pairs_main_with_translation(self):
+        pairs = pair_bilingual(BILINGUAL_SAMPLE)
+        self.assertEqual(len(pairs), 4)
+        self.assertEqual(pairs[0], ("Who can surely know", "风将吹向何方"))
+        self.assertEqual(pairs[-1], ("Fall like sparkles", "如星辉般洒落"))
+
+    def test_non_bilingual_keeps_each_line(self):
+        pairs = pair_bilingual(["第一句", "第二句", "第三句", "第四句"])
+        self.assertEqual(len(pairs), 4)
+        self.assertTrue(all(sub == "" for _main, sub in pairs))
+
+    def test_odd_tail_becomes_single(self):
+        pairs = pair_bilingual([*BILINGUAL_SAMPLE, "Woah! Keep on movin'"])
+        self.assertEqual(len(pairs), 5)
+        self.assertEqual(pairs[-1], ("Woah! Keep on movin'", ""))
+
+    def test_drops_blank_lines(self):
+        lines = ["", "Who can surely know", "  ", "风将吹向何方",
+                 "How the wind blows,", "谁也捉摸不透"]
+        pairs = pair_bilingual(lines)
+        self.assertEqual(len(pairs), 2)
+
+
+class TestMergeTranslations(unittest.TestCase):
+    def test_same_timestamp_two_lines_merge(self):
+        lines = [LyricLine(1000, "Who can surely know"), LyricLine(1000, "风将吹向何方"),
+                 LyricLine(3000, "How the wind blows,")]
+        merged = merge_translations(lines)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0].text, "Who can surely know")
+        self.assertEqual(merged[0].translation, "风将吹向何方")
+        self.assertEqual(merged[1].translation, "")
+
+    def test_identical_text_not_merged(self):
+        """副歌同一句重复两次（同时间戳）不能被吞掉一句。"""
+        lines = [LyricLine(1000, "副歌"), LyricLine(1000, "副歌")]
+        self.assertEqual(len(merge_translations(lines)), 2)
+
+    def test_three_same_timestamp_only_first_pair_merges(self):
+        lines = [LyricLine(1000, "a"), LyricLine(1000, "甲"), LyricLine(1000, "b")]
+        self.assertEqual(len(merge_translations(lines)), 2)
+
+    def test_keeps_existing_translation(self):
+        lines = [LyricLine(1000, "a", "甲"), LyricLine(1000, "b")]
+        merged = merge_translations(lines)
+        self.assertEqual(merged[0].translation, "甲")
+        self.assertEqual(len(merged), 2)
+
+
+class TestFormatLrc(unittest.TestCase):
+    def test_stamp_is_percent_seconds(self):
+        self.assertEqual(format_lrc_stamp(0), "[00:00.00]")
+        self.assertEqual(format_lrc_stamp(2740), "[00:02.74]")
+        self.assertEqual(format_lrc_stamp(61230), "[01:01.23]")
+        self.assertEqual(format_lrc_stamp(-5), "[00:00.00]")
+
+    def test_writes_translation_on_same_timestamp(self):
+        text = format_lrc([LyricLine(2740, "Who can surely know", "风将吹向何方"),
+                           LyricLine(4260, "How the wind blows,")])
+        self.assertEqual(text.splitlines(), [
+            "[00:02.74]Who can surely know",
+            "[00:02.74]风将吹向何方",
+            "[00:04.26]How the wind blows,",
+        ])
+
+    def test_round_trips_through_lyrics_from_text(self):
+        """写出再读回必须还原成「一句 + 译文」，否则 .lrc 落地后双语就丢了。"""
+        src = [LyricLine(2740, "Who can surely know", "风将吹向何方"),
+               LyricLine(4260, "How the wind blows,", "谁也捉摸不透")]
+        synced, plain = lyrics_from_text(format_lrc(src))
+        self.assertEqual(plain, [])
+        self.assertEqual([(ln.time_ms, ln.text, ln.translation) for ln in synced],
+                         [(2740, "Who can surely know", "风将吹向何方"),
+                          (4260, "How the wind blows,", "谁也捉摸不透")])
+
+    def test_empty_returns_empty_string(self):
+        self.assertEqual(format_lrc([]), "")
+
+
+class TestBilingualText(unittest.TestCase):
+    def test_pure_text_bilingual_still_plain_list(self):
+        """纯文本路径仍返回逐行列表（配对交给 pair_bilingual / 界面按句渲染）。"""
+        text = "作词 : 音融三喜\n" + "\n".join(BILINGUAL_SAMPLE)
+        synced, plain = lyrics_from_text(text)
+        self.assertEqual(synced, [])
+        self.assertEqual(len(pair_bilingual(plain)), 4)
+
+    def test_synced_bilingual_txt_merges(self):
+        text = ("[00:02.74]Who can surely know\n"
+                "[00:02.74]风将吹向何方\n"
+                "[00:04.26]How the wind blows,\n"
+                "[00:04.26]谁也捉摸不透")
+        synced, _plain = lyrics_from_text(text)
+        self.assertEqual(len(synced), 2)
+        self.assertEqual(synced[0].translation, "风将吹向何方")
+
 
 
 if __name__ == "__main__":

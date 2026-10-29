@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.lyrics import parse_lrc
+from app.lyrics import lyrics_from_text, parse_lrc
 from app.lyrics_local_align import (
     LyricsLocalAlignWorker,
     align_local,
@@ -162,6 +162,44 @@ class TestAlignLocal(unittest.TestCase):
         times = [ln.time_ms for ln in lines]
         self.assertEqual(times, sorted(times), "时间戳应递增")
         self.assertEqual([ln.text for ln in lines], ["第一句", "第二句", "第三句", "第四句"])
+
+    def test_bilingual_pairs_lines_into_sentences(self):
+        """双语歌词：时间轴按「句」分配，译文跟随原文同一时间戳。
+
+        这是 v2.6.10 的核心回归：74 行译文各占一个时间槽时，整首歌的时间轴会被
+        压缩一半、译文永远晚半句，表现为「跟歌曲完全对不上」。
+        """
+        text = ("Who can surely know\n风将吹向何方\n"
+                "How the wind blows,\n谁也捉摸不透\n"
+                "When showers of notes\n当音符的骤雨\n"
+                "Fall like sparkles\n如星辉般洒落")
+        outcome = align_local(self.wav, text)
+        self.assertTrue(outcome.lrc)
+        self.assertEqual(len(parse_lrc(outcome.lrc)), 8)
+        synced, _plain = lyrics_from_text(outcome.lrc)
+        self.assertEqual(len(synced), 4)
+        self.assertTrue(all(ln.translation for ln in synced))
+        self.assertEqual(synced[0].text, "Who can surely know")
+        self.assertEqual(synced[0].translation, "风将吹向何方")
+        # 同句译文与原文时间戳一致，且句与句之间严格递增
+        times = [ln.time_ms for ln in synced]
+        self.assertEqual(times, sorted(set(times)))
+
+    def test_bilingual_spans_full_speech_segment(self):
+        """句数减半后每句占用时长翻倍（不会整首歌提前唱完）。"""
+        text = "\n".join(["Sing a song", "唱一首歌"] * 4)
+        outcome = align_local(self.wav, text)
+        synced, _plain = lyrics_from_text(outcome.lrc)
+        self.assertEqual(len(synced), 4)
+        span = synced[-1].time_ms - synced[0].time_ms
+        self.assertGreater(span, 1000)   # 4 句铺在有声段上，跨度不会是 0
+
+    def test_monolingual_unchanged(self):
+        outcome = align_local(self.wav, "第一句\n第二句\n第三句")
+        synced, _plain = lyrics_from_text(outcome.lrc)
+        self.assertEqual(len(synced), 3)
+        self.assertTrue(all(ln.translation == "" for ln in synced))
+
 
     def test_no_audio(self):
         self.assertEqual(align_local(os.path.join(self.tmp, "nope.mp3"), "歌词").error_code,

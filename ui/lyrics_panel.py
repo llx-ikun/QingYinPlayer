@@ -17,7 +17,7 @@ from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (QLabel, QListWidget, QListWidgetItem, QMenu,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from app.lyrics import LyricLine, lyric_index_at
+from app.lyrics import LyricLine, lyric_index_at, pair_bilingual
 from app.models import LYRICS_EFFECTS
 from ui.theme import ACCENT, current_theme
 
@@ -31,6 +31,13 @@ _LINE_HEIGHT = 36
 _ZOOM_DELTA = 6
 _NORMAL_DELTA = 3
 
+# 译文比原文小多少（像素）。双语歌词里译文是次要信息，压小一档 + 降透明度，
+# 让视线先落在正在唱的原文上。
+_SUB_DELTA = -3
+
+# 译文存在 item 的这个 role 上（主行文本仍放 DisplayRole，兼容旧测试读 item.text()）
+_TRANSLATION_ROLE = Qt.ItemDataRole.UserRole + 1
+
 
 def _normal_color() -> QColor:
     """歌词常态色随主题走。
@@ -39,6 +46,17 @@ def _normal_color() -> QColor:
     当时返回的是深色主题的值，之后切到浅色主题仍是旧的灰（被冻结）。
     """
     return QColor(current_theme().TEXT_DIM)
+
+
+def _translation_color(is_current: bool) -> QColor:
+    """译文色：比原文常态色更淡，当前句时提亮到接近常态（整句一起高亮）。
+
+    非当前句用 165 而不是更低：深色主题下 TEXT_DIM 本身偏暗，再压透明度会在
+    夜空底色上糊成一片（实测 150 时小字要凑近才认得出）。
+    """
+    color = _normal_color()
+    color.setAlpha(240 if is_current else 165)
+    return color
 
 
 def _bump_font(font: QFont, delta: int) -> QFont:
@@ -55,6 +73,20 @@ def _bump_font(font: QFont, delta: int) -> QFont:
     else:
         font.setPointSize(font.pointSize() + delta)
     return font
+
+
+def _typed_split(main_len: int, sub_len: int, progress: float) -> tuple[int, int]:
+    """逐字推进时，原文 / 译文各自已显示的字数。
+
+    进度按**两行字符总数**算：原文唱完自然轮到译文，两行连着打出而不是各打各的。
+    只数主行的话，译文会永远整行一次性蹦出来，和原文的节奏脱节。
+    """
+    if progress <= 0:
+        return 0, 0
+    total = main_len + sub_len
+    typed = round(total * progress)
+    main_typed = min(typed, main_len)
+    return main_typed, max(0, typed - main_len)
 
 
 def _uncovered_color() -> QColor:
@@ -79,47 +111,78 @@ class _LyricDelegate(QStyledItemDelegate):
         size = super().sizeHint(option, index)
         # 保证能容纳当前行放大后的字号（zoom 加 6px 是上限）
         metrics = QFontMetrics(_bump_font(option.font, _ZOOM_DELTA))
-        size.setHeight(max(size.height(), metrics.height() + 12))
+        height = max(size.height(), metrics.height() + 12)
+        # 双语：一层原文 + 一层译文，高度要按两层算，否则译文会被裁掉半截
+        if index.data(_TRANSLATION_ROLE):
+            sub_metrics = QFontMetrics(_bump_font(option.font, _ZOOM_DELTA + _SUB_DELTA))
+            height = max(height, metrics.height() + sub_metrics.height() + 14)
+        size.setHeight(height)
         return size
 
     def paint(self, painter, option, index):  # noqa: N802
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        rect = option.rect
+        sub = index.data(_TRANSLATION_ROLE) or ""
         panel = self._panel
         is_current = panel._mode == "synced" and index.row() == panel._current_index
-        self._paint_text(painter, rect, text, option.font, is_current)
+        self._paint_block(painter, option.rect, text, sub, option.font, is_current)
 
-    def _paint_text(self, painter, rect, text, base_font, is_current):
-        effect = self._panel._effect if is_current else "none"
-        progress = self._panel._progress_in_line if is_current else 0.0
+    def _paint_block(self, painter, rect, text, sub, base_font, is_current):
+        """画「一句」：原文一行 +（可选）译文一行，两行作为一个整体垂直居中。"""
+        panel = self._panel
+        effect = panel._effect if is_current else "none"
+        progress = panel._progress_in_line if is_current else 0.0
 
-        font = base_font
+        delta = (_ZOOM_DELTA if effect == "zoom" else _NORMAL_DELTA) if is_current else 0
+        main_font = _bump_font(base_font, delta)
         if is_current:
-            font = _bump_font(base_font, _ZOOM_DELTA if effect == "zoom" else _NORMAL_DELTA)
-            font.setBold(True)
+            main_font.setBold(True)
+        main_metrics = QFontMetrics(main_font)
+        main_h = main_metrics.height()
+
+        sub_font = _bump_font(base_font, delta + _SUB_DELTA)
+        sub_metrics = QFontMetrics(sub_font)
+        sub_h = sub_metrics.height() if sub else 0
+
+        top = rect.y() + (rect.height() - (main_h + sub_h)) / 2.0
+
+        # 逐字进度按「两行字符总数」推进：原文唱完自然轮到译文
+        main_typed, sub_typed = len(text), len(sub)
+        if is_current and effect in ("typewriter", "karaoke"):
+            main_typed, sub_typed = _typed_split(len(text), len(sub), progress)
+
+        main_sung = QColor(ACCENT) if is_current else _normal_color()
+        self._draw_line(painter, rect, text, main_font, main_metrics,
+                        top + main_metrics.ascent(), main_typed,
+                        main_sung, _uncovered_color(), is_current, effect)
+        if sub:
+            self._draw_line(painter, rect, sub, sub_font, sub_metrics,
+                            top + main_h + sub_metrics.ascent(), sub_typed,
+                            _translation_color(is_current), _translation_color(False),
+                            is_current, effect)
+
+    def _draw_line(self, painter, rect, text, font, metrics, baseline, typed,
+                   sung_color, unsung_color, is_current, effect):
+        """水平居中画一行；当前行的逐字效果按 `typed`（已显示字数）分段上色。"""
+        if not text:
+            return
         painter.setFont(font)
-        metrics = painter.fontMetrics()
-
-        # 打字机：按行内进度截断文本，进度 0 时整行空白（从空开始逐字打出）
-        if is_current and effect == "typewriter":
-            n = round(len(text) * progress)
-            text = text[:n]
-
         total_w = metrics.horizontalAdvance(text)
-        x = rect.x() + (rect.width() - total_w) / 2.0
-        y = rect.y() + (rect.height() + metrics.ascent() - metrics.descent()) / 2.0
+        x = int(rect.x() + (rect.width() - total_w) / 2.0)
+        y = int(baseline)
 
-        if is_current and effect == "karaoke" and progress > 0:
-            n = round(len(text) * progress)
-            head, tail = text[:n], text[n:]
-            head_w = metrics.horizontalAdvance(head)
-            painter.setPen(QColor(ACCENT))
-            painter.drawText(int(x), int(y), head)
-            painter.setPen(_uncovered_color())
-            painter.drawText(int(x + head_w), int(y), tail)
-        else:
-            painter.setPen(QColor(ACCENT) if is_current else _normal_color())
-            painter.drawText(int(x), int(y), text)
+        if not is_current or effect in ("none", "zoom"):
+            painter.setPen(sung_color)
+            painter.drawText(x, y, text)
+            return
+
+        head, tail = text[:typed], text[typed:]
+        if head:
+            painter.setPen(sung_color)
+            painter.drawText(x, y, head)
+        if tail and effect == "karaoke":
+            # 打字机不画未打出的部分；颜色覆盖则把未唱的字画成半透明
+            painter.setPen(unsung_color)
+            painter.drawText(x + metrics.horizontalAdvance(head), y, tail)
 
 
 class LyricsPanel(QWidget):
@@ -201,6 +264,8 @@ class LyricsPanel(QWidget):
             for line in lines:
                 item = QListWidgetItem(line.text)
                 item.setData(Qt.ItemDataRole.UserRole, line.time_ms)
+                if line.translation:
+                    item.setData(_TRANSLATION_ROLE, line.translation)
                 item.setForeground(_normal_color())
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.list.addItem(item)
@@ -214,9 +279,13 @@ class LyricsPanel(QWidget):
         self._progress_in_line = 0.0
         self.list.clear()
         if lines:
-            for text in lines:
-                item = QListWidgetItem(text)
+            # 纯文本阶段同样按「句」显示：双语 txt 未对齐前也是 原文 + 译文 两行一层，
+            # 而不是 74 行流水账（对不上号的那种样子）。
+            for main, sub in pair_bilingual(lines):
+                item = QListWidgetItem(main)
                 item.setData(Qt.ItemDataRole.UserRole, -1)
+                if sub:
+                    item.setData(_TRANSLATION_ROLE, sub)
                 item.setForeground(_normal_color())
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.list.addItem(item)

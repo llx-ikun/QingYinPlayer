@@ -732,6 +732,91 @@ class TestLyricsEffect(unittest.TestCase):
         self.assertEqual(panel._current_index, -1)
 
 
+class TestBilingualLyricsPanel(unittest.TestCase):
+    """双语歌词（v2.6.10）：一句 = 原文 + 译文，两行作为一个整体显示与动效。"""
+
+    BILINGUAL = ["Who can surely know", "风将吹向何方",
+                 "How the wind blows,", "谁也捉摸不透",
+                 "When showers of notes", "当音符的骤雨",
+                 "Fall like sparkles", "如星辉般洒落"]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def test_plain_mode_pairs_lines(self):
+        """未对齐的双语 txt 也按句显示，不是 8 行流水账。"""
+        from ui.lyrics_panel import LyricsPanel, _TRANSLATION_ROLE
+
+        panel = LyricsPanel()
+        panel.set_plain(self.BILINGUAL)
+        self.assertEqual(panel.list.count(), 4)
+        item = panel.list.item(0)
+        self.assertEqual(item.text(), "Who can surely know")
+        self.assertEqual(item.data(_TRANSLATION_ROLE), "风将吹向何方")
+
+    def test_synced_item_keeps_main_text_and_translation(self):
+        """item.text() 仍是原文（兼容旧测试与 ElidedLabel 逻辑），译文另存 role。"""
+        from PySide6.QtCore import Qt
+
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel, _TRANSLATION_ROLE
+
+        panel = LyricsPanel()
+        panel.set_synced([LyricLine(0, "Who can surely know", "风将吹向何方"),
+                          LyricLine(2000, "How the wind blows,", "谁也捉摸不透")])
+        self.assertEqual(panel.list.count(), 2)
+        self.assertEqual(panel.list.item(0).text(), "Who can surely know")
+        self.assertEqual(panel.list.item(0).data(_TRANSLATION_ROLE), "风将吹向何方")
+        self.assertEqual(panel.list.item(0).data(Qt.ItemDataRole.UserRole), 0)
+
+    def test_item_height_grows_for_translation(self):
+        """译文那一层必须有高度，否则会被裁掉半截。"""
+        from app.lyrics import LyricLine
+        from PySide6.QtWidgets import QStyleOptionViewItem
+
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_synced([LyricLine(0, "Who can surely know"),
+                          LyricLine(2000, "Who can surely know", "风将吹向何方")])
+        option = QStyleOptionViewItem()
+        option.font = panel.list.font()
+        model = panel.list.model()
+        plain_h = panel._delegate.sizeHint(option, model.index(0, 0)).height()
+        dual_h = panel._delegate.sizeHint(option, model.index(1, 0)).height()
+        self.assertGreater(dual_h, plain_h)
+
+    def test_current_sentence_highlights_whole_block(self):
+        """整句一起高亮：当前句索引只需定位到「句」，译文跟着同一条目走。"""
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_synced([LyricLine(0, "Who can surely know", "风将吹向何方"),
+                          LyricLine(4000, "How the wind blows,", "谁也捉摸不透")])
+        panel.update_position(4100)
+        self.assertEqual(panel._current_index, 1)
+        self.assertEqual(panel.list.currentRow(), -1)   # 不靠选中态渲染
+
+    def test_typed_split_spans_both_lines(self):
+        """逐字进度按两行字符总数推进：原文打完才轮到译文。"""
+        from ui.lyrics_panel import _typed_split
+
+        self.assertEqual(_typed_split(10, 6, 0.0), (0, 0))
+        self.assertEqual(_typed_split(10, 6, 0.25), (4, 0))    # 16*0.25=4，都在原文
+        self.assertEqual(_typed_split(10, 6, 0.625), (10, 0))  # 16*.625=10，原文刚满
+        self.assertEqual(_typed_split(10, 6, 0.75), (10, 2))   # 12 字 → 译文 2 字
+        self.assertEqual(_typed_split(10, 6, 1.0), (10, 6))
+
+    def test_typed_split_without_translation(self):
+        from ui.lyrics_panel import _typed_split
+
+        self.assertEqual(_typed_split(10, 0, 0.5), (5, 0))
+        self.assertEqual(_typed_split(10, 0, 1.0), (10, 0))
+
+
+
 class TestIconRendering(unittest.TestCase):
     """图标按设备像素渲染（v2.5）：高分屏上不能把 16px 位图放大糊掉。"""
 

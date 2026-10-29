@@ -14,6 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.lyrics import lyrics_from_text, parse_lrc
 from app.lyrics_align import (
     AlignOutcome,
     LyricsAlignWorker,
@@ -140,6 +141,54 @@ class TestAlignLyrics(unittest.TestCase):
         self.assertTrue(any(u.endswith("/v1/usage") for u in urls))
         self.assertTrue(any("/exports/lrc" in u for u in urls))
         # multipart 里带上了歌词文本
+        self.assertIn("第一句\n第二句".encode("utf-8"), fake.create_body)
+
+    # 双语歌词（原文行 / 译文行交替）：只把原文上传，拿回 LRC 后把译文按行序回填。
+    BILINGUAL = ("Who can surely know\n风将吹向何方\n"
+                 "How the wind blows,\n谁也捉摸不透\n"
+                 "When showers of notes\n当音符的骤雨\n"
+                 "Fall like sparkles\n如星辉般洒落")
+    LRC_MAIN_ONLY = ("[00:01.00]Who can surely know\n"
+                     "[00:02.00]How the wind blows,\n"
+                     "[00:03.00]When showers of notes\n"
+                     "[00:04.00]Fall like sparkles")
+
+    def test_bilingual_uploads_main_lines_only(self):
+        """译文不能一起上传：行数翻倍会让服务端把时间轴压缩一半。"""
+        fake = _FakeHttp()
+        fake.export = _resp(200, self.LRC_MAIN_ONLY, "text/plain; charset=utf-8")
+        align_lyrics(_tmp_audio(), self.BILINGUAL, "ltk_ok", fetch=fake,
+                     poll_interval=0)
+        body = fake.create_body
+        self.assertIn("Who can surely know\nHow the wind blows,".encode("utf-8"), body)
+        self.assertNotIn("风将吹向何方".encode("utf-8"), body)
+
+    def test_bilingual_restores_translations(self):
+        fake = _FakeHttp()
+        fake.export = _resp(200, self.LRC_MAIN_ONLY, "text/plain; charset=utf-8")
+        outcome = align_lyrics(_tmp_audio(), self.BILINGUAL, "ltk_ok", fetch=fake,
+                               poll_interval=0)
+        # 落地格式是「同时间戳两行」，外部播放器也认；读回时合并成一句带译文
+        self.assertIn("[00:01.00]风将吹向何方", outcome.lrc)
+        self.assertEqual(len(parse_lrc(outcome.lrc)), 8)
+        synced, _plain = lyrics_from_text(outcome.lrc)
+        self.assertEqual(len(synced), 4)
+        self.assertEqual(synced[0].text, "Who can surely know")
+        self.assertEqual(synced[0].translation, "风将吹向何方")
+        self.assertEqual(synced[-1].translation, "如星辉般洒落")
+
+    def test_bilingual_skips_restore_when_line_count_differs(self):
+        """行数对不上就不回填：硬按索引配会把译文挂到错的句子上。"""
+        fake = _FakeHttp()
+        fake.export = _resp(200, self.LRC_MAIN_ONLY, "text/plain; charset=utf-8")
+        text = "only one line\n只有一行"
+        outcome = align_lyrics(_tmp_audio(), text, "ltk_ok", fetch=fake, poll_interval=0)
+        self.assertEqual(outcome.lrc, self.LRC_MAIN_ONLY)
+
+    def test_monolingual_payload_unchanged(self):
+        """单语歌词的上传内容与旧行为一致（不能因为新逻辑改动老路径）。"""
+        fake = _FakeHttp()
+        align_lyrics(_tmp_audio(), "第一句\n第二句", "ltk_ok", fetch=fake, poll_interval=0)
         self.assertIn("第一句\n第二句".encode("utf-8"), fake.create_body)
 
     def test_missing_key(self):
