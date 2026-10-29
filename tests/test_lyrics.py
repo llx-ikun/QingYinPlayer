@@ -297,7 +297,7 @@ class TestShiftLrc(unittest.TestCase):
 
     def test_hundredths_and_milliseconds_both_parse(self):
         self.assertEqual(shift_lrc("[00:01.23]a\n", 0)[0], "[00:01.23]a\n")
-        out, applied = shift_lrc("[00:01.23]a\n", 1000)
+        out, _ = shift_lrc("[00:01.23]a\n", 1000)
         self.assertEqual(out, "[00:02.23]a\n")
         out, _ = shift_lrc("[00:01.234]a\n", 1000)      # 毫秒写法：解析认，输出仍统一百分秒
         self.assertEqual(out, "[00:02.23]a\n")

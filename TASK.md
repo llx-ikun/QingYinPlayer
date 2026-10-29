@@ -687,7 +687,7 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
   - 视觉验收：`tools/probe_bilingual_lyrics.py` 出浅/深两套四格对比图
     （`shots/bilingual_lyrics_{light,dark}.png`），确认两行不裁切、整句一起高亮、
     karaoke 深浅分界、打字机「原文打完才轮到译文」
-  - 验收：28 进程 **576 项全绿**；`ruff check .` 干净；两变体 exe 重新打包通过
+  - 验收：28 进程 **576 项全绿**；`ruff check .` 干净；两变体 exe 重新打包（单文件 67.4 MB）通过
 
 
 - [x] **Y16** 修：歌词播放时一直往上滚动（v2.6.11）
@@ -700,7 +700,7 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
   - 验证工具：`tools/probe_lyrics_scroll.py`（逐句推进打印 value / top / 目标 / 应得）
   - 测试：`TestLyricsAutoscroll` 2 项（滚到目标真的居中 / 目标含 value）；删掉一条
     offscreen 下动画像素抖动 13px 的脆弱用例
-  - 验收：28 进程全绿；两变体 exe 重新打包通过
+  - 验收：28 进程全绿；两变体 exe 重新打包（单文件 67.4 MB）通过
 
 
 - [x] **Y17** 修：前奏长的歌歌词对不上（v2.6.12）
@@ -719,7 +719,7 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
     - 本地对齐完成提示明确「近似、可能差几秒，可微调」；未配 Key 引导精确对齐
   - 验收工具：`tools/probe_align_intro.py`、`tools/eval_align.py`（真值缓存）
   - 测试：`TestShiftLrc` 10 项、`TestAssignTimestamps` +4、`TestLyricsMenu` 3 项
-  - 验收：28 进程 **596 项全绿**；ruff 干净；两变体 exe 重新打包
+  - 验收：28 进程 **596 项全绿**；ruff 干净；两变体 exe 重新打包（单文件 67.4 MB）
 
 
 ## v2.1 验收命令
