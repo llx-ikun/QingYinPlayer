@@ -717,6 +717,21 @@ QMediaPlayer 在媒体后端被抢占时会死锁 —— **跑回归时不要同
 | 向后兼容 | `lyrics_online.py` 只增 `fetch_best_hit`；旧 `LyricsFetchWorker` 保留、测试不动 | `TestFetchWorker` 3 项仍绿 |
 | 不影响现有功能 | ✅ | 26 进程 **520 项全绿**；`ruff check .` 干净 |
 
+## v2.6.9 本地歌词对齐（离线纯文本 → 带时间轴 LRC）
+
+| 条目 | 结论 | 证据 |
+|---|---|---|
+| 解码 | miniaudio 解码 mp3/flac/wav/ogg 为 mono 16k float32；中文路径走 bytes 绕开 | `TestDecode` 2 项 |
+| 能量包络 | 静音帧 RMS≈0、有声帧 RMS 明显更大 | `TestRmsEnvelope` |
+| 静音检测 | 前奏/间奏/尾奏静音被识别，检测出 2 个有声段且位置正确 | `TestDetectSpeech` 2 项 |
+| 时间戳分配 | 歌词行铺在有声段上、跳过前奏/尾奏；无有声段退化为全时长均分 | `TestAssignTimestamps` 3 项 |
+| LRC 生成 | 端到端产出 4 行同步 LRC、时间戳递增、行文本正确 | `TestAlignLocal.test_end_to_end_produces_synced_lrc` |
+| 错误分支 | no_audio / no_lyrics / already_synced / decode_failed 各自落对 error_code | `TestAlignLocal` 4 项 |
+| 后台线程 | worker 分发 done / failed 两态信号 | `TestWorker` 2 项 |
+| 本地优先 | 导入纯文本后询问默认走本地对齐；右键「本地对齐」置顶、「联网对齐」兜底 | `_maybe_offer_align` / `lyrics_panel._show_menu` |
+| 来源区分 | `_apply_aligned_lrc` 按本地/联网标注「来源：本地对齐 / 联网对齐」 | `main_window.py` |
+| 不影响现有功能 | ✅ | 27 进程 **535 项全绿**；`ruff check .` 干净 |
+
 ## v2.0 修复的缺陷
 
 1. **ElidedLabel 同步省略截断文本**：列表行创建时布局先给过渡宽度，同步省略把「新名字」截成「新…」。改为事件循环空闲时省略（0ms 单次定时器合并连续 resize），测试同步刷新后可读到完整文本。

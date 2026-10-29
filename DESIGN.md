@@ -1365,3 +1365,28 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
   比没词更糟 → 复用 `pick_best` 的「标题对上或时长差 ≤2s」门槛；`usable_text` 滤空歌词。
 - 边界：繁体歌名不转简体（避免引入 zhconv/opencc 依赖），记为已知限制。
 
+## 29. v2.6.9 本地歌词对齐：离线「纯文本 → 带时间轴 LRC」（2026-10-29）
+
+- 需求：用户「软件内制作一个类似 LyricTimestamps 的功能」——把纯文本歌词配到音频
+  时间轴，去掉对联网 LyricTimestamps 的 Key + 上传依赖。
+- 澄清（两轮）：技术路线选「轻量离线对齐」（静音检测 + 行均分，非 AI）；与联网对齐
+  的关系选「本地优先、联网兜底」（联网 LyricTimestamps 保留为手动可选）。
+- 选型：解码用 **miniaudio**（纯 C、无 numpy、打包 +1~2MB），替代 numpy+soundfile
+  （+30MB）。实测 `decode_file()` 对**中文路径**解码失败（C 层 ANSI），改为
+  `open().read()` + `decode(bytes)` 绕开；`samples` 是 `array.array('f')`，纯 Python
+  分帧算 RMS 对 3 分钟歌 ~0.2s，不必引入 numpy。
+- 算法（`app/lyrics_local_align.py`，纯信号处理）：
+  1. `decode_mono`：解码到 mono 16kHz float32；
+  2. `rms_envelope`：20ms 帧 / 10ms 步进算 RMS；
+  3. `detect_speech`：动态阈值（非零 RMS 中位数 × 0.15）识别有声段，短段当噪声、
+     相邻近段合并 → 前奏/间奏/尾奏的静音被识别；
+  4. `assign_timestamps`：歌词行均匀铺在「有声段」上（取行中点映射回实际时间），
+     跳过前奏/间奏/尾奏；无有声段时退化为全时长均分；
+  5. `align_local` → `[mm:ss.xx]` 格式 LRC（与 `parse_lrc` 兼容）。
+- 精度定位：**近似对齐**（让歌词大致跟着唱），非逐字卡点。想要精准仍可走联网对齐。
+- 集成：歌词区右键「转成 .lrc 文件（本地对齐）」默认；「联网对齐」保留为兜底；
+  导入纯文本后的询问改默认走本地。本地覆盖 mp3/flac/wav/ogg，m4a/aac/wma/opus 走
+  「decode_failed → 提示用联网对齐」的降级。
+- 关键坑：miniaudio 中文路径 -7；`array.array` 切片返回新 array、纯 Python 遍历足够快；
+  LRC 时间戳必须 `[mm:ss.xx]` 百分秒（`parse_lrc` 只认 mm:ss 两位百分秒/三位毫秒）。
+

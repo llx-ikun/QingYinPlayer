@@ -19,7 +19,7 @@ QQ 音乐桌面端风格的深色/浅色双主题界面，无边框圆角窗口�
 | 「我喜欢」 | 行内心形 / 播放栏心形一键收藏；独立虚拟歌单视图，持久化保存 |
 | 歌词显示 | 同名 `.lrc` 自动匹配、内嵌歌词（ID3 USLT/SYLT、FLAC LYRICS、MP4 ©lyr）、手动绑定 `.lrc`/`.txt`、批量导入 `.lrc`/`.txt` 自动识别归属（含浏览器下载的纯文本歌词，自动剔除歌名/作词/作曲等头部信息）；逐行同步高亮、平滑自动滚动、点击跳转；**歌词动效**（放大当前行 / 打字机 / 颜色覆盖，设置里单选） |
 | 联网歌词 | 本地无歌词时联网匹配，**LRCLIB + 网易云 + QQ音乐三源并行取最优**（均免密钥直连）；五级来源：手动绑定 → 同名 `.lrc` → 内嵌 → 本地缓存 → 联网；命中即写缓存、断网照常显示；检索中显示进度、命中后标注来源（LRCLIB/网易云/QQ音乐）；负缓存 7 天，右键可强制重新匹配、可**在线搜索歌词**（浏览器打开网页自己找） |
-| 歌词对齐 | 纯文本歌词（无时间轴）可**联网对齐**成带时间轴的 LRC：导入纯文本后自动询问、歌词区右键「转成 .lrc 文件」；转换后生成**同名 .lrc 到歌曲同目录**，切歌自动识别；对接 LyricTimestamps（自备 Key，免费 15 分钟/月，音频上传第三方） |
+| 歌词对齐 | 纯文本歌词（无时间轴）可**本地对齐**成带时间轴的 LRC：离线分析音频节奏（解码 + 静音检测 + 时间轴分配），**无需 Key、不上传音频**；导入纯文本后自动询问、歌词区右键「转成 .lrc 文件（本地对齐）」；转换后生成**同名 .lrc 到歌曲同目录**，切歌自动识别；想要更准可右键「联网对齐」（LyricTimestamps，自备 Key，免费 15 分钟/月） |
 | 数据目录 | 数据位置可选择：设置 → 存储，可搬到任意盘 / 恢复默认；软件目录放 `data/` 即变便携版，整个文件夹拷走即带走曲库 |
 | 音乐库 | 全部导入歌曲；最近播放（自动）；全局搜索（标题栏）；按标题/艺人/专辑/时长/添加时间排序 |
 | 封面 | 自动提取内嵌封面（MP3 APIC / FLAC / MP4 / OGG）；无封面生成渐变占位图；歌单封面取第一首 |
@@ -68,7 +68,7 @@ python -m venv .venv
 # 2. 运行（开发模式）
 .venv/Scripts/python.exe main.py
 
-# 3. 运行测试（520 项：单测 + offscreen E2E，26 个独立进程）
+# 3. 运行测试（535 项：单测 + offscreen E2E，27 个独立进程）
 .venv/Scripts/python.exe run_tests.py
 # 无显示器的 headless 环境（如 CI）自动加 QT_QPA_PLATFORM=offscreen
 
@@ -87,7 +87,7 @@ python -m venv .venv
 music-player/
 ├── main.py               # 入口（--check 环境自检 / --smoke 产物自检）
 ├── build.py              # 图标生成 + PyInstaller 打包
-├── run_tests.py          # 全量回归入口（26 个独立进程）
+├── run_tests.py          # 全量回归入口（27 个独立进程）
 ├── app/                  # 后端核心（无 UI 依赖，可单测）
 │   ├── models.py         #   Track / Playlist / Settings / 排序预设
 │   ├── store.py          #   JSON 持久化 + 曲库/歌单 CRUD + 收藏
@@ -96,6 +96,8 @@ music-player/
 │   ├── lyrics.py         #   LRC 解析 + 同步索引（纯逻辑）
 │   ├── lyrics_online.py  #   联网歌词检索（LRCLIB）+ 缓存/负缓存
 │   ├── lyrics_multi.py   #   多源联网歌词（LRCLIB+网易云+QQ，并行取最优）
+│   ├── lyrics_align.py   #   歌词联网对齐（LyricTimestamps，纯文本→LRC）
+│   ├── lyrics_local_align.py # 歌词本地对齐（解码+静音检测，离线纯文本→LRC）
 │   ├── lyrics_import.py  #   歌词文件批量导入（文件名归一 + 曲目匹配）
 │   ├── metadata.py       #   mutagen 封装（标签/封面/歌词）
 │   ├── library.py        #   导入复制进曲库 + 内容指纹去重

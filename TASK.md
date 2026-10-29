@@ -630,6 +630,26 @@ K1 → K2 → K3 → L1 → L2 → L3 → M1 → M2 → M3 → M4 → N1 → N2 
     `MultiSourceWorker`、`found` 信号改三参数
   - 验收：全量回归全绿，`ruff check .` 干净
 
+- [x] **Y13** 本地歌词对齐：离线「纯文本 → 带时间轴 LRC」（v2.6.9）
+  - 需求：用户「软件内制作一个类似 LyricTimestamps 的功能」；澄清后选「轻量离线对齐」
+    （静音检测 + 行均分，非 AI）+「本地优先、联网兜底」
+  - 选型：解码用 **miniaudio**（纯 C 无 numpy，打包 +1~2MB），替代 numpy+soundfile（+30MB）
+  - 实现：
+    - `app/lyrics_local_align.py` 新增：`decode_mono`（open bytes + miniaudio.decode，
+      绕开中文路径坑）、`rms_envelope`、`detect_speech`（动态阈值静音检测）、
+      `assign_timestamps`（歌词行铺在有声段上、跳过前奏/间奏/尾奏）、`align_local`、
+      `LyricsLocalAlignWorker(QThread)`
+    - `requirements.txt` 加 `miniaudio`；`lyrics_panel.py` 右键加「本地对齐」信号 +
+      「联网对齐」保留；`main_window.py` 新增 `_start_local_align` /
+      `_align_lyrics_local_for_current`，`_maybe_offer_align` 默认走本地，
+      `_apply_aligned_lrc` 加 `source_label` 区分本地/联网对齐
+  - 关键坑：miniaudio `decode_file` 对**中文路径**解码失败（-7，C 层 ANSI）→ 走
+    `decode(bytes)`；`samples` 是 `array.array('f')`，纯 Python 分帧 RMS 够快无需 numpy；
+    LRC 时间戳用 `[mm:ss.xx]` 百分秒与 `parse_lrc` 兼容
+  - 测试：`tests/test_lyrics_local_align.py` 15 项（标准库 wave 生成正弦波+静音合成音频，
+    断言解码/静音检测/时间戳分配/LRC/worker）
+  - 验收：全量回归全绿，`ruff check .` 干净
+
 
 ## v2.1 验收命令
 

@@ -1,3 +1,4 @@
 # 依赖（运行时）
 PySide6>=6.12,<7
 mutagen>=1.47
+miniaudio>=1.5    # 本地歌词对齐：解码音频算能量（纯 C，无 numpy）

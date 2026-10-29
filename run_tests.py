@@ -31,6 +31,8 @@ MODULES = [
     "tests.test_lyrics_import",
     # v2.6.6 歌词联网对齐：key 校验 / multipart / 三步流程 / 错误分类 / worker（不联网）
     "tests.test_lyrics_align",
+    # v2.6.9 歌词本地对齐：解码 / 静音检测 / 时间戳分配 / LRC / worker（离线，合成音频）
+    "tests.test_lyrics_local_align",
     # v2.2 自定义背景：图片导入 / 铺满裁切 / 模糊近似 / 半透明样式表
     "tests.test_background",
     "tests.test_queue",

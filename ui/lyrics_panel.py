@@ -132,7 +132,9 @@ class LyricsPanel(QWidget):
     batch_import_requested = Signal()
     # 右键「在线搜索歌词」：联网也匹配不到时，去网页自己搜（v2.6.4）
     search_online_requested = Signal()
-    # 右键「联网对齐歌词」：把纯文本歌词转成带时间轴的 LRC（v2.6.6）
+    # 右键「转成 .lrc 文件（本地对齐）」：纯文本歌词本地对齐成 LRC（v2.6.9）
+    align_local_requested = Signal()
+    # 右键「转成 .lrc 文件（联网对齐）」：联网 LyricTimestamps 对齐（v2.6.6，兜底）
     align_lyrics_requested = Signal()
 
     def __init__(self, parent=None):
@@ -313,9 +315,12 @@ class LyricsPanel(QWidget):
         search = QAction("在线搜索歌词…", menu)
         search.triggered.connect(self.search_online_requested.emit)
         menu.addAction(search)
-        align = QAction("转成 .lrc 文件（联网对齐）", menu)
-        align.triggered.connect(self.align_lyrics_requested.emit)
-        menu.addAction(align)
+        align_local = QAction("转成 .lrc 文件（本地对齐）", menu)
+        align_local.triggered.connect(self.align_local_requested.emit)
+        menu.addAction(align_local)
+        align_online = QAction("转成 .lrc 文件（联网对齐）", menu)
+        align_online.triggered.connect(self.align_lyrics_requested.emit)
+        menu.addAction(align_online)
         sender = self.sender()
         anchor = sender.mapToGlobal(pos) if isinstance(sender, QWidget) else pos
         menu.exec(anchor)
