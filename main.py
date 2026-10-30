@@ -11,7 +11,7 @@ import sys
 from PySide6.QtGui import QIcon
 
 APP_NAME = "轻音播放器"
-APP_VERSION = "2.7.4"
+APP_VERSION = "2.7.5"
 
 
 def _resolve_app_icon() -> str | None:
@@ -133,11 +133,24 @@ def main() -> int:
     # 先确定数据目录并建好，再开窗口：路径解析要读指针/探测便携模式，
     # 出问题（比如指向了已拔掉的 U 盘）应该在窗口出现前就降级处理。
     app_data_dir()
+
+    # v2.7.5：异常钩子必须在**路径确定之后**装。日志写进数据目录（含便携
+    # 模式/自定义位置），所以要等 app_data_dir() 把一切探明。
+    # 打包是 windowed 模式，sys.stderr 为 None，未捕获异常原本完全不可见 ——
+    # 现在至少能在 logs/app.log 里留下现场。
+    from app import crashlog
+
+    crashlog.install()
+    crashlog.log_message(f"{APP_NAME} v{APP_VERSION} 启动，数据目录 {current_root()} ({mode()})")
+
     # 打包成 windowed 后双击启动时 sys.stdout 是 None，直接 print 会抛异常
     if sys.stdout is not None:
         print(f"数据目录: {current_root()} ({mode()})")
 
     app = QApplication(sys.argv)
+    # Qt 自己的警告（例如关窗时 "QThread: Destroyed while thread is still
+    # running"）只在控制台可见，必须等 QApplication 建好才能接管
+    crashlog.install_qt()
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     _apply_app_icon(app)

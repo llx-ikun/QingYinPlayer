@@ -331,6 +331,10 @@ class LyricsLocalAlignWorker(QThread):
             self.progress.emit(percent, stage)
 
         outcome = align_local(self._audio_path, self._lyrics_text, progress=_report)
+        # v2.7.5：窗口已关则丢弃结果。对齐要解码整首歌，是这里耗时最长的一步，
+        # 关窗时常常还没算完；此时再 emit 就是往正在析构的窗口投信号。
+        if self.isInterruptionRequested():
+            return
         if outcome.lrc:
             self.done.emit(self._track_id, outcome.lrc)
         else:

@@ -988,6 +988,11 @@ class TestE2ELyricsOnline(unittest.TestCase):
             def isRunning(self):  # noqa: N802
                 return False
 
+            # v2.7.5：closeEvent 现在会先 requestInterruption() 再 wait()，
+            # 桩对象必须同步实现，否则关窗直接 AttributeError
+            def requestInterruption(self):  # noqa: N802
+                self.interrupted = True
+
             def wait(self, *args):
                 return True
 

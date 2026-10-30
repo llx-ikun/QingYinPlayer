@@ -60,6 +60,42 @@ def new_playlist_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+# ---------- v2.7.5：读 json 时的类型收敛 ----------
+#
+# 背景：data.json 是用户目录里的明文文件，可能被手工编辑、被旧版本写入、
+# 被非正常退出截断。原来的 `float(d.get("volume", 0.7))` 一旦遇到 null
+# 或 "大声" 这类值就抛异常，而它在 Settings.from_dict 的第一行 —— 整个
+# 设置对象构造失败，音量/主题/强调色/背景/昵称全部回默认且无人提示。
+#
+# 收敛原则：**读到的任何值都不能让加载流程失败**，脏值就退回默认。
+
+MAX_POSITION_MS = 24 * 60 * 60 * 1000      # 单曲进度上限，防止脏值当进度 seek
+
+
+def _as_float(value, default: float, low: float, high: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    if result != result:            # NaN 自己不等于自己
+        return default
+    return max(low, min(high, result))
+
+
+def _as_int(value, default: int, low: int, high: int) -> int:
+    try:
+        result = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(low, min(high, result))
+
+
+def _as_str(value, default: str, *, allow_empty: bool = False) -> str:
+    if isinstance(value, str) and (allow_empty or value.strip()):
+        return value
+    return default
+
+
 @dataclass
 class Track:
     id: str
@@ -282,21 +318,25 @@ class Settings:
     @classmethod
     def from_dict(cls, d: dict) -> "Settings":
         s = cls()
-        s.volume = float(d.get("volume", 0.7))
+        if not isinstance(d, dict):         # v2.7.5：settings 是 null / 数组等
+            return s
+        # v2.7.5：所有字段都过一遍类型收敛。原来 volume 与 last_position_ms
+        # 是裸 float()/int()，一个 null 就让整块设置回默认（见文件上方说明）。
+        s.volume = _as_float(d.get("volume"), 0.7, 0.0, 1.0)
         s.muted = bool(d.get("muted", False))
-        s.play_mode = d.get("play_mode", MODE_LOOP)
-        s.last_track_id = d.get("last_track_id")
-        s.last_position_ms = int(d.get("last_position_ms", 0))
-        s.last_view = d.get("last_view", PLAYLIST_LIBRARY)
+        mode = d.get("play_mode")
+        s.play_mode = mode if mode in PLAY_MODES else MODE_LOOP
+        tid = d.get("last_track_id")
+        s.last_track_id = tid if isinstance(tid, str) and tid else None
+        s.last_position_ms = _as_int(d.get("last_position_ms"), 0, 0, MAX_POSITION_MS)
+        view = d.get("last_view")
+        s.last_view = view if isinstance(view, str) and view else PLAYLIST_LIBRARY
         s.theme = d.get("theme") or "light"
-        s.nickname = d.get("nickname") or "音乐爱好者"
+        s.nickname = _as_str(d.get("nickname"), "音乐爱好者")
         s.online_lyrics = bool(d.get("online_lyrics", True))
-        s.accent_color = d.get("accent_color") or ""
-        try:
-            s.font_scale = float(d.get("font_scale", 1.0))
-        except (TypeError, ValueError):
-            s.font_scale = 1.0
-        effect = str(d.get("lyrics_effect") or "none")
+        s.accent_color = _as_str(d.get("accent_color"), "", allow_empty=True)
+        s.font_scale = _as_float(d.get("font_scale"), 1.0, 0.5, 3.0)
+        effect = d.get("lyrics_effect")
         s.lyrics_effect = effect if effect in LYRICS_EFFECTS else "none"
         bg = d.get("bg") or {}
         if isinstance(bg, dict):

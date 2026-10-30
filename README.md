@@ -78,7 +78,7 @@ python -m venv .venv
 # 2. 运行（开发模式）
 .venv/Scripts/python.exe main.py
 
-# 3. 运行测试（591 项：单测 + offscreen E2E，29 个独立进程）
+# 3. 运行测试（599 项：单测 + offscreen E2E，29 个独立进程）
 .venv/Scripts/python.exe run_tests.py
 # 无显示器的 headless 环境（如 CI）自动加 QT_QPA_PLATFORM=offscreen
 
@@ -97,7 +97,7 @@ python -m venv .venv
 music-player/
 ├── main.py               # 入口（--check 环境自检 / --smoke 产物自检）
 ├── build.py              # 图标生成 + PyInstaller 打包
-├── run_tests.py          # 全量回归入口（28 个独立进程）
+├── run_tests.py          # 全量回归入口（29 个独立进程）
 ├── app/                  # 后端核心（无 UI 依赖，可单测）
 │   ├── models.py         #   Track / Playlist / Settings / 排序预设
 │   ├── store.py          #   JSON 持久化 + 曲库/歌单 CRUD + 收藏

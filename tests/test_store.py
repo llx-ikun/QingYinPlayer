@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """app.store 单元测试（临时目录 round-trip）。"""
+import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -221,6 +223,159 @@ class TestStore(unittest.TestCase):
         with open(self.db, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         self.assertEqual(LibraryStore(self.db).settings.lyrics_effect, "none")
+
+
+class TestDamagedData(unittest.TestCase):
+    """v2.7.5：一条坏数据只该损失它自己。
+
+    改动前 store.load() 用一个 try 包住 tracks → playlists → settings 三段，
+    任意一条曲目数据坏掉就中断整个流程 —— 后面的歌、**全部歌单**、
+    **全部设置**都不再加载，然后被 except 静默吃掉。用户看到的是
+    「歌单和设置自己没了」。这组用例锁死修好之后的行为。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="qy_damaged_")
+        self.db = os.path.join(self.tmp, "data.json")
+        # 隔离数据根：加载期会写诊断日志到 paths.current_root()/logs，
+        # 不隔离就会污染用户真实目录（crashlog 每次调用都重新解析路径）。
+        self._old_env = os.environ.get("QY_DATA_DIR")
+        os.environ["QY_DATA_DIR"] = self.tmp
+
+    def tearDown(self):
+        if self._old_env is None:
+            os.environ.pop("QY_DATA_DIR", None)
+        else:
+            os.environ["QY_DATA_DIR"] = self._old_env
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, data) -> None:
+        with open(self.db, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def test_one_broken_track_keeps_others_and_playlists(self):
+        """缺 path 的曲目只丢它自己，其余歌 + 歌单 + 设置全部存活。"""
+        self._write({
+            "version": 1,
+            "tracks": {
+                "a": {"id": "a", "path": "C:/m/a.mp3", "title": "歌A"},
+                "b": {"id": "b", "title": "缺 path 的坏数据"},
+                "c": {"id": "c", "path": "C:/m/c.mp3", "title": "歌C"},
+            },
+            "playlists": [
+                {"id": "pl1", "name": "跑步歌单", "track_ids": ["a", "c"], "created_at": 1},
+            ],
+            "settings": {"volume": 0.25, "theme": "columbina", "nickname": "阿坤"},
+        })
+        s = LibraryStore(self.db)
+        self.assertEqual(sorted(t.title for t in s.all_tracks()), ["歌A", "歌C"])
+        self.assertEqual(len(s.playlists), 1)
+        self.assertAlmostEqual(s.settings.volume, 0.25)
+        self.assertEqual(s.settings.nickname, "阿坤")
+        self.assertEqual(len(s.load_skipped), 1)
+
+    def test_broken_playlist_keeps_others(self):
+        """歌单里的坏条目只跳过它自己。"""
+        self._write({
+            "version": 1,
+            "tracks": {"a": {"id": "a", "path": "C:/m/a.mp3", "title": "歌A"}},
+            "playlists": [
+                123,                                               # 根本不是字典
+                {"id": "pl2", "name": "好歌单", "track_ids": ["a"], "created_at": 1},
+            ],
+            "settings": {"volume": 0.3},
+        })
+        s = LibraryStore(self.db)
+        self.assertEqual([pl.name for pl in s.playlists], ["好歌单"])
+        self.assertEqual(len(s.load_skipped), 1)
+        self.assertIn("歌单", s.load_skipped[0])
+
+    def test_null_volume_keeps_other_settings(self):
+        """volume 为 null 只让音量回默认，不能带走主题/昵称/强调色。"""
+        self._write({
+            "version": 1,
+            "tracks": {},
+            "playlists": [],
+            "settings": {
+                "volume": None,
+                "theme": "columbina",
+                "nickname": "阿坤",
+                "accent_color": "#ff7a45",
+                "font_scale": 1.15,
+            },
+        })
+        s = LibraryStore(self.db)
+        self.assertAlmostEqual(s.settings.volume, 0.7)          # 回默认
+        self.assertEqual(s.settings.theme, "columbina")         # 其余保留
+        self.assertEqual(s.settings.nickname, "阿坤")
+        self.assertEqual(s.settings.accent_color, "#ff7a45")
+        self.assertAlmostEqual(s.settings.font_scale, 1.15)
+        self.assertEqual(s.load_skipped, [])                    # 能救回来就不算损坏
+
+    def test_out_of_range_values_are_clamped(self):
+        """超范围数值夹到合法区间，非法枚举回默认，全程不抛异常。"""
+        self._write({
+            "version": 1,
+            "tracks": {},
+            "playlists": [],
+            "settings": {
+                "volume": 99,                    # > 1
+                "last_position_ms": -5,          # < 0
+                "play_mode": "乱来",              # 不在 PLAY_MODES
+                "lyrics_effect": "flashy",       # 不在 LYRICS_EFFECTS
+                "font_scale": "很大",
+                "nickname": ["不是字符串"],
+                "accent_color": {"hex": "#fff"},
+            },
+        })
+        s = LibraryStore(self.db)
+        self.assertAlmostEqual(s.settings.volume, 1.0)
+        self.assertEqual(s.settings.last_position_ms, 0)
+        self.assertEqual(s.settings.play_mode, "loop")
+        self.assertEqual(s.settings.lyrics_effect, "none")
+        self.assertAlmostEqual(s.settings.font_scale, 1.0)
+        self.assertEqual(s.settings.nickname, "音乐爱好者")
+        self.assertEqual(s.settings.accent_color, "")
+
+    def test_non_dict_root_treated_as_corrupt(self):
+        """顶层是数组等非法结构：按损坏处理，备份重建，不崩。"""
+        with open(self.db, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        s = LibraryStore(self.db)
+        self.assertEqual(s.all_tracks(), [])
+        self.assertTrue(os.path.exists(self.db + ".bak"))
+
+    def test_skip_is_logged_to_crash_log(self):
+        """跳过了就得留痕：日志里要能查到丢了什么。"""
+        self._write({
+            "version": 1,
+            "tracks": {"b": {"id": "b", "title": "缺 path"}},
+            "playlists": [],
+            "settings": {},
+        })
+        LibraryStore(self.db)
+        log = os.path.join(self.tmp, "logs", "app.log")
+        self.assertTrue(os.path.exists(log), "损坏数据必须写进诊断日志")
+        with open(log, encoding="utf-8") as f:
+            self.assertIn("跳过损坏记录", f.read())
+
+    def test_save_failure_is_recorded_not_raised(self):
+        """写盘失败不许向上抛：异常穿透到 Qt 槽里就再也看不见了。"""
+        s = LibraryStore(self.db)
+        s.settings.nickname = object()          # 无法 JSON 序列化
+        s.save()                                # 不应抛异常
+        self.assertTrue(s.save_failed)
+        self.assertFalse(os.path.exists(self.db + ".tmp"), "失败后不能留半截临时文件")
+
+    def test_save_success_clears_failure_flag(self):
+        s = LibraryStore(self.db)
+        s.settings.nickname = object()
+        s.save()
+        self.assertTrue(s.save_failed)
+        s.settings.nickname = "阿坤"
+        s.save()
+        self.assertEqual(s.save_failed, "")
+        self.assertTrue(os.path.exists(self.db))
 
 
 if __name__ == "__main__":

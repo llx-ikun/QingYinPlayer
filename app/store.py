@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 
+from app import crashlog
 from app.metadata import TrackMeta
 from app.models import (
     PLAYLIST_FAVORITES,
@@ -40,6 +41,12 @@ class LibraryStore:
         self.tracks: dict[str, Track] = {}
         self.playlists: list[Playlist] = []
         self.settings = Settings()
+        # v2.7.5：加载期被跳过的坏数据摘要。非空说明库里有过损坏，
+        # 界面要给用户一次交代 —— 静默丢弃用户数据是不可接受的。
+        self.load_skipped: list[str] = []
+        # v2.7.5：上次 save 的失败原因（空字符串表示成功）。
+        # save() 不再向上抛异常，由这里留痕，界面可据此提示。
+        self.save_failed: str = ""
         if path:
             self.load()
 
@@ -54,23 +61,68 @@ class LibraryStore:
         except FileNotFoundError:
             return
         except Exception:  # noqa: BLE001  数据损坏：备份后重建
-            with contextlib.suppress(Exception):
-                shutil.copyfile(self._path, self._path + ".bak")
+            self._backup_broken()
             return
-        try:
-            for tid, td in (data.get("tracks") or {}).items():
+        if not isinstance(data, dict):      # v2.7.5：顶层是数组/字符串等，同样按损坏处理
+            self._backup_broken()
+            return
+
+        # v2.7.5 修复：逐条隔离加载。
+        #
+        # 改之前是「一个 try 包住 tracks → playlists → settings 三段」，
+        # 于是任意一条曲目数据坏掉（例如老版本缺 path 字段），KeyError 会
+        # 直接中断整个循环 —— 后面的曲目、**全部歌单**、**全部设置**都不再
+        # 加载，然后被 except 静默吃掉。用户看到的是「歌单和设置自己没了」。
+        #
+        # 现在的原则：一条坏数据只损失它自己，其余照常救回来，并把跳过的
+        # 条目记进 load_skipped，让界面能明确告诉用户。
+        skipped: list[str] = []
+
+        raw_tracks = data.get("tracks")
+        for tid, td in (raw_tracks.items() if isinstance(raw_tracks, dict) else ()):
+            try:
                 t = Track.from_dict(td)
-                self.tracks[t.id or tid] = t
-            for pd in data.get("playlists") or []:
+            except Exception:  # noqa: BLE001  单条坏数据：跳过，不影响其他
+                skipped.append(f"曲目 {tid}")
+                continue
+            self.tracks[t.id or tid] = t
+
+        raw_playlists = data.get("playlists")
+        for pd in (raw_playlists if isinstance(raw_playlists, list) else []):
+            try:
                 pl = Playlist.from_dict(pd)
-                # v2.0：保留 system 歌单（「我喜欢」需要持久化）；
-                # 历史数据中的虚拟 id（library/recent）本就不落盘，出现则跳过
-                if pl.id in (PLAYLIST_LIBRARY, PLAYLIST_RECENT):
-                    continue
-                self.playlists.append(pl)
+            except Exception:  # noqa: BLE001
+                name = pd.get("name") if isinstance(pd, dict) else str(pd)
+                skipped.append(f"歌单 {name}")
+                continue
+            # v2.0：保留 system 歌单（「我喜欢」需要持久化）；
+            # 历史数据中的虚拟 id（library/recent）本就不落盘，出现则跳过
+            if pl.id in (PLAYLIST_LIBRARY, PLAYLIST_RECENT):
+                continue
+            self.playlists.append(pl)
+
+        try:
             self.settings = Settings.from_dict(data.get("settings") or {})
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001  设置整块救不回来：回默认，但别拖累上面
+            self.settings = Settings()
+            skipped.append("设置")
+
+        if skipped:
+            self._backup_broken()
+            self.load_skipped = skipped
+            # 静默丢用户数据是不可接受的：至少要在日志里留下「丢了什么」，
+            # 否则用户报「歌单没了」时无从查起。
+            with contextlib.suppress(Exception):
+                head = ", ".join(skipped[:20])
+                more = f" 等 {len(skipped)} 条" if len(skipped) > 20 else ""
+                crashlog.log_message(f"加载时跳过损坏记录: {head}{more}")
+
+    def _backup_broken(self) -> None:
+        """把损坏的数据文件原样留一份，方便事后排查。备份失败不影响启动。"""
+        if not self._path:
+            return
+        with contextlib.suppress(Exception):
+            shutil.copyfile(self._path, self._path + ".bak")
 
     def save(self) -> None:
         if not self._path:
@@ -82,10 +134,23 @@ class LibraryStore:
             "settings": self.settings.to_dict(),
         }
         tmp = self._path + ".tmp"
-        os.makedirs(os.path.dirname(os.path.abspath(self._path)), exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, self._path)
+        # v2.7.5 修复：写盘失败不再向上抛。
+        # 磁盘满 / 无写权限 / 文件被占用时，原来的 OSError 会穿透到调用它的
+        # Qt 槽里；windowed 打包后没有 stderr，异常既看不见也拦不住，用户只会
+        # 觉得「点了没反应」。现在就地记账 + 落日志，由界面决定怎么提示。
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self._path)), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self._path)
+        except (OSError, TypeError, ValueError) as exc:
+            self.save_failed = f"{type(exc).__name__}: {exc}"
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            with contextlib.suppress(Exception):
+                crashlog.log_message(f"保存数据失败（{self._path}）: {self.save_failed}")
+            return
+        self.save_failed = ""
 
     # ---------- 曲库 ----------
 

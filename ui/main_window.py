@@ -145,6 +145,35 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
 
+        # v2.7.5：启动期数据体检结果要告诉用户。
+        # store.load() 现在会跳过单条坏数据并记进 load_skipped —— 跳过了却不说，
+        # 用户只会觉得「歌单/设置自己消失了」。延后一点弹，等窗口画完。
+        if self.store.load_skipped:
+            QTimer.singleShot(1200, self._warn_load_skipped)
+        # v2.7.5：save() 失败不再向上抛异常（会穿透到槽里静默消失），
+        # 改为记账。这里低频轮询一次，发现就提示，之后清标志避免刷屏。
+        self._save_watch = QTimer(self)
+        self._save_watch.setInterval(4000)
+        self._save_watch.timeout.connect(self._check_save_error)
+        self._save_watch.start()
+
+    def _warn_load_skipped(self) -> None:
+        """启动时跳过过损坏数据 —— 必须明确告知，不能装没事。"""
+        skipped = self.store.load_skipped
+        if not skipped:
+            return
+        head = "、".join(skipped[:3])
+        tail = f" 等 {len(skipped)} 条" if len(skipped) > 3 else ""
+        self._toast(f"启动时跳过 {len(skipped)} 条损坏数据（{head}{tail}），原件已备份为 .bak", 6000)
+
+    def _check_save_error(self) -> None:
+        """保存失败提示（v2.7.5）：磁盘满 / 无写权限时用户必须有感。"""
+        reason = self.store.save_failed
+        if not reason:
+            return
+        self.store.save_failed = ""
+        self._toast(f"数据保存失败：{reason}", 5000)
+
     # ---------- UI 装配 ----------
 
     def _build_ui(self) -> None:
@@ -1803,12 +1832,24 @@ class MainWindow(QMainWindow):
             self._scanner.cancel()
             self._scanner.wait(3000)
         # 联网抓歌词的线程必须等它自己收尾，否则析构中线程还在跑会告警/崩
+        #
+        # v2.7.5：先 requestInterruption 再 wait。原来只 wait(2000) 是「干等一个
+        # 根本不知道自己该停的线程」—— 网络卡住时 2 秒必然超时，然后窗口照常
+        # 析构，Qt 就报 "QThread: Destroyed while thread is still running"。
+        # worker 侧已配合加了中断检查，这里喊一声它才会尽快收工。
+        #
+        # 等待上限取 5000 而不是原来的 2000：单源网络超时是 4.5 秒，2 秒根本
+        # 盖不住一轮请求。宁可关窗多等这一下，也不要带着活线程析构窗口。
         for worker in list(self._lyrics_workers.values()):
-            worker.wait(2000)
+            worker.requestInterruption()
+        for worker in list(self._lyrics_workers.values()):
+            worker.wait(5000)
         self._lyrics_workers.clear()
         # 本地对齐歌词的线程同样要等它收尾（v2.6.9）
         for worker in list(self._align_workers.values()):
-            worker.wait(2000)
+            worker.requestInterruption()
+        for worker in list(self._align_workers.values()):
+            worker.wait(5000)
         self._align_workers.clear()
         self.player.stop()
         self.store.save()

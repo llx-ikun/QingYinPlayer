@@ -688,6 +688,9 @@ class LyricsFetchWorker(QThread):
 
         outcome = fetch_outcome(self._title, self._artist, self._duration_ms,
                                 album=self._album, progress=_report)
+        # v2.7.5：窗口已关则不发信号（见 lyrics_multi 同处说明）
+        if self.isInterruptionRequested():
+            return
         if outcome.text:
             self.found.emit(self._track_id, outcome.text)
         elif outcome.aborted:

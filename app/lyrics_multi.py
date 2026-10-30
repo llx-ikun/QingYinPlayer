@@ -400,6 +400,12 @@ class MultiSourceWorker(QThread):
         text, source, aborted = fetch_outcome_multi(
             self._title, self._artist, self._duration_ms,
             album=self._album, progress=_report)
+        # v2.7.5：窗口已经关掉就别再发信号了。
+        # 主窗口关闭时会先 requestInterruption() 再 wait()，但多源抓取是并行
+        # 线程池，请求发出去就收不回来（单源超时 4.5s）。这条检查保证「即使
+        # 线程晚一步收工，也不会把信号投递给正在析构的窗口」。
+        if self.isInterruptionRequested():
+            return
         if text:
             self.found.emit(self._track_id, text, source)
         elif aborted:
