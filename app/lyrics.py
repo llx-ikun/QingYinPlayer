@@ -91,6 +91,10 @@ _PLAIN_META_LABEL = re.compile(
     r"出品|出品人|发行|发行方|企划|统筹|旁白)\s*[:：]"
 )
 
+# 元数据块只在「文件开头的这一段」里认，且要求连续 ≥2 行 —— 见 strip_meta_lines。
+_META_SCAN_LINES = 8
+_META_MIN_RUN = 2
+
 
 def _next_is_meta(lines: list[str], start: int) -> bool:
     """从 start 起找第一个非空行，判断它是不是元数据行（「作词 : xxx」这种）。"""
@@ -111,19 +115,40 @@ def strip_meta_lines(text: str) -> str:
         作曲 : 音融三喜
         编曲 : 音融三喜
         歌词正文...
-    首行「歌名」靠「后面紧跟元数据行」这条信号剔除，避免把正文第一句误删。
+
+    两条约束缺一不可（v2.7.3 收紧，此前会误删正文）：
+    1. 只看**前 8 行**（`_META_SCAN_LINES`）—— 正文深处出现「制作 : xxx」不是元数据；
+    2. 元数据必须**连续 ≥2 行**（`_META_MIN_RUN`）—— 孤立一行「制作 : xxx」更可能是
+       歌词本身（探针实测：正文第 2 行是这种样式时，旧实现会把首句歌词当歌名删掉，
+       3 行变 1 行）。
+
+    首行歌名靠「后面紧跟 ≥2 行元数据」这条信号剔除，避免把正文第一句误删。
     """
     lines = (text or "").splitlines()
-    out: list[str] = []
-    for i, raw in enumerate(lines):
-        line = raw.strip()
-        if _PLAIN_META_LABEL.match(line):
+    # 前 8 个非空行的下标
+    idxs = [i for i, raw in enumerate(lines) if raw.strip()][:_META_SCAN_LINES]
+
+    meta_idx: set[int] = set()
+    run: list[int] = []
+    for i in [*idxs, None]:
+        if i is not None and _PLAIN_META_LABEL.match(lines[i].strip()):
+            run.append(i)
             continue
-        # 首行是歌名：其后的第一个非空行若是元数据行，首行也是元数据，剔除
-        if i == 0 and _next_is_meta(lines, 1):
-            continue
-        out.append(raw)
-    return "\n".join(out)
+        if len(run) >= _META_MIN_RUN:
+            meta_idx.update(run)
+        run = []
+
+    drop: set[int] = set(meta_idx)
+    if idxs:
+        first = idxs[0]
+        if first not in meta_idx and _PLAIN_META_LABEL.match(lines[first].strip()):
+            # 文件**第一行**就是元数据：单行也删（后面紧跟正文，不可能把它当歌词唱）
+            drop.add(first)
+        elif len(idxs) > 1 and idxs[1] in drop:
+            # 首行是歌名：紧随其后的就是被剔除的元数据块
+            drop.add(first)
+
+    return "\n".join(raw for i, raw in enumerate(lines) if i not in drop)
 
 
 def lyrics_from_text(text: str) -> tuple[list[LyricLine], list[str]]:
@@ -139,18 +164,14 @@ def lyrics_from_text(text: str) -> tuple[list[LyricLine], list[str]]:
     return [], parse_plain(strip_meta_lines(text))
 
 
-# ---------- 双语歌词（原文 + 译文） ----------
+# ---------- 双语判定 / 结构标记行（v2.7.3） ----------
 #
-# 两种常见形态：
-# 1. 纯文本交替排版（浏览器下载的 .txt 最常见）：
-#       Who can surely know      ← 原文
-#       风将吹向何方              ← 译文
-# 2. 同步 LRC 同时间戳两行（外部工具导出的双语 LRC）：
-#       [00:02.36]Who can surely know
-#       [00:02.36]风将吹向何方
+# 浏览器/工具导出的 .txt 常带 [Verse 1]、(间奏)、【副歌】 这类段落标记。它们不是
+# 歌词，却会被当成「一行歌词」参与双语判定：`[Verse 1]` 含 ASCII 字母但没有汉字，
+# 于是冒充"英文原文行"，把紧跟其后的真中文歌词降级成小字译文（探针实测 4 行被配成
+# 2 句，中文整段变译文）。
 #
-# 两种都必须合并成「一句」，否则译文会自己占一个时间槽：行数翻倍会让整首歌的
-# 时间轴被压缩一半，译文还永远比原文晚半句（v2.6.10 实测 74 行 / 实际 37 句）。
+# 这里给它们一个独立身份：**保留在序列里原样显示，但不参与双语配对**。
 
 # 中日韩字符：汉字（含扩展 A/兼容区）、日文假名、韩文谚文
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
@@ -165,6 +186,48 @@ BILINGUAL_MIN_LINES = 4
 BILINGUAL_MIN_RATIO = 0.25
 BILINGUAL_MIN_ALTERNATION = 0.85
 
+# 整体被括号/星号包裹的行：捕获括号内的内容
+_WRAPPED = re.compile(
+    r"^\s*(?:[\[【〔]([^\[\]【】〔〕]*)[\]】〕]"
+    r"|[\(（]([^\(\)（）]*)[\)）]"
+    r"|\*([^*]+)\*)\s*$"
+)
+
+# 常见段落标记词：带不带括号都认（「间奏」「[Chorus 2]」「*intro*」）
+_MARKER_WORDS = re.compile(
+    r"^\s*[\[【〔(（*]?\s*"
+    r"(?:间奏|前奏|尾奏|间奏曲|副歌|主歌|桥段|过渡段|过渡|合唱|吟唱|纯音乐|伴奏|音乐"
+    r"|intro|outro|verse|chorus|pre-?chorus|bridge|hook|interlude|instrumental"
+    r"|solo|refrain|breakdown|drop|skit)"
+    r"(?:\s*\d+)?\s*[:：]?\s*[\]】〕)）*]?\s*$",
+    re.IGNORECASE,
+)
+
+# 括号内最多这么长才可能是标记（再长就当成真歌词，宁可不动）
+_MARKER_MAX_LEN = 24
+
+
+def is_structure_marker(line: str) -> bool:
+    """判断一行是「段落标记」而不是歌词。
+
+    两类命中：
+    1. 常见标记词（间奏/副歌/verse/chorus…），带不带括号都算；
+    2. 整行被 `[]`/`【】`/`〔〕`/`()`/`（）`/`**` 包住，且括号内**不含中日韩字符**、
+       长度 ≤24 —— 如 `[Verse 1]`、`(ahh)`；含汉字的如「(月亮代表我的心)」仍当歌词。
+    """
+    s = (line or "").strip()
+    if not s:
+        return False
+    if _MARKER_WORDS.match(s):
+        return True
+    m = _WRAPPED.match(s)
+    if not m:
+        return False
+    inner = next(g for g in m.groups() if g is not None).strip()
+    if not inner or len(inner) > _MARKER_MAX_LEN:
+        return False
+    return not has_cjk(inner)
+
 
 def has_cjk(text: str) -> bool:
     """文本里是否含中日韩字符（用来区分「原文行」与「译文行」的语种）。"""
@@ -172,8 +235,13 @@ def has_cjk(text: str) -> bool:
 
 
 def is_bilingual_alternating(lines: list[str]) -> bool:
-    """判断一批纯文本行是否为「原文 / 译文」交替排版。"""
-    lines = [s for s in (lines or []) if s and s.strip()]
+    """判断一批纯文本行是否为「原文 / 译文」交替排版。
+
+    结构标记行（`[Verse 1]` 之类）先剔除再判 —— 否则它们会冒充另一种语种，
+    把整份文件误判成双语。判定口径（两语种各 ≥25%、相邻异类 ≥85%）见上方常量。
+    """
+    lines = [s for s in (lines or [])
+             if s and s.strip() and not is_structure_marker(s)]
     if len(lines) < BILINGUAL_MIN_LINES:
         return False
     flags = [has_cjk(s) for s in lines]
@@ -191,22 +259,55 @@ def pair_bilingual(lines: list[str]) -> list[tuple[str, str]]:
 
     不是双语排版时每行自成一句（译文为空串），调用方可以无脑按「句」处理。
     先出现的那行当原文——中英/英中哪种顺序在前都成立。
+
+    结构标记行（`[Verse 1]` 之类）不参与配对、也不会被配对吞掉：各自单独成一条
+    （译文为空），原样留在结果里。双语配对本身照旧一行两句。
     """
     rows = [s.strip() for s in (lines or []) if s and s.strip()]
-    if not is_bilingual_alternating(rows):
+    if not rows:
+        return []
+    marks = [is_structure_marker(s) for s in rows]
+    body = [s for s, is_mark in zip(rows, marks, strict=True) if not is_mark]
+    if not is_bilingual_alternating(body):
         return [(s, "") for s in rows]
-    pairs: list[tuple[str, str]] = []
+
+    out: list[tuple[str, str]] = []
     i = 0
     while i < len(rows):
-        cur = rows[i]
-        nxt = rows[i + 1] if i + 1 < len(rows) else None
-        if nxt is not None and has_cjk(cur) != has_cjk(nxt):
-            pairs.append((cur, nxt))
-            i += 2
-        else:
-            pairs.append((cur, ""))
+        if marks[i]:
+            out.append((rows[i], ""))
             i += 1
-    return pairs
+            continue
+        # 跳到下一个非标记行，中间的标记行先攒着（别让它们打断配对）
+        j = i + 1
+        pending: list[str] = []
+        while j < len(rows) and marks[j]:
+            pending.append(rows[j])
+            j += 1
+        nxt = rows[j] if j < len(rows) else None
+        if nxt is not None and has_cjk(rows[i]) != has_cjk(nxt):
+            out.append((rows[i], nxt))
+            out.extend((marker, "") for marker in pending)
+            i = j + 1
+        else:
+            out.append((rows[i], ""))
+            i += 1
+    return out
+
+
+
+# ---------- 双语歌词（原文 + 译文） ----------
+#
+# 两种常见形态：
+# 1. 纯文本交替排版（浏览器下载的 .txt 最常见）：
+#       Who can surely know      ← 原文
+#       风将吹向何方              ← 译文
+# 2. 同步 LRC 同时间戳两行（外部工具导出的双语 LRC）：
+#       [00:02.36]Who can surely know
+#       [00:02.36]风将吹向何方
+#
+# 两种都必须合并成「一句」，否则译文会自己占一个时间槽：行数翻倍会让整首歌的
+# 时间轴被压缩一半，译文还永远比原文晚半句（v2.6.10 实测 74 行 / 实际 37 句）。
 
 
 def merge_translations(lines: list[LyricLine]) -> list[LyricLine]:

@@ -18,7 +18,7 @@ from PySide6.QtGui import (QAction, QBrush, QColor, QFont, QFontMetrics,
 from PySide6.QtWidgets import (QLabel, QListWidget, QListWidgetItem, QMenu,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from app.lyrics import LyricLine, lyric_index_at, pair_bilingual
+from app.lyrics import LyricLine, is_structure_marker, lyric_index_at, pair_bilingual
 from app.models import LYRICS_EFFECTS
 from ui.theme import ACCENT, current_theme
 
@@ -47,6 +47,17 @@ def _normal_color() -> QColor:
     当时返回的是深色主题的值，之后切到浅色主题仍是旧的灰（被冻结）。
     """
     return QColor(current_theme().TEXT_DIM)
+
+
+def _marker_color() -> QColor:
+    """段落标记行（`[Verse 1]` / `(间奏)`）用更淡的色。
+
+    它不是唱词，压暗一点才不会让人以为在等这一句开口；也顺带把它和真歌词区分开
+    （v2.7.3）。
+    """
+    color = _normal_color()
+    color.setAlpha(140)
+    return color
 
 
 def _translation_color(is_current: bool) -> QColor:
@@ -332,7 +343,9 @@ class LyricsPanel(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, -1)
                 if sub:
                     item.setData(_TRANSLATION_ROLE, sub)
-                item.setForeground(_normal_color())
+                # 段落标记行压暗：它不是唱词（v2.7.3）
+                item.setForeground(_marker_color() if is_structure_marker(main)
+                                   else _normal_color())
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.list.addItem(item)
         self._refresh_visibility()

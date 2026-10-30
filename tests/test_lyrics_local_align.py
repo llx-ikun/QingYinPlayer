@@ -230,6 +230,20 @@ class TestAlignLocal(unittest.TestCase):
         self.assertEqual(len(synced), 3)
         self.assertTrue(all(ln.translation == "" for ln in synced))
 
+    def test_structure_markers_not_written_to_lrc(self):
+        """段落标记行（[Verse 1]/(间奏)）不是唱词：不占时间槽、不写进 LRC（v2.7.3）。
+
+        写进去就会和同时间戳的歌词行被 merge_translations 当成译文合并，
+        界面上变成「[Verse 1] + 风将吹向何方」一句两行，越描越乱。
+        """
+        text = "[Verse 1]\n风将吹向何方\n我追着光\n(间奏)\n雨落在肩上"
+        outcome = align_local(self.wav, text)
+        self.assertTrue(outcome.lrc)
+        texts = [ln.text for ln in parse_lrc(outcome.lrc)]
+        self.assertEqual(texts, ["风将吹向何方", "我追着光", "雨落在肩上"])
+        for marker in ("[Verse 1]", "(间奏)"):
+            self.assertNotIn(marker, outcome.lrc)
+
 
     def test_no_audio(self):
         self.assertEqual(align_local(os.path.join(self.tmp, "nope.mp3"), "歌词").error_code,

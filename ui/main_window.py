@@ -46,7 +46,8 @@ from PySide6.QtWidgets import (
 
 from app.covers import CoverProvider
 from app.filesize import file_size
-from app.lyrics import LyricLine, lyrics_from_text, shift_lrc, strip_meta_lines
+from app.lyrics import (LyricLine, lyrics_from_text, pair_bilingual, parse_plain,
+                        shift_lrc, strip_meta_lines)
 from app.lyrics_align import sidecar_lrc_path, write_sidecar_lrc
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
@@ -552,6 +553,21 @@ class MainWindow(QMainWindow):
         else:
             self.now_playing.set_empty()
 
+    @staticmethod
+    def _lyrics_label(label: str, text: str, synced: list[LyricLine],
+                      plain: list[str]) -> str:
+        """来源标签后面追加「N 行 → M 句」对照（v2.7.3）。
+
+        为什么要有这行字：双语 txt 是「一行原文 + 一行译文」，界面按**句**显示，
+        78 行的文件只会出现 37 句。不标出来的话，用户看到行数对不上就会以为歌词丢了
+        —— 之前所有的「歌词和 txt 不匹配」都缺这一个可核对的数字。
+        """
+        total = len(parse_plain(text))
+        shown = len(synced) if synced else len(pair_bilingual(plain))
+        if not total or not shown:
+            return label
+        return f"{label} · {total} 行 → {shown} 句"
+
     def _resolve_lyrics(self, track: Track) -> tuple[list[LyricLine], list[str], str]:
         """返回 (同步行, 纯文本行, 来源标签)。来源为空串表示「没有歌词」。"""
         # 1) 手动绑定的 .lrc
@@ -560,7 +576,7 @@ class MainWindow(QMainWindow):
             if text:
                 synced, plain = lyrics_from_text(text)
                 if synced or plain:
-                    return synced, plain, "本地歌词 · 手动绑定"
+                    return synced, plain, self._lyrics_label("本地歌词 · 手动绑定", text, synced, plain)
         # 2) 同名 .lrc
         sidecar = os.path.splitext(track.path)[0] + ".lrc"
         if os.path.isfile(sidecar):
@@ -568,7 +584,7 @@ class MainWindow(QMainWindow):
             if text:
                 synced, plain = lyrics_from_text(text)
                 if synced or plain:
-                    return synced, plain, "本地歌词 · 同名 .lrc"
+                    return synced, plain, self._lyrics_label("本地歌词 · 同名 .lrc", text, synced, plain)
         # 3) 内嵌歌词
         try:
             meta = read_track(track.path)
@@ -577,13 +593,13 @@ class MainWindow(QMainWindow):
         if meta is not None and meta.lyrics_text:
             synced, plain = lyrics_from_text(meta.lyrics_text)
             if synced or plain:
-                return synced, plain, "本地歌词 · 内嵌"
+                return synced, plain, self._lyrics_label("本地歌词 · 内嵌", meta.lyrics_text, synced, plain)
         # 4) 上次联网匹配的缓存（v2.2）——命中即完全离线可用
         cached_text = read_cache(track.id)
         if cached_text:
             synced, plain = lyrics_from_text(cached_text)
             if synced or plain:
-                return synced, plain, "来源：联网（缓存）"
+                return synced, plain, self._lyrics_label("来源：联网（缓存）", cached_text, synced, plain)
         # 5) 联网兜底不在这里做：网络请求是异步的，交给 _start_online_lyrics
         return [], [], ""
 
@@ -636,7 +652,8 @@ class MainWindow(QMainWindow):
         synced, plain = lyrics_from_text(text)
         if not synced and not plain:
             return
-        self._lyrics_cache[track_id] = (synced, plain, f"来源：{source}")
+        self._lyrics_cache[track_id] = (
+            synced, plain, self._lyrics_label(f"来源：{source}", text, synced, plain))
         write_cache(track_id, text)
         clear_miss(track_id)                # 之前记过「没查到」，现在推翻它
         current = self.player.current_track
@@ -646,7 +663,7 @@ class MainWindow(QMainWindow):
             self.now_playing.set_synced(synced)
         else:
             self.now_playing.set_plain(plain)
-        self.now_playing.set_source(f"来源：{source}")
+        self.now_playing.set_source(self._lyrics_cache[track_id][2])
         self._toast(f"已联网匹配到歌词（{source}）", 2500)
 
     def _on_online_lyrics_missed(self, track_id: str) -> None:

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QThread, Signal
 
-from app.lyrics import lyrics_from_text, pair_bilingual
+from app.lyrics import is_structure_marker, lyrics_from_text, pair_bilingual
 
 TARGET_SR = 16000
 FRAME_MS = 20
@@ -267,6 +267,9 @@ def align_local(audio_path: str, lyrics_text: str, progress=None) -> LocalAlignO
     # 时间戳写在同一行之后。否则行数翻倍会让整首歌的时间轴被压缩一半，译文永远
     # 比原文晚半句（实测 74 行 / 实际 37 句）。
     rows = pair_bilingual(plain)
+    # 段落标记（[Verse 1] / (间奏) …）不是唱词：不占时间槽，也不写进 LRC。
+    # 写进去会和同时间戳的歌词行被 merge_translations 当成「译文」合并，越描越乱。
+    rows = [r for r in rows if not is_structure_marker(r[0])]
     if not rows:
         return LocalAlignOutcome(error_code="no_lyrics")
     lines = [main for main, _sub in rows]

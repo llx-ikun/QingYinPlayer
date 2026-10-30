@@ -827,6 +827,24 @@ class TestE2EV2(unittest.TestCase):
                          "不该给没自带光标的控件留下显式光标")
 
 
+    def test_lyrics_source_label_shows_line_to_sentence_count(self):
+        """来源小字要带「N 行 → M 句」对照（v2.7.3）。
+
+        双语 txt 一行原文一行译文，界面按句显示会少一半；没有这个数字，用户看到
+        行数对不上就会以为歌词丢了。
+        """
+        from app.lyrics import lyrics_from_text
+        from ui.main_window import MainWindow
+
+        text = ("作词 : 甲\n作曲 : 乙\n"
+                "Who can surely know\n风将吹向何方\n"
+                "How the wind blows,\n谁也捉摸不透")
+        synced, plain = lyrics_from_text(text)
+        self.assertEqual(synced, [])
+        label = MainWindow._lyrics_label("本地歌词 · 同名 .txt", text, synced, plain)
+        self.assertIn("6 行", label, "应报告 txt 原始非空行数")
+        self.assertIn("2 句", label, "应报告合并双语后的句数")
+
     def test_version_label_at_bottom_right(self):
         """版本号从侧边栏底部挪到窗口右下角（v2.1.8）。"""
         self._import()

@@ -7,9 +7,10 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.lyrics import (LyricLine, format_lrc, format_lrc_stamp, format_time,
-                        has_cjk, is_bilingual_alternating, lyric_index_at,
-                        lyrics_from_text, merge_translations, pair_bilingual,
-                        parse_lrc, parse_plain, shift_lrc, strip_meta_lines)
+                        has_cjk, is_bilingual_alternating, is_structure_marker,
+                        lyric_index_at, lyrics_from_text, merge_translations,
+                        pair_bilingual, parse_lrc, parse_plain, shift_lrc,
+                        strip_meta_lines)
 
 
 class TestParseLrc(unittest.TestCase):
@@ -131,6 +132,95 @@ class TestStripMetaLines(unittest.TestCase):
         """首行只在「后面紧跟元数据行」时才当歌名剔除；否则保留。"""
         text = "第一句歌词\n第二句歌词"
         self.assertEqual(strip_meta_lines(text).splitlines(), ["第一句歌词", "第二句歌词"])
+
+    # ---------- v2.7.3 收紧：别再把正文当元数据删 ----------
+
+    def test_single_meta_like_line_in_body_kept(self):
+        """正文里孤零零一行「制作 : xxx」是歌词，不是元数据块。
+
+        旧实现会把它删掉，还因为「首行后面紧跟元数据」把第一句歌词一起当歌名删，
+        3 行变 1 行（探针 tools/probe_txt_lyrics.py 用例 C）。
+        """
+        text = "风将吹向何方\n制作 : 这是一句歌词\n我追着光"
+        self.assertEqual(strip_meta_lines(text).splitlines(),
+                         ["风将吹向何方", "制作 : 这是一句歌词", "我追着光"])
+
+    def test_meta_block_must_be_consecutive(self):
+        """不连续的元数据行各自孤立，都不算「块」（首行的那行见下一个用例）。"""
+        text = "第一句\n作词 : 甲\n第二句\n作曲 : 乙"
+        self.assertEqual(strip_meta_lines(text).splitlines(),
+                         ["第一句", "作词 : 甲", "第二句", "作曲 : 乙"])
+
+    def test_single_meta_line_at_very_first_line_stripped(self):
+        """第一行就是「作词 : xxx」：单行也删——否则它会和第一句歌词配成双语。"""
+        text = "作词 : 甲\nWho can surely know\n风将吹向何方"
+        self.assertEqual(strip_meta_lines(text).splitlines(),
+                         ["Who can surely know", "风将吹向何方"])
+
+    def test_meta_block_beyond_head_lines_kept(self):
+        """正文深处的元数据样式行不动（只看前 8 行）。"""
+        body = [f"第{i}句" for i in range(1, 10)]
+        text = "\n".join([*body, "制作 : 丙", "编曲 : 丁"])
+        self.assertEqual(strip_meta_lines(text).splitlines(),
+                         [*body, "制作 : 丙", "编曲 : 丁"])
+
+    def test_two_line_meta_block_at_head_still_stripped(self):
+        """前 8 行内连续 ≥2 行的元数据块照旧剔除（别把原能力改没了）。"""
+        text = "作词 : 甲\n作曲 : 乙\n第一句\n第二句"
+        self.assertEqual(strip_meta_lines(text).splitlines(), ["第一句", "第二句"])
+
+
+class TestStructureMarker(unittest.TestCase):
+    """v2.7.3：段落标记行 `[Verse 1]` / `(间奏)` 要有独立身份。
+
+    它们若被当成歌词行参与双语判定，含 ASCII 的会冒充「英文原文行」，把真中文
+    歌词降级成小字译文（探针用例 D：4 行被配成 2 句）。
+    """
+
+    def test_recognizes_common_markers(self):
+        for line in ("[Verse 1]", "[Chorus 2]", "【副歌】", "(间奏)", "（前奏）",
+                     "*intro*", "间奏", "Interlude", "[bridge]"):
+            self.assertTrue(is_structure_marker(line), f"{line!r} 应判为段落标记")
+
+    def test_bracket_numbering_and_words(self):
+        self.assertTrue(is_structure_marker("[Verse 2]"))
+        self.assertTrue(is_structure_marker("(Chorus)"))
+
+    def test_real_lyrics_not_marked(self):
+        for line in ("Who can surely know", "风将吹向何方", "(月亮代表我的心)",
+                     "唯有追赶风的方向 (Only By Chasing the)", "第1句：开始"):
+            self.assertFalse(is_structure_marker(line), f"{line!r} 不该判为段落标记")
+
+    def test_marker_does_not_become_translation(self):
+        """核心回归：标记行不能把中文歌词挤成译文。"""
+        lines = ["[Verse 1]", "风将吹向何方", "[Chorus]", "我追着光"]
+        pairs = pair_bilingual(lines)
+        self.assertEqual(pairs, [("[Verse 1]", ""), ("风将吹向何方", ""),
+                                 ("[Chorus]", ""), ("我追着光", "")])
+        self.assertTrue(all(sub == "" for _main, sub in pairs))
+
+    def test_marker_kept_while_bilingual_still_pairs(self):
+        """标记行夹在双语之间：标记行原样保留，双语照旧配对。"""
+        lines = ["[Verse 1]", *BILINGUAL_SAMPLE]
+        pairs = pair_bilingual(lines)
+        self.assertEqual(len(pairs), 5)
+        self.assertEqual(pairs[0], ("[Verse 1]", ""))
+        self.assertEqual(pairs[1], ("Who can surely know", "风将吹向何方"))
+
+    def test_markers_excluded_from_bilingual_detection(self):
+        """只有标记 + 中文时不该被判成双语。"""
+        lines = ["[Verse 1]", "风将吹向何方", "[Chorus]", "我追着光"]
+        self.assertFalse(is_bilingual_alternating(lines))
+
+    def test_marker_between_pair_does_not_break_pairing(self):
+        """标记行插在原文与译文之间也不打断配对（不吞行、不串句）。"""
+        lines = ["Who can surely know", "[breathe]", "风将吹向何方",
+                 "How the wind blows,", "谁也捉摸不透"]
+        pairs = pair_bilingual(lines)
+        self.assertIn(("Who can surely know", "风将吹向何方"), pairs)
+        self.assertIn(("[breathe]", ""), pairs)
+        self.assertIn(("How the wind blows,", "谁也捉摸不透"), pairs)
+        self.assertEqual(len(pairs), 3)
 
 
 # 双语歌词（原文行 / 译文行交替）—— 取自真实场景的形态：
