@@ -256,6 +256,8 @@ class LyricsPanel(QWidget):
     align_local_requested = Signal()
     # 右键「整体提前/延后 0.5s」：消掉对齐后的系统性偏移（v2.6.12）
     shift_lyrics_requested = Signal(int)
+    # 右键「逐句打轴」：播放中按空格给每一句手动盖时间戳（v2.7.4）
+    tap_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -299,9 +301,28 @@ class LyricsPanel(QWidget):
         self._progress_in_line = 0.0
         self._effect = "none"
         self._anim: QPropertyAnimation | None = None
+        # 打轴模式（v2.7.4）：此时不跟随播放位置滚动，高亮与滚动全由外部驱动
+        self._tapping = False
         self.set_empty()
 
     # ---------- 对外 ----------
+
+    def set_tapping(self, on: bool) -> None:
+        """进入/退出打轴模式。
+
+        打轴时**不能**让 `update_position` 带着走：用户在逐句盖时间戳，画面必须停在
+        待打的那一句上，否则一按空格高亮就被播放位置抢回去。
+        """
+        self._tapping = bool(on)
+
+    def highlight_index(self, index: int) -> None:
+        """把第 index 句设为当前句并滚到视口中间（打轴推进/回退用）。"""
+        if not (0 <= index < self.list.count()):
+            return
+        self._current_index = index
+        self._progress_in_line = 0.0
+        self.list.viewport().update()
+        self._smooth_scroll_to(self.list.item(index))
 
     def set_effect(self, effect: str) -> None:
         """切换歌词播放动效；非法值回落到 none。立即重绘。"""
@@ -367,6 +388,8 @@ class LyricsPanel(QWidget):
         self._refresh_visibility()
 
     def update_position(self, position_ms: int) -> None:
+        if self._tapping:
+            return                      # 打轴模式下位置驱动的高亮会跟用户抢焦点
         if self._mode != "synced" or not self._lines:
             return
         index = lyric_index_at(self._lines, position_ms)
@@ -477,6 +500,13 @@ class LyricsPanel(QWidget):
         align_local.setStatusTip("离线分析音频节奏，大致跟唱；可能整体差几秒")
         align_local.triggered.connect(self.align_local_requested.emit)
         menu.addAction(align_local)
+        # 右键「逐句打轴」：跟唱打拍子，每一句都卡在你按下的那一刻（v2.7.4）。
+        # 这是唯一能让时间「完全准确」的路子——本地对齐只是近似（误差天花板 ~6s）。
+        tap = QAction("逐句打轴（手动卡时间）", menu)
+        tap.setStatusTip("播放中按空格逐句盖时间戳，Backspace 回退，Esc 结束")
+        tap.triggered.connect(self.tap_requested.emit)
+        tap.setEnabled(self._mode in ("plain", "synced"))
+        menu.addAction(tap)
         menu.addSeparator()
         earlier = QAction("整体提前 0.5 秒", menu)
         earlier.setStatusTip("对齐后整条时间轴偏晚／偏早时微调（写回 .lrc）")

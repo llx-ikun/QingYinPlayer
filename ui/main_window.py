@@ -46,8 +46,8 @@ from PySide6.QtWidgets import (
 
 from app.covers import CoverProvider
 from app.filesize import file_size
-from app.lyrics import (LyricLine, lyrics_from_text, pair_bilingual, parse_plain,
-                        shift_lrc, strip_meta_lines)
+from app.lyrics import (LyricLine, format_lrc, is_structure_marker, lyrics_from_text,
+                        pair_bilingual, parse_plain, shift_lrc, strip_meta_lines)
 from app.lyrics_align import sidecar_lrc_path, write_sidecar_lrc
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
@@ -115,6 +115,12 @@ class MainWindow(QMainWindow):
         self._lyrics_workers: dict[str, MultiSourceWorker] = {}
         # 歌词本地近似对齐（v2.6.9）：纯文本 → LRC，同一首同时只跑一个
         self._align_workers: dict[str, LyricsLocalAlignWorker] = {}
+        # 逐句打轴（v2.7.4）：打轴中的行与已打时间戳；结束后要么写 .lrc、要么丢弃
+        self._tapping = False
+        self._tap_rows: list[tuple[str, str]] = []      # (原文, 译文)
+        self._tap_times: list[int] = []
+        self._tap_index = 0
+        self._tap_track: Track | None = None
         self._online_attempted: set[str] = set()
         # 当前是否处于「自定义背景」模式（面板半透明）；None = 无背景
         self._bg_scrim: float | None = None
@@ -288,6 +294,8 @@ class MainWindow(QMainWindow):
         # 歌词区右键「整体提前/延后 0.5 秒」（v2.6.12）：对齐后的系统性偏移微调
         self.now_playing.lyrics.shift_lyrics_requested.connect(
             self._shift_current_lyrics)
+        # 歌词区右键「逐句打轴」（v2.7.4）：播放中按空格逐句盖时间戳
+        self.now_playing.lyrics.tap_requested.connect(self._start_tap)
 
         # 视频页交互（v2.1）
         self.now_playing.back_to_list_requested.connect(lambda: self._show_page(0))
@@ -304,7 +312,10 @@ class MainWindow(QMainWindow):
         self.player.set_video_output(self.now_playing.video_host.sink)
 
         # 快捷键
-        QShortcut(QKeySequence(Qt.Key.Key_Space), self, self.player.toggle_play)
+        # 空格默认是播放/暂停；打轴模式（v2.7.4）要临时把它让给「打点」，
+        # 两个同键 QShortcut 同时启用会 ambiguous，所以必须成对开关。
+        self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self,
+                                         self.player.toggle_play)
         QShortcut(QKeySequence("Ctrl+Right"), self, self.player.next)
         QShortcut(QKeySequence("Ctrl+Left"), self, self.player.previous)
         QShortcut(QKeySequence(Qt.Key.Key_Right), self, lambda: self._seek_by(5000))
@@ -317,6 +328,12 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+F"), self, self.title_bar.focus_search)
         # 视频全屏：F11 切换，Esc 优先退出全屏
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_video_fullscreen)
+        # 打轴专用（平时禁用）
+        self._tap_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._tap_mark)
+        self._tap_undo_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self,
+                                            self._tap_undo)
+        self._tap_shortcut.setEnabled(False)
+        self._tap_undo_shortcut.setEnabled(False)
 
     def _restore_state(self) -> None:
         self.sidebar.set_nickname(self.store.settings.nickname)
@@ -431,13 +448,6 @@ class MainWindow(QMainWindow):
 
     def _toggle_video_fullscreen(self) -> None:
         self._set_video_fullscreen(not self._fullscreen.active)
-
-    def _on_escape(self) -> None:
-        """Esc 优先级：全屏 > 清空搜索。"""
-        if self._fullscreen.active:
-            self._exit_video_fullscreen()
-            return
-        self.title_bar.clear_search()
 
     # ---------- 播放相关 ----------
 
@@ -760,6 +770,158 @@ class MainWindow(QMainWindow):
         self.now_playing.lyrics.update_position(self.player.position_ms)
         word = "提前" if applied < 0 else "延后"
         self._toast(f"已整体{word} {abs(applied) / 1000:.1f} 秒，已写回 .lrc", 2500)
+
+    # ---------- 逐句打轴（v2.7.4） ----------
+    #
+    # 为什么要有这个：本地对齐只按「有声段 + 字数」估算，纯信号处理的天花板约 6 秒
+    # （见 docs/txt-lyrics-exact-match.md），再怎么调参数也到不了「逐句卡准」。要让
+    # 时间完全匹配，只能由人听着打点——这就是打轴模式的全部理由。
+    #
+    # 交互契约（三条键，够了）：
+    #   空格 = 给当前高亮的那一句盖上「此刻」的时间戳，然后前进
+    #   Backspace = 反悔一句（时间戳撤掉、高亮回退）
+    #   Esc = 结束（没打满会问一句，不保存半成品）
+    #
+    # 为什么不保存半成品：LRC 是整首歌的契约。只打前 30 句就写盘，后 7 句会永远
+    # 挤在最后一句的时间上（`lyric_index_at` 之后一直返回末句），用户看到的是
+    # 「后半首歌词卡住不动」，比没有时间轴更糟。
+
+    def _tap_progress(self) -> None:
+        total = len(self._tap_rows)
+        done = len(self._tap_times)
+        self.now_playing.set_source(
+            f"打轴 {done}/{total} · 空格打点 · Backspace 回退 · Esc 结束")
+
+    def _start_tap(self) -> None:
+        """歌词区右键「逐句打轴」：进入打轴模式。"""
+        if self._tapping:
+            return
+        track = self.player.current_track
+        if track is None:
+            self._toast("当前没有播放中的歌曲", 2000)
+            return
+        if track.is_video:
+            self._toast("视频不支持歌词打轴", 2500)
+            return
+        synced, plain, _source = self._lyrics_cache.get(track.id, ([], [], ""))
+        if synced:
+            rows = [(ln.text, ln.translation) for ln in synced
+                    if not is_structure_marker(ln.text)]
+        elif plain:
+            rows = [(main, sub) for main, sub in pair_bilingual(plain)
+                    if not is_structure_marker(main)]
+        else:
+            self._toast("这首歌还没有歌词，先导入或联网匹配", 3000)
+            return
+        if not rows:
+            self._toast("没有可打轴的歌词行", 2500)
+            return
+
+        self._tapping = True
+        self._tap_rows = rows
+        self._tap_times = []
+        self._tap_index = 0
+        self._tap_track = track
+
+        lyrics = self.now_playing.lyrics
+        lyrics.set_tapping(True)
+        # 进入时把已有时间轴清掉重打：预填旧值会让「已经在打第几句」变得难以判断，
+        # 而打轴本来就是「推翻近似值、重来一遍」的活儿。
+        lyrics.set_synced([LyricLine(-1, main, sub) for main, sub in rows])
+        lyrics.highlight_index(0)
+        self._tap_progress()
+
+        self._space_shortcut.setEnabled(False)
+        self._tap_shortcut.setEnabled(True)
+        self._tap_undo_shortcut.setEnabled(True)
+        self.player.resume()            # 打轴必须边听边打
+        self._toast("打轴开始：听到这一句开口时按空格", 3500)
+
+    def _tap_mark(self) -> None:
+        """空格：给当前句盖上此刻的播放位置，然后前进到下一句。"""
+        if not self._tapping:
+            return
+        pos = int(self.player.position_ms)
+        if self._tap_times and pos <= self._tap_times[-1]:
+            # 时间戳必须严格递增，否则 LRC 行序与「当前句」判定都会乱
+            pos = self._tap_times[-1] + 50
+        self._tap_times.append(pos)
+        self._tap_index += 1
+        if self._tap_index >= len(self._tap_rows):
+            self._end_tap(save=True)
+            return
+        self.now_playing.lyrics.highlight_index(self._tap_index)
+        self._tap_progress()
+
+    def _tap_undo(self) -> None:
+        """Backspace：撤掉上一句的时间戳，高亮退回去。"""
+        if not self._tapping or not self._tap_times:
+            return
+        self._tap_times.pop()
+        self._tap_index = max(0, self._tap_index - 1)
+        self.now_playing.lyrics.highlight_index(self._tap_index)
+        self._tap_progress()
+
+    def _on_escape(self) -> None:
+        """Esc 优先级：打轴 > 全屏 > 清空搜索。"""
+        if self._tapping:
+            self._ask_abort_tap()
+            return
+        if self._fullscreen.active:
+            self._exit_video_fullscreen()
+            return
+        self.title_bar.clear_search()
+
+    def _ask_abort_tap(self) -> None:
+        """打轴中途按 Esc：没打满就问一句，别让半成品静默写盘。"""
+        done, total = len(self._tap_times), len(self._tap_rows)
+        box = QMessageBox(self)
+        box.setWindowTitle("结束打轴")
+        box.setText(f"已经打了 {done}/{total} 句，还没打完。\n结束打轴并放弃这次结果？")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self._end_tap(save=False)
+
+    def _end_tap(self, save: bool) -> None:
+        """退出打轴模式；save=True 且打满才写同名 .lrc。"""
+        if not self._tapping:
+            return
+        track = self._tap_track
+        rows = list(self._tap_rows)
+        times = list(self._tap_times)
+        self._tapping = False
+        self._tap_rows = []
+        self._tap_times = []
+        self._tap_index = 0
+        self._tap_track = None
+
+        self._tap_shortcut.setEnabled(False)
+        self._tap_undo_shortcut.setEnabled(False)
+        self._space_shortcut.setEnabled(True)
+        self.now_playing.lyrics.set_tapping(False)
+
+        if track is None:
+            return
+        # 无论保存与否都重新解析一次：面板上此刻是「时间 -1」的打轴态占位行
+        self._lyrics_cache.pop(track.id, None)
+
+        if not save or len(times) != len(rows):
+            self._load_lyrics(track)
+            self.now_playing.set_source(None)
+            if not save:
+                self._toast("已退出打轴，未保存", 2500)
+            return
+
+        lines = [LyricLine(t, main, sub)
+                 for (main, sub), t in zip(rows, times, strict=True)]
+        if write_sidecar_lrc(track.path, format_lrc(lines)) is None:
+            self._load_lyrics(track)
+            self._toast("无法写入歌曲目录（可能只读），打轴结果未保存", 4500)
+            return
+        self._load_lyrics(track)
+        self.now_playing.lyrics.update_position(self.player.position_ms)
+        self._toast(f"逐句时间轴已保存（{len(lines)} 句）→ 同名 .lrc", 3500)
 
     def _align_lyrics_local_for_current(self) -> None:
         """歌词区右键「转成 .lrc 文件（本地对齐）」：离线把纯文本转成带时间轴的 LRC。"""

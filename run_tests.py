@@ -52,6 +52,8 @@ MODULES = [
     # v2.2 联网补歌词接线：TestE2EV2 已 21 项，再加 5 项会突破 QMediaPlayer
     # 累积阈值（offscreen 下 C++ 死锁），必须单独成进程。
     "tests.test_e2e.TestE2ELyricsOnline",
+    # v2.7.4 逐句打轴：单独成进程，理由同上（每建一次 MainWindow 多一个 QMediaPlayer）
+    "tests.test_e2e.TestE2ELyricsTap",
     # v2.2 外观自定义（强调色 / 字号）：同样单独成进程
     "tests.test_e2e.TestE2EAppearance",
     # v2.1 视频：后端纯逻辑单测

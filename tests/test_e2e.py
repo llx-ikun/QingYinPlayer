@@ -1361,5 +1361,179 @@ class TestE2EAppearance(unittest.TestCase):
         dialog.deleteLater()
 
 
+class TestE2ELyricsTap(unittest.TestCase):
+    """逐句打轴（v2.7.4）：空格打点 / Backspace 回退 / 打满才写 .lrc。
+
+    为什么单独成进程：每建一次 MainWindow 就多一个 QMediaPlayer，同一进程累积到
+    ~15-20 个后 offscreen 下 Qt 多媒体后端会 C++ 层死锁（见 TestE2ELyricsOnline 注释）。
+    """
+
+    def setUp(self):
+        _fresh_appdata()
+        from ui.main_window import MainWindow
+        self.window = MainWindow()
+        self.window.show()
+        self.store = self.window.store
+
+    def tearDown(self):
+        self.window.player.stop()
+        self.window.close()
+
+    def _track(self, name="tap-song.mp3"):
+        from app.models import Track, make_track_id
+
+        tmp = tempfile.mkdtemp(prefix="qy_tap_")
+        _tmp_dirs.append(tmp)
+        path = os.path.join(tmp, name)
+        return Track(id=make_track_id(path), path=path, title="打轴测试",
+                     artist="测试", duration_ms=180_000)
+
+    def _arm(self, plain=None, synced=None):
+        """把曲目设为「正在播放」并塞入歌词缓存，返回 (track, 行数)。"""
+        track = self._track()
+        self.window.player._current = track
+        if synced is not None:
+            self.window._lyrics_cache[track.id] = (synced, [], "本地歌词")
+            count = len(synced)
+        else:
+            lines = plain or ["第一句", "第二句", "第三句"]
+            self.window._lyrics_cache[track.id] = ([], lines, "本地歌词")
+            count = len(lines)
+        return track, count
+
+    def _enter(self):
+        from unittest import mock
+
+        with mock.patch.object(type(self.window.player), "position_ms",
+                               new_callable=mock.PropertyMock, return_value=1000):
+            self.window._start_tap()
+        return self.window
+
+    def test_enter_tap_mode_takes_over_space(self):
+        """进入打轴：空格从「播放/暂停」让给「打点」，面板停止跟随播放位置。"""
+        self._arm()
+        self._enter()
+        w = self.window
+        self.assertTrue(w._tapping)
+        self.assertFalse(w._space_shortcut.isEnabled(), "空格应让给打点")
+        self.assertTrue(w._tap_shortcut.isEnabled())
+        self.assertTrue(w._tap_undo_shortcut.isEnabled())
+        self.assertTrue(w.now_playing.lyrics._tapping, "面板应停止跟随播放位置")
+        self.assertIn("打轴 0/3", w.now_playing.lyrics.source_label.text())
+        self.assertEqual(w.now_playing.lyrics._current_index, 0)
+
+    def test_tap_marks_advance_and_undo_rolls_back(self):
+        from unittest import mock
+
+        self._arm()
+        self._enter()
+        w = self.window
+        lyrics = w.now_playing.lyrics
+        with mock.patch.object(type(w.player), "position_ms",
+                               new_callable=mock.PropertyMock, return_value=1500):
+            w._tap_mark()
+        self.assertEqual(w._tap_times, [1500])
+        self.assertEqual(lyrics._current_index, 1)
+        self.assertEqual(len(w._tap_times), 1)
+
+        w._tap_undo()
+        self.assertEqual(w._tap_times, [])
+        self.assertEqual(lyrics._current_index, 0,
+                         "回退后高亮要退回上一句")
+
+    def test_times_stay_strictly_increasing(self):
+        """沙箱里 position 不推进：连按两次空格也不能出现重复时间戳。"""
+        from unittest import mock
+
+        self._arm()
+        self._enter()
+        w = self.window
+        with mock.patch.object(type(w.player), "position_ms",
+                               new_callable=mock.PropertyMock, return_value=2000):
+            w._tap_mark()
+            w._tap_mark()
+        self.assertEqual(w._tap_times[0], 2000)
+        self.assertGreater(w._tap_times[1], w._tap_times[0],
+                           "时间戳必须严格递增，否则行序与当前句判定会乱")
+
+    def test_full_marks_write_sidecar_lrc_and_restore(self):
+        """打满最后一句自动结束并写同名 .lrc；快捷键与面板状态要还原。"""
+        from unittest import mock
+
+        from app.lyrics import parse_lrc
+
+        track, count = self._arm()
+        self._enter()
+        w = self.window
+        positions = [1000 + 2000 * i for i in range(count)]
+        for pos in positions:
+            with mock.patch.object(type(w.player), "position_ms",
+                                   new_callable=mock.PropertyMock, return_value=pos):
+                w._tap_mark()
+
+        self.assertFalse(w._tapping, "打满最后一句应自动结束")
+        self.assertTrue(w._space_shortcut.isEnabled(), "空格要还给播放/暂停")
+        self.assertFalse(w._tap_shortcut.isEnabled())
+
+        sidecar = os.path.splitext(track.path)[0] + ".lrc"
+        self.assertTrue(os.path.isfile(sidecar), "应写出同名 .lrc")
+        with open(sidecar, encoding="utf-8") as f:
+            parsed = parse_lrc(f.read())
+        self.assertEqual([ln.text for ln in parsed], ["第一句", "第二句", "第三句"])
+        self.assertEqual([ln.time_ms for ln in parsed], positions)
+        # 缓存被清掉重解析，面板回到同步模式（打轴态的 -1 占位行必须换掉）
+        synced, _plain, _src = w._lyrics_cache[track.id]
+        self.assertEqual(len(synced), count)
+        self.assertTrue(all(ln.time_ms >= 0 for ln in synced))
+
+    def test_abort_keeps_no_file_and_restores(self):
+        from unittest import mock
+
+        track, _count = self._arm()
+        self._enter()
+        w = self.window
+        with mock.patch.object(type(w.player), "position_ms",
+                               new_callable=mock.PropertyMock, return_value=1000):
+            w._tap_mark()
+        w._end_tap(save=False)
+        self.assertFalse(w._tapping)
+        self.assertTrue(w._space_shortcut.isEnabled())
+        self.assertFalse(os.path.isfile(os.path.splitext(track.path)[0] + ".lrc"),
+                         "放弃时不该留下 .lrc")
+
+    def test_bilingual_tap_uses_one_stamp_per_sentence(self):
+        """双语一句两行：一个时间戳管两句，LRC 写成同时间戳两行。"""
+        from unittest import mock
+
+        from app.lyrics import lyrics_from_text, parse_lrc
+
+        plain = ["Who can surely know", "风将吹向何方",
+                 "How the wind blows,", "谁也捉摸不透"]
+        track, _ = self._arm(plain=plain)
+        self._enter()
+        w = self.window
+        self.assertEqual(w._tap_rows[0], ("Who can surely know", "风将吹向何方"))
+        for pos in (1000, 3000):
+            with mock.patch.object(type(w.player), "position_ms",
+                                   new_callable=mock.PropertyMock, return_value=pos):
+                w._tap_mark()
+        sidecar = os.path.splitext(track.path)[0] + ".lrc"
+        with open(sidecar, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(len(parse_lrc(text)), 4, "双语两句各写一行原文+译文")
+        # 合并成「一句两行」发生在解析层，用 lyrics_from_text 才看得到译文
+        synced, _ = lyrics_from_text(text)
+        self.assertEqual(len(synced), 2)
+        self.assertEqual(synced[0].translation, "风将吹向何方")
+        self.assertEqual([ln.time_ms for ln in synced], [1000, 3000])
+
+    def test_marker_lines_are_skipped(self):
+        """段落标记行不参与打轴（它们不是唱词）。"""
+        self._arm(plain=["[Verse 1]", "第一句", "我追着光"])
+        self._enter()
+        self.assertEqual([main for main, _ in self.window._tap_rows],
+                         ["第一句", "我追着光"])
+
+
 if __name__ == "__main__":
     unittest.main()
