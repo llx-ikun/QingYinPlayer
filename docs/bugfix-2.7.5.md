@@ -1,4 +1,4 @@
-# 全面体检与 BUG 修复（v2.7.5）
+# 全面体检与 BUG 修复（v2.7.5 → v2.7.6）
 
 > 起因：用户提出「优化软件 BUG」，未指定具体现象，选择「全部检查」。
 > 结论：**代码在正常数据下健康（29/29 回归全绿），但数据层存在 2 个可实证的
@@ -130,3 +130,80 @@ except Exception:
 - 网络请求不可中途取消（见隐患 4 的能力边界）
 - `data.json` 无版本迁移机制：目前只靠逐字段容错兜底，没有 `version` 字段驱动的
   升级脚本。字段语义发生不兼容变化时仍需专门处理。
+
+---
+
+# 追加：界面版本号骗了所有人（v2.7.6）
+
+> 这个 BUG 不是体检发现的，是**体检之后被现场打脸**发现的 —— 属于必须记下来的那种。
+
+## 事故经过
+
+用户发来一张运行截图，右下角写着 `v2.6.12 · 本地音乐与视频`。我据此判断
+「用户在跑旧版，所以前面几轮的修复都没生效」，还让他去换 exe。
+
+结果查了全盘只有 v2.7.5 的产物，再翻 `logs/app.log`：
+
+```
+[10:30:47] 轻音播放器 v2.7.5 启动，数据目录 ...
+```
+
+**他跑的就是 v2.7.5。** 界面显示 2.6.12 是因为版本号是写死的字符串：
+
+```python
+# ui/main_window.py:225
+self.version_label = QLabel("v2.6.12 · 本地音乐与视频", self._root)
+# ui/settings_dialog.py:401
+about = QLabel("轻音播放器 v2.2 · 本地音乐与视频，歌词可联网补全")
+```
+
+从写下这两行的那天起，它们就没再跟随过 `APP_VERSION`。`main.py` 里的版本号
+一路从 2.6.12 升到 2.7.5，界面上一个字没变。
+
+## 为什么这不只是「显示不好看」
+
+界面在**撒谎**，而版本号是所有排查的第一个锚点。它直接导致：
+
+1. 用户以为更新没生效（他自己的判断也是错的，但他无从知道）
+2. 开发者（我）基于界面下结论，方向完全跑偏，白查一轮
+3. 「关于」里还写着 `v2.2`，落后得更多
+
+## 修复：收敛到单一真相源
+
+新增 `app/version.py`：
+
+```python
+APP_NAME = "轻音播放器"
+APP_VERSION = "2.7.6"
+APP_TAGLINE = "本地音乐与视频"
+
+def version_text(tagline: str | None = None) -> str:
+    tail = APP_TAGLINE if tagline is None else tagline
+    return f"v{APP_VERSION} · {tail}" if tail else f"v{APP_VERSION}"
+```
+
+- `main.py` 改为 `from app.version import APP_NAME, APP_VERSION`，不再自己定义
+- `ui/main_window.py` 右下角用 `version_text()`
+- `ui/settings_dialog.py`「关于」用 `f"{APP_NAME} {version_text()}，歌词可联网补全"`
+
+`version_text` 的 `tagline` 默认取 `None` 而不是 `""`：空串表示「只要版本号不要
+副标题」，`None` 才用默认副标题。用 `or` 会把「显式传空」也吃成默认，语义含糊。
+
+## 防回归（4 条，全部通过）
+
+| 用例 | 锁死什么 |
+|---|---|
+| `test_version_text_contains_current_version` | 展示串含当前版本 |
+| `test_version_text_accepts_custom_tagline` | `None` / 空串 / 自定义三种语义 |
+| `test_no_hardcoded_version_literal_in_source` | **AST 扫描** `app/` 与 `ui/`，凡是以 `v数字.数字` 开头的字符串常量一律报错（注释不算常量，历史标注不受影响） |
+| `test_main_takes_version_from_app_version` | `main.py` 必须转发，不许自己定义 `APP_VERSION` |
+
+外加 E2E 一条：`test_version_label_follows_app_version` —— 真实建窗后断言右下角
+文本等于 `version_text()`，且不含 `v2.6.12`。
+
+## 教训
+
+**「状态显示」和「状态本身」是两套东西，必须由同一个来源生成。** 凡是界面上要
+显示版本、路径、数量、统计这类事实的地方，都得问一句：「这个数字是从哪儿来的？
+会不会有一天跟真相分叉？」第三个测试用 AST 扫描而不是正则扫全文，就是为了让
+这条规则能自动执行，而不是靠下次再被人发现。

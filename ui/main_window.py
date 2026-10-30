@@ -62,6 +62,7 @@ from app.player import PlaybackController
 from app.scanner import ScannerWorker
 from app.sorting import default_sort_for, preset_by_id, sort_tracks
 from app.store import LibraryStore
+from app.version import version_text
 from ui import theme as ui_theme
 from ui.background import BackgroundLayer
 from ui.dialogs import ImportProgressDialog
@@ -222,7 +223,9 @@ class MainWindow(QMainWindow):
         self.float_bar.raise_()
 
         # 右下角版本号（原来在侧边栏底部，挪到播放栏右下角）
-        self.version_label = QLabel("v2.6.12 · 本地音乐与视频", self._root)
+        # v2.7.6：改用 app.version 动态生成。此前这里是写死的 "v2.6.12 · ..."，
+        # 从 v2.6.12 之后就没再更新过，界面显示的版本与真实版本长期不符。
+        self.version_label = QLabel(version_text(), self._root)
         self.version_label.setObjectName("VersionLabel")
         self.version_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.version_label.raise_()

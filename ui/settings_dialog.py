@@ -37,6 +37,7 @@ from app import paths as app_paths
 from app.library import import_background
 from app.models import BackgroundConfig, LYRICS_EFFECTS
 from app.paths import bgs_dir
+from app.version import APP_NAME, version_text
 from ui import theme as ui_theme
 from ui.dialogs import StorageMoveDialog
 from ui.widgets import ChevronComboBox
@@ -398,7 +399,8 @@ class SettingsDialog(QDialog):
         stats_label.setWordWrap(True)
         root.addWidget(stats_label)
 
-        about = QLabel("轻音播放器 v2.2 · 本地音乐与视频，歌词可联网补全")
+        # v2.7.6：原来写死 "轻音播放器 v2.2 · ..."，早就对不上了
+        about = QLabel(f"{APP_NAME} {version_text()}，歌词可联网补全")
         about.setObjectName("Dim")
         root.addWidget(about)
         root.addStretch(1)

@@ -1168,6 +1168,18 @@ class TestE2EAppearance(unittest.TestCase):
         self.window._start_import([MUSIC_DIR])
         self.assertTrue(_spin(lambda: self.window._scanner is None))
 
+    def test_version_label_follows_app_version(self):
+        """v2.7.6：右下角版本号必须跟随 app.version，不许再是写死的字符串。
+
+        事故背景：这里曾经硬编码 "v2.6.12 · 本地音乐与视频"，而代码早已走到
+        v2.7.5 —— 界面显示的版本与实际版本长期不符，直接把排查方向带沟里。
+        """
+        from app.version import APP_VERSION, version_text
+
+        self.assertEqual(self.window.version_label.text(), version_text())
+        self.assertIn(APP_VERSION, self.window.version_label.text())
+        self.assertNotIn("v2.6.12", self.window.version_label.text())
+
     def test_accent_applies_and_persists(self):
         from PySide6.QtWidgets import QApplication
         from app.paths import data_file

@@ -10,8 +10,10 @@ import sys
 
 from PySide6.QtGui import QIcon
 
-APP_NAME = "轻音播放器"
-APP_VERSION = "2.7.5"
+# v2.7.6：版本号收敛到 app/version.py，界面与「关于」都从那里取。
+# 原来 APP_VERSION 只在本文件定义，而 ui/main_window.py 里另写死了一个
+# "v2.6.12" —— 两个数字各说各话，界面显示永远是旧的。
+from app.version import APP_NAME, APP_VERSION
 
 
 def _resolve_app_icon() -> str | None:
