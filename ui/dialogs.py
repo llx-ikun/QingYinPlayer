@@ -245,11 +245,24 @@ class AiBatchAlignDialog(QDialog):
     逐首而不是并行，理由是实测：whisper-base 单进程推理已能吃满几核，并行只会互相
     抢 CPU 且内存翻倍（模型常驻约 500MB）；串行对用户更友好（进度可预测）。
 
-    关闭行为：正在跑的时候不允许关（`closeEvent` 忽略），否则就是「带活线程析构窗口」
-    那类崩溃的老坑。要停请点「停止」，它会跑完当前这首就结束，不再开始下一首。
+    关闭行为（v3.0.2 重写）：**关闭永远有出路**。
+
+    v3.0.0 的写法是「跑着就 ignore 掉关闭，并提示先点停止」，但「停止」点完立刻就
+    灰了、worker 又不会真的中断 —— 用户被锁在一个既关不掉、也没按钮可点的窗口里。
+    现在的分工是：
+
+    - 点「停止」= 请求中止 + 留在窗口看最后结果（按钮随即置灰，避免重复点）；
+    - 点「关闭」或窗口 X = 请求中止 + **中止完成后自动关闭**；
+    - 只有一种情况会 ignore 关闭事件：还有活线程在跑（否则就是带活线程析构那个崩溃
+      老坑），但此时一定会同时发出中止请求，所以最多等一个检查点。
     """
 
     finished_summary = Signal(int, int)      # (成功数, 失败数)
+
+    # 中止文案要写真实预期：实测 whisper 出第一个识别段之前已经把整曲编码完了，
+    # 那一段是 C++ 一次性调用、打不断，所以「立刻停」做不到，别骗用户。
+    _ABORTING_TEXT = ("正在中止：等手上这一段算完（通常十几秒，慢的时候一两分钟），"
+                      "完成后窗口会自动关闭…")
 
     def __init__(self, items: list[tuple[str, str, str]], resolver, model_name: str,
                  parent=None):
@@ -263,9 +276,11 @@ class AiBatchAlignDialog(QDialog):
         self._model = model_name
         self._index = 0
         self._stop = False
+        self._close_when_done = False
         self._ok = 0
         self._failed: list[tuple[str, str]] = []
         self._worker = None
+        self._retired: list = []      # 已发出终态信号、但线程可能还没退干净的 worker
 
         self.setWindowTitle("批量 AI 对齐歌词")
         self.setMinimumWidth(460)
@@ -285,6 +300,8 @@ class AiBatchAlignDialog(QDialog):
         self.bar = QProgressBar()
         self.bar.setRange(0, max(1, len(self._queue)))
         self.bar.setValue(0)
+        # 这根条数是「第几首」，不是当前这首的进度；显示成 0% 会让人以为卡死了
+        self.bar.setFormat("%v / %m 首")
         root.addWidget(self.bar)
 
         self.list = QListWidget()
@@ -300,7 +317,7 @@ class AiBatchAlignDialog(QDialog):
         buttons.addWidget(self.stop_btn)
         self.close_btn = QPushButton("关闭")
         self.close_btn.setObjectName("Primary")
-        self.close_btn.clicked.connect(self.close)
+        self.close_btn.clicked.connect(self._on_close_clicked)
         buttons.addWidget(self.close_btn)
         root.addLayout(buttons)
 
@@ -316,25 +333,27 @@ class AiBatchAlignDialog(QDialog):
             item.setText(text)
 
     def _start_next(self) -> None:
-        if self._stop or self._index >= len(self._queue):
-            self._finish()
-            return
-        track_id, name, path = self._queue[self._index]
-        self.bar.setValue(self._index)
-        self._set_row(self._index, f"进行中 · {name}")
-        self.title_label.setText(f"第 {self._index + 1} / {len(self._queue)} 首：{name}")
+        # 「没有同步歌词」用循环跳过而不是递归：全库批量时可能有几千首没歌词，
+        # 递归会把栈直接打爆（RecursionError），对话框当场死掉。
+        while True:
+            if self._stop or self._index >= len(self._queue):
+                self._finish()
+                return
+            track_id, name, path = self._queue[self._index]
+            self.bar.setValue(self._index)
+            self._set_row(self._index, f"进行中 · {name}")
+            self.title_label.setText(f"第 {self._index + 1} / {len(self._queue)} 首：{name}")
 
-        lines = []
-        try:
-            lines = self._resolver(track_id) or []
-        except Exception:  # noqa: BLE001 - 单首取歌词失败不该中断整批
             lines = []
-        if not lines:
+            try:
+                lines = self._resolver(track_id) or []
+            except Exception:  # noqa: BLE001 - 单首取歌词失败不该中断整批
+                lines = []
+            if lines:
+                break
             self._failed.append((name, "没有同步歌词，跳过"))
             self._set_row(self._index, f"跳过 · {name}（没有同步歌词）")
             self._index += 1
-            self._start_next()
-            return
 
         worker = self._worker_cls(track_id, path, lines, self._model, parent=self)
         worker.progress.connect(self._on_progress)
@@ -344,6 +363,9 @@ class AiBatchAlignDialog(QDialog):
         worker.start()
 
     def _on_progress(self, _track_id: str, percent: int, stage: str) -> None:
+        # 中止期间进度还在刷，别把「正在中止」的说明冲掉，否则用户又不知道发生了什么
+        if self._stop or self._close_when_done:
+            return
         self.stage_label.setText(f"{stage}… {percent}%")
 
     def _on_done(self, _track_id: str, outcome) -> None:
@@ -354,19 +376,59 @@ class AiBatchAlignDialog(QDialog):
         self._start_next()
 
     def _on_failed(self, _track_id: str, message: str) -> None:
+        from app.lyrics_asr import describe_error
+
         _tid, name, _path = self._queue[self._index]
-        self._failed.append((name, message))
-        self._set_row(self._index, f"失败 · {name}（{message}）")
+        if message == describe_error("cancelled"):
+            # 用户主动停的，不算失败；否则汇总里会出现「失败 1 首：已取消」这种误导
+            self._set_row(self._index, f"已停止 · {name}")
+        else:
+            self._failed.append((name, message))
+            self._set_row(self._index, f"失败 · {name}（{message}）")
         self._index += 1
         self._start_next()
 
     def _on_stop(self) -> None:
+        """停止 = 请求中止 + 留在窗口看最后结果。"""
+        if self._stop:
+            return
         self._stop = True
         self.stop_btn.setEnabled(False)
-        self.stage_label.setText("正在停止：跑完当前这首就结束…")
+        if self._request_abort():
+            self.stage_label.setText(self._ABORTING_TEXT)
+        else:
+            self.stage_label.setText("已停止")
+
+    def _request_abort(self) -> bool:
+        """给 worker 发中断请求。返回是否真有线程在跑。
+
+        这一步是 v3.0.0 缺失的关键：`_on_stop` 原来只翻了个 `_stop` 标志位，
+        worker 该跑多久还跑多久，用户以为「点了没反应」。
+        """
+        worker = self._worker
+        if worker is None or not worker.isRunning():
+            return False
+        worker.requestInterruption()
+        return True
+
+    def _on_close_clicked(self) -> None:
+        """关闭 = 请求中止 + 中止完成后自动关。永远给用户留一条出路。
+
+        `self._stop = True` 这一行是必须的：少了它，当前这首中止完 `_on_failed`
+        还会照常调 `_start_next` 去跑下一首，队列永远走不完、窗口永远关不掉。
+        这个 bug 只有真机跑才能发现 —— 假 worker 是瞬时返回的，看不出来。
+        """
+        if self._request_abort():
+            self._stop = True
+            self._close_when_done = True
+            self.stop_btn.setEnabled(False)
+            self.close_btn.setEnabled(False)
+            self.stage_label.setText(self._ABORTING_TEXT)
+            return
+        self.close()
 
     def _finish(self) -> None:
-        self._worker = None
+        self._retire()
         self.bar.setValue(len(self._queue))
         self.stop_btn.setEnabled(False)
         total = len(self._queue)
@@ -374,17 +436,67 @@ class AiBatchAlignDialog(QDialog):
         if self._failed:
             text += f"，失败 {len(self._failed)} 首"
         self.title_label.setText(text)
-        self.stage_label.setText("可以关闭窗口了")
+        self.stage_label.setText(
+            "可以关闭窗口了" if not self._alive_workers() else self._ABORTING_TEXT)
         self.finished_summary.emit(self._ok, len(self._failed))
+        self._maybe_close()
+
+    # ---------- 线程回收 ----------
+
+    def _retire(self) -> None:
+        """把当前 worker 退场：请求中断，然后交给 `finished` 回收。
+
+        **不要在这里 `wait()` 等**：实测中止本身要等 60~90 秒（whisper 的第一段
+        之前已经把整曲编码完了，那一段是 C++ 一次性调用，打不断）。在 UI 线程里
+        wait 只会白卡住界面，而且卡 3 秒超时后 worker 还在跑，`close()` 又会被
+        `closeEvent` 挡回来 —— 反而把死路推迟了 3 秒。
+
+        所以：这里只 `wait(0)` 回收已经退出的，其余等 `finished`（跨线程自动排队到
+        主线程）来收，收完由 `_on_worker_finished` 决定要不要真正关闭窗口。
+        """
+        worker, self._worker = self._worker, None
+        if worker is None:
+            return
+        worker.requestInterruption()
+        if worker.wait(0):
+            return
+        self._retired.append(worker)
+        worker.finished.connect(self._on_worker_finished)
+
+    def _on_worker_finished(self) -> None:
+        """worker 真退出后在主线程收到：清理 + 该关就关。"""
+        self._retired = [w for w in self._retired if w.isRunning()]
+        self._maybe_close()
+
+    def _alive_workers(self) -> list:
+        workers = list(self._retired)
+        if self._worker is not None:
+            workers.append(self._worker)
+        return [w for w in workers if w.isRunning()]
+
+    def _maybe_close(self) -> None:
+        """用户点过关、且已经没有任何活线程 → 真正关闭。"""
+        if self._close_when_done and not self._alive_workers():
+            self._close_when_done = False
+            self.close()
 
     # ---------- 关闭 ----------
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        """跑着的时候不许关：带着活线程析构这个对话框就是崩溃。"""
-        worker = self._worker
-        if worker is not None and worker.isRunning():
+        """还有活线程时挡一下（带活线程析构会崩），但**同时发中止请求**。
+
+        v3.0.0 这里只 ignore + 提示「先点停止」，而停止按钮那时已经灰了 ——
+        提示的是一条做不到的指令，窗口就锁死了。
+        """
+        if self._alive_workers():
             event.ignore()
-            self.stage_label.setText("正在处理，先点「停止」再关闭")
+            self._stop = True
+            self._close_when_done = True
+            for worker in self._alive_workers():
+                worker.requestInterruption()
+            self.stop_btn.setEnabled(False)
+            self.close_btn.setEnabled(False)
+            self.stage_label.setText(self._ABORTING_TEXT)
             return
         super().closeEvent(event)
 

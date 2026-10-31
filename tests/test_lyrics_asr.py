@@ -426,7 +426,7 @@ class TestEnsureModel(unittest.TestCase):
 
     def test_downloads_all_files_with_progress(self):
         seen = []
-        la.download_file = lambda url, dest, cb=None: ("", "")
+        la.download_file = lambda url, dest, cb=None, stop=None: ("", "")
         _target, code, _detail = la.ensure_model("tiny", lambda s, f: seen.append(f))
         # download_file 是假的，文件不会真的落地 → 最后一步要能识别出来
         self.assertEqual(code, "download_failed")
@@ -434,7 +434,8 @@ class TestEnsureModel(unittest.TestCase):
         self.assertEqual(seen[-1], 1.0)
 
     def test_failure_carries_file_name_and_reason(self):
-        la.download_file = lambda url, dest, cb=None: ("download_failed", "HTTP 503 Busy")
+        la.download_file = lambda url, dest, cb=None, stop=None: (
+            "download_failed", "HTTP 503 Busy")
         _target, code, detail = la.ensure_model("tiny")
         self.assertEqual(code, "download_failed")
         self.assertIn("HTTP 503", detail)
@@ -443,7 +444,7 @@ class TestEnsureModel(unittest.TestCase):
     def test_url_uses_repo_and_endpoint(self):
         seen = []
 
-        def _fake(url, dest, cb=None):
+        def _fake(url, dest, cb=None, stop=None):
             seen.append(url)
             return ("", "")
 
@@ -482,6 +483,114 @@ class TestEnsureModel(unittest.TestCase):
             os.makedirs = real_makedirs
         self.assertEqual(code, "disk_failed")
         self.assertIn("拒绝访问", detail)
+
+
+class TestInterruption(unittest.TestCase):
+    """「停止」要能在中途生效（v3.0.2）。
+
+    原来是只翻一个标志位、worker 照跑不误，用户点了停止等几分钟没反应，窗口又关不掉
+    —— 就是「批量对齐关不了」那个 bug。这里钉住三处：下载、识别、worker 的传导。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="qy_int_")
+        self._real_urlopen = la.urllib.request.urlopen
+        self._real_dir_for = la.model_dir_for
+
+    def tearDown(self):
+        la.urllib.request.urlopen = self._real_urlopen
+        la.model_dir_for = self._real_dir_for
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_download_stops_at_first_chunk_checkpoint(self):
+        server = _FakeServer(_FakeResponse(b"abcdefgh"))
+        la.urllib.request.urlopen = server
+        dest = os.path.join(self.tmp, "m.bin")
+        code, detail = la.download_file("http://x/m.bin", dest, None, lambda: True)
+        self.assertEqual(code, "cancelled", "取消要和失败分开，否则批量里会记成失败")
+        self.assertEqual(detail, la.describe_error("cancelled"))
+        self.assertEqual(len(server.requests), 1, "取消了就别重试")
+        self.assertFalse(os.path.exists(dest))
+
+    def test_ensure_model_cancelled_before_any_download(self):
+        la.model_dir_for = lambda name: os.path.join(self.tmp, name)
+        la.download_file = lambda *a, **k: ("", "")   # 不该被调用
+        try:
+            _target, code, _detail = la.ensure_model("tiny", None, lambda: True)
+        finally:
+            del la.download_file
+        self.assertEqual(code, "cancelled")
+
+    def test_worker_hands_probe_to_align_track(self):
+        """worker 必须把 `isInterruptionRequested` 作为谓词传进去，而不是只传个布尔。"""
+        from unittest import mock
+
+        from app.lyrics import LyricLine
+
+        seen = {}
+
+        def _fake_align(path, lines, model_dir, language="zh", progress=None,
+                        interrupted=None):
+            seen["probe"] = interrupted
+            return la.AlignOutcome(lines=[], matched_ratio=1.0)
+
+        with mock.patch.object(la, "ensure_model", lambda *a, **k: ("/model", "", "")), \
+                mock.patch.object(la, "align_track", _fake_align), \
+                mock.patch.object(la, "save_from_lines", lambda *a, **k: None):
+            worker = la.LyricsAsrWorker("t1", "/a.mp3", [LyricLine(0, "一句")], "base")
+            finished = []
+            worker.done.connect(lambda tid, _out: finished.append(tid))
+            worker.run()
+
+        self.assertEqual(finished, ["t1"])
+        probe = seen["probe"]
+        self.assertTrue(callable(probe), "要传谓词，让推理循环自己问")
+        # 必须是 worker 自己的 `isInterruptionRequested`：换成别的「总是 False」的
+        # lambda 也能让测试过，但停止就废了。注：QThread 未 start() 时
+        # requestInterruption() 会被 Qt 忽略，所以这里断言身份而不是实测翻转。
+        self.assertIs(getattr(probe, "__self__", None), worker)
+        self.assertEqual(getattr(probe, "__name__", ""), "isInterruptionRequested")
+        self.assertFalse(probe())
+
+    def test_progress_signal_carries_track_id(self):
+        """`progress` 必须是 `(track_id, percent, stage)` 三个参数（v3.0.2）。
+
+        v3.0.0 声明成 `Signal(int, str)`，而主窗口和批量对话框的槽都按三个参数写，
+        于是每次推送都抛 TypeError；windowed 产物 stderr 为 None，异常完全不可见，
+        表现就是「进度条一直 0%、没有阶段文字」。
+        """
+        from unittest import mock
+
+        from app.lyrics import LyricLine
+
+        seen = []
+
+        def _fake_ensure(name, progress=None, interrupted=None):
+            progress("download", 0.5)
+            return ("/model", "cancelled", "")
+
+        with mock.patch.object(la, "ensure_model", _fake_ensure):
+            worker = la.LyricsAsrWorker("t1", "/a.mp3", [LyricLine(0, "一句")], "base")
+            worker.progress.connect(lambda tid, pct, stage: seen.append((tid, pct, stage)))
+            worker.run()
+        self.assertEqual(seen, [("t1", 50, "下载 AI 模型")],
+                         "槽按 (track_id, percent, stage) 收，签名必须对上")
+
+    def test_align_track_does_not_duplicate_error_text(self):
+        """`detail` 里别再塞一遍中文提示，否则界面会显示「xxx（xxx）」。"""
+        from unittest import mock
+
+        from app.lyrics import LyricLine
+
+        audio = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "fixtures", "_generated", "我的音乐", "晴天 - 周杰伦.mp3")
+        if not os.path.isfile(audio):
+            self.skipTest("夹具音频缺失")
+        with mock.patch.object(la, "transcribe",
+                               lambda *a, **k: la.AsrOutcome(error="no_speech")):
+            outcome = la.align_track(audio, [LyricLine(0, "一句")], "/model")
+        self.assertEqual(outcome.error, "no_speech")
+        self.assertEqual(outcome.detail, "")
 
 
 class TestAlignTrackDegrade(unittest.TestCase):

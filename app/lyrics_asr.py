@@ -231,6 +231,12 @@ class _DiskError(_DownloadError):
     code = "disk_failed"
 
 
+class _Cancelled(_DownloadError):
+    """用户主动中止。和「失败」要分开：批量对齐里中断不该记成失败。"""
+
+    code = "cancelled"
+
+
 def _brief(exc: BaseException) -> str:
     """异常 → 一行人能读的说明。空 message 的异常（如 URLError(None)）只留类型名。"""
     text = str(exc).strip()
@@ -245,7 +251,7 @@ def _open_part(path: str, append: bool):
         raise _DiskError(_brief(exc)) from exc
 
 
-def _fetch_once(url: str, tmp: str, on_progress=None) -> None:
+def _fetch_once(url: str, tmp: str, on_progress=None, interrupted=None) -> None:
     """一次下载尝试：支持 Range 续传，写 `.part` 而不是目标文件。
 
     **为什么不用 huggingface_hub.snapshot_download**：v3.0.0 出货后用户在真实环境
@@ -274,6 +280,9 @@ def _fetch_once(url: str, tmp: str, on_progress=None) -> None:
         total = written + length if length > 0 else 0
         with _open_part(tmp, resuming) as handle:
             while True:
+                # 下载大文件时也要能被「停止」打断，否则首次批量会卡在 461MB 上
+                if interrupted is not None and interrupted():
+                    raise _Cancelled("已取消")
                 try:
                     block = response.read(_DOWNLOAD_CHUNK)
                 except OSError as exc:      # 传输中断：连接被重置 / 超时
@@ -296,22 +305,25 @@ def _silent_remove(path: str) -> None:
         os.remove(path)
 
 
-def download_file(url: str, dest: str, on_progress=None) -> tuple[str, str]:
+def download_file(url: str, dest: str, on_progress=None,
+                  interrupted=None) -> tuple[str, str]:
     """把 url 下到 dest，返回 `(错误码, 详情)`；成功是 `("", "")`。
 
     失败重试 3 次（续传，不从头来）。4xx 除 408/429 之外立刻收手 —— 仓库改名或
-    文件不存在时重试只会让用户多等三次超时。
+    文件不存在时重试只会让用户多等三次超时。用户点「停止」则返回 `cancelled`，
+    `.part` 留着，下次接着下。
     """
     tmp = dest + ".part"
     detail = ""
     for _attempt in range(_DOWNLOAD_RETRIES):
         try:
-            _fetch_once(url, tmp, on_progress)
+            _fetch_once(url, tmp, on_progress, interrupted)
             os.replace(tmp, dest)       # 先 .part 后改名：不会留下「看起来完整」的半个文件
             return "", ""
         except _DownloadError as exc:
             detail = str(exc)
-            if isinstance(exc, _DiskError):
+            # 磁盘写不进去、用户主动取消：重试没有意义
+            if isinstance(exc, (_DiskError, _Cancelled)):
                 return exc.code, detail
         except urllib.error.HTTPError as exc:
             detail = f"HTTP {exc.code} {exc.reason}"
@@ -329,7 +341,7 @@ def download_file(url: str, dest: str, on_progress=None) -> tuple[str, str]:
     return "download_failed", detail
 
 
-def ensure_model(name: str, progress=None) -> tuple[str, str, str]:
+def ensure_model(name: str, progress=None, interrupted=None) -> tuple[str, str, str]:
     """确保某个档位的模型在本地，返回 `(目录, 错误码, 详情)`；已就绪不联网。
 
     第三项是 v3.0.1 加的：v3.0.0 把异常整个吞成 `download_failed`，界面上只剩
@@ -350,14 +362,18 @@ def ensure_model(name: str, progress=None) -> tuple[str, str, str]:
     endpoint = download_endpoint()
     count = len(_MODEL_FILES)
     for index, file_name in enumerate(_MODEL_FILES):
+        if interrupted is not None and interrupted():
+            return target, "cancelled", "已取消"
+
         def _report(done: float, index: int = index) -> None:
             if progress:
                 progress("download", (index + done) / count)
 
         url = f"{endpoint}/{repo}/resolve/main/{file_name}"
-        code, detail = download_file(url, os.path.join(target, file_name), _report)
+        code, detail = download_file(url, os.path.join(target, file_name), _report,
+                                     interrupted)
         if code:
-            return target, code, f"{file_name}: {detail}"
+            return target, code, f"{file_name}: {detail}" if detail else file_name
     if progress:
         progress("download", 1.0)
     if not model_ready(target):
@@ -366,13 +382,18 @@ def ensure_model(name: str, progress=None) -> tuple[str, str, str]:
 
 
 def transcribe(audio_path: str, model_dir: str, language: str = "zh",
-               progress=None, predecoded=None) -> AsrOutcome:
+               progress=None, predecoded=None, interrupted=None) -> AsrOutcome:
     """L1+L2：解码 → whisper 推理 → 词级时间戳。
 
     一切异常都收敛成 `AsrOutcome.error`，**绝不向上抛**：对齐是后台任务，
     抛出去只会在控制台留一段堆栈，用户那边表现为「点了没反应」。
 
     `predecoded=(pcm, sr)` 可跳过解码：`align_track` 要同时算能量包络，解码一次就够。
+
+    `interrupted` 是一个「是否该停」的谓词，**每识别完一段就问一次**（v3.0.2）。
+    为什么要这个：whisper 的 `segments` 是生成器，逐段产出，是天然的检查点；
+    没有它的话用户点「停止」得等整首歌推理完（几分钟），窗口还关不掉 —— 就是
+    「批量对齐关不了」那个 bug 的根。段粒度通常是几秒，响应够快。
     """
     if not model_dir or not os.path.isdir(model_dir):
         return AsrOutcome(error="model_missing", detail=str(model_dir))
@@ -418,6 +439,8 @@ def transcribe(audio_path: str, model_dir: str, language: str = "zh",
         )
         words: list[RecognizedWord] = []
         for seg in segments:        # 生成器：这里才真正开始推理
+            if interrupted is not None and interrupted():
+                return AsrOutcome(error="cancelled")
             for word in (seg.words or ()):
                 text = (word.word or "").strip()
                 if not text:
@@ -706,10 +729,11 @@ def retime_lines(lines: list[LyricLine], min_gap_ms: int = 120) -> list[LyricLin
 
 
 def align_track(audio_path: str, lines: list[LyricLine], model_dir: str,
-                language: str = "zh", progress=None) -> AlignOutcome:
+                language: str = "zh", progress=None, interrupted=None) -> AlignOutcome:
     """端到端：解码 → 识别 → 对齐。给 UI 用的单入口。
 
     解码只做一次：pcm 既喂 whisper，也算 L4 的能量包络。
+    `interrupted` 透传给 `transcribe`，让「停止」能在推理中途生效（v3.0.2）。
     """
     if progress:
         progress("decode", 0.0)
@@ -718,10 +742,12 @@ def align_track(audio_path: str, lines: list[LyricLine], model_dir: str,
     except Exception as exc:  # noqa: BLE001
         return AlignOutcome(list(lines or []), error="decode_failed",
                             detail=f"{type(exc).__name__}: {exc}")
-    asr = transcribe(audio_path, model_dir, language, progress, predecoded=(pcm, sr))
+    asr = transcribe(audio_path, model_dir, language, progress, predecoded=(pcm, sr),
+                     interrupted=interrupted)
     if not asr.ok:
-        return AlignOutcome(list(lines or []), error=asr.error,
-                            detail=asr.detail or describe_error(asr.error))
+        # 只带 `asr.detail`，**不要再 `or describe_error(...)`**：调用方本来就会先把
+        # 错误码翻成中文，兜底会让提示变成「没有识别到任何人声（没有识别到任何人声）」。
+        return AlignOutcome(list(lines or []), error=asr.error, detail=asr.detail)
     if progress:
         progress("align", 0.9)
     outcome = align_lyrics(lines, asr.words, rms_fast(pcm, sr))
@@ -779,7 +805,13 @@ class LyricsAsrWorker(QThread):
 
     done = Signal(str, object)      # track_id, AlignOutcome（已落盘）
     failed = Signal(str, str)       # track_id, 中文提示
-    progress = Signal(int, str)     # 0~100, 阶段名
+    # track_id, 0~100, 阶段名
+    #
+    # v3.0.2 修：原来声明成 `Signal(int, str)`（少了 track_id），而两个接收方
+    # （主窗口 `_on_asr_progress`、批量对话框 `_on_progress`）都按三个参数写的，
+    # 于是**每一次进度推送都在抛 TypeError**。windowed 产物 sys.stderr 为 None，
+    # 这个异常完全不可见 —— 表现就是「进度条一直 0%、没有任何阶段文字」。
+    progress = Signal(str, int, str)
 
     def __init__(self, track_id: str, audio_path: str, lines: list[LyricLine],
                  model_name: str = DEFAULT_AI_MODEL, language: str = "zh",
@@ -794,15 +826,17 @@ class LyricsAsrWorker(QThread):
     def run(self) -> None:
         def _report(stage: str, fraction: float) -> None:
             percent = int(max(0.0, min(1.0, fraction)) * 100)
-            self.progress.emit(percent, _STAGE_TEXT.get(stage, stage))
+            self.progress.emit(self._track_id, percent, _STAGE_TEXT.get(stage, stage))
 
         try:
-            model_dir, err, detail = ensure_model(self._model_name, _report)
+            # `isInterruptionRequested` 一路传进去，下载与推理都能在下一个检查点收手
+            model_dir, err, detail = ensure_model(
+                self._model_name, _report, self.isInterruptionRequested)
             if err:
                 # 详情一定要带出去：v3.0.0 只显示「检查网络」，用户在真实环境里
                 # 反复失败也说不清是什么，开发侧同样无从下手（v3.0.1）。
                 message = describe_error(err)
-                if detail:
+                if detail and err != "cancelled":
                     message = f"{message}（{detail}）"
                 self.failed.emit(self._track_id, message)
                 return
@@ -810,7 +844,8 @@ class LyricsAsrWorker(QThread):
                 self.failed.emit(self._track_id, describe_error("cancelled"))
                 return
             outcome = align_track(self._audio_path, self._lines, model_dir,
-                                  self._language, _report)
+                                  self._language, _report,
+                                  interrupted=self.isInterruptionRequested)
         except Exception as exc:  # noqa: BLE001 - 线程里抛异常等于静默失败
             self.failed.emit(self._track_id, f"对齐出错：{type(exc).__name__}: {exc}")
             return

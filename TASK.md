@@ -897,3 +897,33 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py
   - 冻结产物**全新数据目录**跑 `--download-model tiny`：从零下完 75MB，`WhisperModel` 加载 OK
   - 冻结产物跑 `--check-ai`（small 档 + 夹具音频）：import / 就绪 / 解码 / 推理全 OK
   - 真实数据目录里 `small`（461MB）3m35s 下完，四文件字节数与仓库一致
+
+---
+
+## v3.0.2 修复：批量对齐窗口关不掉
+
+用户实测：批量对齐跑到「第 1 / 6 首」，点关闭没反应、「停止」是灰的、进度 0%。
+详见 DESIGN.md 40.18。
+
+### H. 中止链路
+
+- [x] **H1** `transcribe(..., interrupted=)`：whisper `segments` 每段检查一次，段粒度几秒
+- [x] **H2** `download_file(..., interrupted=)` / `ensure_model(..., interrupted=)`：分块检查，
+      返回 `cancelled`，`.part` 留着下次续传
+- [x] **H3** `LyricsAsrWorker` 把 `isInterruptionRequested` 作为谓词传下去（不是传布尔）
+- [x] **H4** `align_track` 去掉 `detail or describe_error(...)` 兜底（会显示成「xxx（xxx）」）
+
+### I. 对话框交互
+
+- [x] **I1** 「停止」= 请求中止 + 留窗口看结果；按钮随即置灰防重复点
+- [x] **I2** 「关闭」/窗口 X = 请求中止 + **完成后自动关闭**（永远有出路）
+- [x] **I3** `_retire()` + `_retired` 列表：`wait(3000)` + `finished` 双保险，`closeEvent` 查所有活线程
+- [x] **I4** 进度条改 `%v / %m 首`，不再用 0% 冒充推理进度
+- [x] **I5** 主动中断不计入失败；行文案显示「已停止」
+
+### J. 验收
+
+- [x] **J1** ruff 干净；`TestInterruption` 4 例 + 对话框 6 例全绿（两模块 65 例）
+- [x] **J2** 全量回归：**34 模块 / 780 用例全绿**，14m11s
+- [x] **J3** 重打包：onefile 122.8MB / onedir 11.5MB，双 smoke + 真实平台 8s 通过
+  - 真机验收 `tools/verify_abort_real.py`：4.5s 点关闭 → 10.2s 中止完成 → 自动关窗

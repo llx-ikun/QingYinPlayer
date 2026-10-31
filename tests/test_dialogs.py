@@ -17,6 +17,13 @@ def setUpModule() -> None:
         QApplication([])
 
 
+def dlg_cancelled_text() -> str:
+    """中断提示文案从真相源取，别在测试里写死中文。"""
+    from app.lyrics_asr import describe_error
+
+    return describe_error("cancelled")
+
+
 class TestImportDialog(unittest.TestCase):
     def test_close_after_finish_closes_dialog(self) -> None:
         dlg = dlg_mod.ImportProgressDialog()
@@ -48,6 +55,7 @@ class _FakeWorker(QObject):
     done = Signal(str, object)
     failed = Signal(str, str)
     progress = Signal(int, str)
+    finished = Signal()          # QThread 也有这个，对话框靠它回收已退场的线程
 
     started_ids: list[str] = []
     auto: str = "done"          # done / fail
@@ -57,6 +65,7 @@ class _FakeWorker(QObject):
         self._track_id = track_id
         _FakeWorker.started_ids.append(track_id)
         self._parent = parent
+        self.interrupted = False
 
     def start(self):
         from app.lyrics_asr import AlignOutcome
@@ -69,6 +78,30 @@ class _FakeWorker(QObject):
 
     def isRunning(self):  # noqa: N802
         return False
+
+    def requestInterruption(self):  # noqa: N802
+        self.interrupted = True
+
+    def wait(self, _ms=0):  # noqa: N802
+        return True
+
+
+class _RunningWorker(_FakeWorker):
+    """一直「在跑」的假线程：模拟长歌推理时用户点停止/关闭（v3.0.2 的现场）。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.running = True
+
+    def start(self):
+        pass                    # 不自动完成，就是「卡在推理中」
+
+    def isRunning(self):  # noqa: N802
+        return self.running
+
+    def wait(self, _ms=0):  # noqa: N802
+        self.running = False
+        return True
 
 
 class TestAiBatchAlignDialog(unittest.TestCase):
@@ -136,17 +169,119 @@ class TestAiBatchAlignDialog(unittest.TestCase):
         self.assertEqual(_FakeWorker.started_ids, [], "已停止就不再起线程")
         self.assertIn("结束", d.title_label.text())
 
+    def test_stop_requests_worker_interruption(self):
+        """v3.0.2 核心：停止必须真的通知 worker，而不是只翻一个标志位。
+
+        v3.0.0 的 `_on_stop` 只把按钮置灰，worker 该跑多久还跑多久 —— 用户看到的是
+        「点了没反应」，再加上关闭被挡住，窗口就彻底锁死了。
+        """
+        from app.lyrics import LyricLine
+
+        d = self._make([("t1", "歌一", "/a.mp3")], lambda tid: [LyricLine(0, "一句")])
+        worker = _RunningWorker("t1", "/a.mp3", [LyricLine(0, "一句")], "base")
+        d._worker = worker
+        d._on_stop()
+        self.assertTrue(worker.interrupted, "停止必须调 requestInterruption")
+        self.assertFalse(d.stop_btn.isEnabled(), "停过一次的按钮置灰，避免重复点")
+        self.assertIn("中止", d.stage_label.text())
+
+    def test_close_while_running_always_leaves_a_way_out(self):
+        """跑着时点关闭：挡一下是对的（带活线程析构会崩），但必须同时中止 + 自动关。"""
+        from app.lyrics import LyricLine
+
+        d = self._make([("t1", "歌一", "/a.mp3"), ("t2", "歌二", "/b.mp3")],
+                       lambda tid: [LyricLine(0, "一句")])
+        worker = _RunningWorker("t1", "/a.mp3", [LyricLine(0, "一句")], "base")
+        d._worker = worker
+
+        event = QCloseEvent()
+        d.closeEvent(event)
+        self.assertFalse(event.isAccepted(), "活线程还在，不能立刻放行")
+        self.assertTrue(worker.interrupted, "但必须发出中止请求，否则就是死局")
+        self.assertTrue(d._close_when_done, "中止完成后要自动关闭")
+        self.assertIn("自动关闭", d.stage_label.text())
+        self.assertNotIn("先点「停止」", d.stage_label.text(),
+                         "旧文案让用户去点一个已经灰掉的按钮，是做不到的指令")
+
+    def test_auto_close_after_abort(self):
+        """中止链路走完 → 对话框自动关掉，用户不用再点一次。"""
+        from app.lyrics import LyricLine
+
+        closed = []
+
+        class _Spy(dlg_mod.AiBatchAlignDialog):
+            def close(self):
+                closed.append(1)
+                return super().close()
+
+        d = _Spy([("t1", "歌一", "/a.mp3"), ("t2", "歌二", "/b.mp3")],
+                 lambda tid: [LyricLine(0, "一句")], "base")
+        worker = _RunningWorker("t1", "/a.mp3", [LyricLine(0, "一句")], "base")
+        d._worker = worker
+        d._close_when_done = True
+        d._stop = True
+        d._on_failed("t1", dlg_cancelled_text())
+        self.assertEqual(closed, [1], "中止完成必须自动关闭")
+        self.assertIsNone(d._worker)
+
+    def test_close_click_stops_queue_from_advancing(self):
+        """点关闭后，当前这首中止完**不许再起下一首**（v3.0.2 真机跑出来的 bug）。
+
+        `_on_close_clicked` 起初只设了 `_close_when_done`，忘了设 `_stop`，
+        于是中止完当前这首 `_on_failed` 照常 `_start_next`，队列一路跑到底，
+        窗口永远关不掉。
+        """
+        from app.lyrics import LyricLine
+
+        items = [("t1", "歌一", "/a.mp3"), ("t2", "歌二", "/b.mp3")]
+        d = self._make(items, lambda tid: [LyricLine(0, "一句")])
+        worker = _RunningWorker("t1", "/a.mp3", [LyricLine(0, "一句")], "base")
+        d._worker = worker
+        d._on_close_clicked()
+        self.assertTrue(d._stop, "点关闭就等于停止整个队列")
+        d._on_failed("t1", dlg_cancelled_text())
+        self.assertEqual(_FakeWorker.started_ids, ["t1"],
+                         "已经点了关闭，不该再起第二首（只应有手工创建的那一个）")
+
+    def test_cancelled_track_not_counted_as_failure(self):
+        from app.lyrics import LyricLine
+
+        d = self._make([("t1", "歌一", "/a.mp3")], lambda tid: [LyricLine(0, "一句")])
+        d._stop = True
+        d._on_failed("t1", dlg_cancelled_text())
+        self.assertEqual(d._failed, [], "用户主动停的不算失败")
+        self.assertIn("已停止", d.list.item(0).text())
+
+    def test_progress_bar_shows_track_counts(self):
+        d = self._make([("t1", "一", "/a.mp3"), ("t2", "二", "/b.mp3")],
+                       lambda tid: [])
+        self.assertIn("%m", d.bar.format(), "进度条是首数不是百分比，别显示 0% 误导用户")
+
+    def test_many_skips_do_not_blow_the_stack(self):
+        """全库批量可能有几千首没歌词：跳过必须用循环，不能递归。"""
+        items = [(f"t{i}", f"歌{i}", f"/{i}.mp3") for i in range(3000)]
+        d = self._make(items, lambda tid: [])
+        d.start()
+        self.assertEqual(len(d._failed), 3000)
+        self.assertIn("结束", d.title_label.text())
+
+    def test_close_when_idle_closes_directly(self):
+        d = self._make([("t1", "歌一", "/a.mp3")], lambda tid: [])
+        d._worker = None
+        d.close()                        # 没有活线程时必须能直接关
+        self.assertFalse(d._close_when_done)
+
     def test_close_blocked_while_running(self):
-        class _RunningWorker(_FakeWorker):
+        class _RunningWorker2(_FakeWorker):
             def isRunning(self):  # noqa: N802
                 return True
 
         d = self._make([("t1", "歌一", "/a.mp3")], lambda tid: [])
-        d._worker = _RunningWorker("t1", "/a.mp3", [], "base")
+        d._worker = _RunningWorker2("t1", "/a.mp3", [], "base")
         event = QCloseEvent()
         d.closeEvent(event)
         self.assertFalse(event.isAccepted(), "跑着的时候关闭必须被忽略")
-        self.assertIn("停止", d.stage_label.text())
+        self.assertTrue(d._worker.interrupted)
 
 
 class TestAiSettings(unittest.TestCase):
