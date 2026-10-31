@@ -57,6 +57,15 @@ LYRICS_AI_MODEL_LABELS = {"tiny": "tiny · 75MB 最快", "base": "base · 142MB 
 LYRICS_AI_MODEL_SIZES = {"tiny": "75MB", "base": "142MB", "small": "480MB"}
 DEFAULT_AI_MODEL = "base"
 
+# AI 识别语言（v3.0.3）：auto = 按歌词汉字占比猜（默认），zh/en 为手动指定。
+LYRICS_AI_LANGUAGES = ("auto", "zh", "en")
+LYRICS_AI_LANGUAGE_LABELS = {"auto": "自动（按歌词判断）", "zh": "中文", "en": "英文"}
+DEFAULT_AI_LANGUAGE = "auto"
+# AI 识别质量（v3.0.3）：映射到 beam_size（fast=1 / balanced=5 / quality=10）。
+LYRICS_AI_QUALITIES = ("fast", "balanced", "quality")
+LYRICS_AI_QUALITY_LABELS = {"fast": "快速", "balanced": "均衡（推荐）", "quality": "高质量"}
+DEFAULT_AI_QUALITY = "balanced"
+
 # 虚拟歌单标识
 PLAYLIST_LIBRARY = "__library__"   # 音乐库
 PLAYLIST_RECENT = "__recent__"     # 最近播放
@@ -361,6 +370,8 @@ class Settings:
     font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
     lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/zoom/typewriter/karaoke）
     lyrics_ai_model: str = DEFAULT_AI_MODEL   # v3.0.0：AI 逐字对齐的模型档位
+    lyrics_ai_language: str = DEFAULT_AI_LANGUAGE   # v3.0.3：识别语言（auto/zh/en）
+    lyrics_ai_quality: str = DEFAULT_AI_QUALITY     # v3.0.3：识别质量（fast/balanced/quality）
     lyrics_color: LyricsColorConfig = field(default_factory=LyricsColorConfig)  # v2.9.0
     # v2.2 自定义背景：三个作用域（全部 / 列表页 / 正在播放页）
     bg_all: BackgroundConfig = field(default_factory=BackgroundConfig)
@@ -398,6 +409,8 @@ class Settings:
             "font_scale": self.font_scale,
             "lyrics_effect": self.lyrics_effect,
             "lyrics_ai_model": self.lyrics_ai_model,
+            "lyrics_ai_language": self.lyrics_ai_language,
+            "lyrics_ai_quality": self.lyrics_ai_quality,
             "lyrics_color": self.lyrics_color.to_dict(),
             "bg": {
                 "all": self.bg_all.to_dict(),
@@ -435,6 +448,12 @@ class Settings:
         ai_model = d.get("lyrics_ai_model")
         # 老数据没有这个字段 → 默认档；写了不认识的档位也回默认（别让界面拿到空值）
         s.lyrics_ai_model = ai_model if ai_model in LYRICS_AI_MODELS else DEFAULT_AI_MODEL
+        ai_lang = d.get("lyrics_ai_language")
+        s.lyrics_ai_language = (ai_lang if ai_lang in LYRICS_AI_LANGUAGES
+                                else DEFAULT_AI_LANGUAGE)
+        ai_quality = d.get("lyrics_ai_quality")
+        s.lyrics_ai_quality = (ai_quality if ai_quality in LYRICS_AI_QUALITIES
+                               else DEFAULT_AI_QUALITY)
         s.lyrics_color = LyricsColorConfig.from_dict(d.get("lyrics_color") or {})
         bg = d.get("bg") or {}
         if isinstance(bg, dict):

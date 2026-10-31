@@ -35,7 +35,10 @@ from PySide6.QtWidgets import (
 
 from app import paths as app_paths
 from app.library import import_background
-from app.models import (DEFAULT_AI_MODEL, LYRICS_AI_MODEL_LABELS, LYRICS_AI_MODELS,
+from app.models import (DEFAULT_AI_LANGUAGE, DEFAULT_AI_MODEL, DEFAULT_AI_QUALITY,
+                        LYRICS_AI_LANGUAGE_LABELS, LYRICS_AI_LANGUAGES,
+                        LYRICS_AI_MODEL_LABELS, LYRICS_AI_MODELS,
+                        LYRICS_AI_QUALITY_LABELS, LYRICS_AI_QUALITIES,
                         BackgroundConfig, LYRICS_EFFECTS, LyricsColorConfig)
 from app.paths import bgs_dir
 from app.version import APP_NAME, version_text
@@ -144,6 +147,8 @@ class SettingsDialog(QDialog):
     lyrics_effect_changed = Signal(str)  # none / zoom / typewriter / karaoke
     lyrics_color_changed = Signal(object)  # v2.9.0：LyricsColorConfig
     ai_model_changed = Signal(str)       # v3.0.0：AI 逐字对齐的模型档位
+    ai_language_changed = Signal(str)    # v3.0.3：AI 识别语言（auto/zh/en）
+    ai_quality_changed = Signal(str)     # v3.0.3：AI 识别质量（fast/balanced/quality）
     ai_batch_requested = Signal()        # v3.0.0：打开全库批量对齐对话框
     words_clear_requested = Signal()     # v3.0.0：清空全部字级数据
     background_changed = Signal(str, object)   # (作用域, BackgroundConfig)
@@ -154,7 +159,9 @@ class SettingsDialog(QDialog):
                  font_scale: float = 1.0, bg_configs: dict | None = None,
                  bg_scope: str = "all", lyrics_effect: str = "none",
                  lyrics_color: LyricsColorConfig | None = None,
-                 ai_model: str = DEFAULT_AI_MODEL):
+                 ai_model: str = DEFAULT_AI_MODEL,
+                 ai_language: str = DEFAULT_AI_LANGUAGE,
+                 ai_quality: str = DEFAULT_AI_QUALITY):
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
@@ -166,6 +173,10 @@ class SettingsDialog(QDialog):
         self._lyrics_color = LyricsColorConfig.from_dict(
             lyrics_color.to_dict() if isinstance(lyrics_color, LyricsColorConfig) else {})
         self._ai_model = ai_model if ai_model in LYRICS_AI_MODELS else DEFAULT_AI_MODEL
+        self._ai_language = (ai_language if ai_language in LYRICS_AI_LANGUAGES
+                             else DEFAULT_AI_LANGUAGE)
+        self._ai_quality = (ai_quality if ai_quality in LYRICS_AI_QUALITIES
+                            else DEFAULT_AI_QUALITY)
         self._loading = False
         self._bg_scope = bg_scope if bg_scope in ("all", "library", "now_playing") else "all"
         self._bg: dict[str, BackgroundConfig] = {}
@@ -452,8 +463,35 @@ class SettingsDialog(QDialog):
         ai_row.addWidget(self.ai_model_combo)
         ai_row.addStretch(1)
         root.addLayout(ai_row)
+
+        # v3.0.3：识别语言（英文歌之前会被识别成中文乱码）与识别质量（beam 大小）。
+        lang_row = QHBoxLayout()
+        lang_row.setSpacing(10)
+        lang_row.addWidget(QLabel("识别语言"))
+        self.ai_language_combo = ChevronComboBox()
+        self.ai_language_combo.setObjectName("FontScaleCombo")
+        for name in LYRICS_AI_LANGUAGES:
+            self.ai_language_combo.addItem(LYRICS_AI_LANGUAGE_LABELS.get(name, name), name)
+        self.ai_language_combo.setCurrentIndex(
+            max(0, self.ai_language_combo.findData(self._ai_language)))
+        self.ai_language_combo.currentIndexChanged.connect(self._on_ai_language_combo)
+        lang_row.addWidget(self.ai_language_combo)
+
+        lang_row.addWidget(QLabel("识别质量"))
+        self.ai_quality_combo = ChevronComboBox()
+        self.ai_quality_combo.setObjectName("FontScaleCombo")
+        for name in LYRICS_AI_QUALITIES:
+            self.ai_quality_combo.addItem(LYRICS_AI_QUALITY_LABELS.get(name, name), name)
+        self.ai_quality_combo.setCurrentIndex(
+            max(0, self.ai_quality_combo.findData(self._ai_quality)))
+        self.ai_quality_combo.currentIndexChanged.connect(self._on_ai_quality_combo)
+        lang_row.addWidget(self.ai_quality_combo)
+        lang_row.addStretch(1)
+        root.addLayout(lang_row)
+
         ai_hint = QLabel("本地识别演唱、把每个字钉到真实时刻（误差约 ±80ms）。"
-                         "首次使用需下载模型，之后完全离线；换档位需重新下载。")
+                         "首次使用需下载模型，之后完全离线；换档位需重新下载。"
+                         "质量越高越准但越慢。")
         ai_hint.setObjectName("Dim")
         ai_hint.setWordWrap(True)
         root.addWidget(ai_hint)
@@ -742,6 +780,16 @@ class SettingsDialog(QDialog):
         value = self.ai_model_combo.itemData(index)
         if value is not None and not self._loading:
             self.ai_model_changed.emit(value)
+
+    def _on_ai_language_combo(self, index: int) -> None:
+        value = self.ai_language_combo.itemData(index)
+        if value is not None and not self._loading:
+            self.ai_language_changed.emit(value)
+
+    def _on_ai_quality_combo(self, index: int) -> None:
+        value = self.ai_quality_combo.itemData(index)
+        if value is not None and not self._loading:
+            self.ai_quality_changed.emit(value)
 
     def _on_clear_words(self) -> None:
         """清空字级数据：删的是「对齐结果」，不是歌词本身，所以默认按钮仍是「否」。"""

@@ -60,7 +60,8 @@ class _FakeWorker(QObject):
     started_ids: list[str] = []
     auto: str = "done"          # done / fail
 
-    def __init__(self, track_id, audio_path, lines, model_name, parent=None):
+    def __init__(self, track_id, audio_path, lines, model_name, parent=None,
+                 language="auto", quality="balanced"):
         super().__init__(parent)
         self._track_id = track_id
         _FakeWorker.started_ids.append(track_id)

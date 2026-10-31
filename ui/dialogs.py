@@ -265,8 +265,11 @@ class AiBatchAlignDialog(QDialog):
                       "完成后窗口会自动关闭…")
 
     def __init__(self, items: list[tuple[str, str, str]], resolver, model_name: str,
-                 parent=None):
-        """`items` = `[(track_id, 显示名, 音频绝对路径)]`；`resolver(track_id)` 取同步歌词。"""
+                 parent=None, language: str = "auto", quality: str = "balanced"):
+        """`items` = `[(track_id, 显示名, 音频绝对路径)]`；`resolver(track_id)` 取同步歌词。
+
+        `language` / `quality`（v3.0.3）：透传给 worker，决定识别语言与 beam 大小。
+        """
         super().__init__(parent)
         from app.lyrics_asr import LyricsAsrWorker
 
@@ -274,6 +277,8 @@ class AiBatchAlignDialog(QDialog):
         self._queue = list(items)
         self._resolver = resolver
         self._model = model_name
+        self._language = language
+        self._quality = quality
         self._index = 0
         self._stop = False
         self._close_when_done = False
@@ -355,7 +360,9 @@ class AiBatchAlignDialog(QDialog):
             self._set_row(self._index, f"跳过 · {name}（没有同步歌词）")
             self._index += 1
 
-        worker = self._worker_cls(track_id, path, lines, self._model, parent=self)
+        worker = self._worker_cls(track_id, path, lines, self._model,
+                                  language=self._language, quality=self._quality,
+                                  parent=self)
         worker.progress.connect(self._on_progress)
         worker.done.connect(self._on_done)
         worker.failed.connect(self._on_failed)

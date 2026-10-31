@@ -153,6 +153,111 @@ class TestSnap(unittest.TestCase):
         self.assertEqual(la.snap_to_energy([(0, 100)], [1.0] * 50), [(0, 100)])
 
 
+class TestOnsetEnvelope(unittest.TestCase):
+    """onset 强度包络（v3.0.3）：半波整流的短时能量增量，抓音节起音的上升沿。"""
+
+    def test_rise_produces_peak_then_decays(self):
+        # 前 5 帧稳态 0.1，后 5 帧升到 0.9；diff 20ms / hop 10ms → lookback=2
+        rms = [0.1] * 5 + [0.9] * 5
+        onset = la.onset_envelope(rms, hop_ms=10, diff_ms=20)
+        self.assertEqual(len(onset), len(rms))
+        self.assertGreater(onset[5], 0.0, "能量上升沿要出一个正峰")
+        self.assertEqual(onset[7], 0.0, "升到位后稳态，onset 应回 0")
+
+    def test_decay_is_clipped_to_zero(self):
+        # 一路衰减：半波整流后不允许出现负值（那是「下降沿」，不是起音）
+        onset = la.onset_envelope([0.9, 0.7, 0.5, 0.3, 0.1], hop_ms=10, diff_ms=20)
+        self.assertEqual([round(v, 6) for v in onset], [0.0] * 5)
+
+    def test_empty_rms(self):
+        self.assertEqual(la.onset_envelope([]), [])
+
+    def test_rms_shorter_than_lookback(self):
+        """包络短于 lookback 帧时不得在 numpy 路径里炸形状。"""
+        onset = la.onset_envelope([0.1, 0.2], hop_ms=10, diff_ms=30)
+        self.assertEqual(len(onset), 2)
+        self.assertGreaterEqual(onset[1], 0.0, "第二帧相对首帧上升，应是正 onset")
+
+
+class TestSnapToOnset(unittest.TestCase):
+    """字边界吸附到 onset 峰（v3.0.3），与 RMS 谷吸附互补。"""
+
+    def test_boundary_moves_to_onset_peak(self):
+        # onset 在 300ms 处有个峰，边界 350 应吸到 300
+        onset = [0.0] * 100
+        onset[30] = 1.0
+        windows = [(0, 350), (350, 600)]
+        snapped = la.snap_to_onset(windows, onset, hop_ms=10, snap_ms=120)
+        self.assertEqual(snapped[0][1], 300, "边界从 350 吸到 onset 峰 300")
+        self.assertEqual(snapped[1][0], 300, "相邻字的起点必须跟着一起改")
+
+    def test_flat_onset_does_not_move(self):
+        """onset 全 0（稳态/静音）时，守卫必须拦住，不能把边界随机挪到扫描端点。"""
+        windows = [(0, 350), (350, 600)]
+        self.assertEqual(la.snap_to_onset(windows, [0.0] * 100, hop_ms=10),
+                         windows)
+
+    def test_no_onset_returns_unchanged(self):
+        windows = [(0, 350), (350, 600)]
+        self.assertEqual(la.snap_to_onset(windows, []), windows)
+
+    def test_min_char_guard(self):
+        """吸附不许把字压得比 MIN_CHAR_MS 更短。"""
+        onset = [0.0] * 100
+        onset[1] = 1.0                      # 峰在 10ms，但 lo 被 min_char 抬到 40
+        windows = [(0, 350), (350, 400)]
+        snapped = la.snap_to_onset(windows, onset, hop_ms=10, snap_ms=400,
+                                   min_char_ms=40)
+        self.assertGreaterEqual(snapped[0][1] - snapped[0][0], 40)
+
+    def test_single_window_untouched(self):
+        self.assertEqual(la.snap_to_onset([(0, 100)], [1.0] * 50), [(0, 100)])
+
+
+class TestGuessLanguage(unittest.TestCase):
+    """按歌词汉字占比猜识别语言（v3.0.3），解决英文歌被识别成中文乱码。"""
+
+    def test_chinese(self):
+        self.assertEqual(la.guess_language([LyricLine(0, "故事的小黄花")]), "zh")
+
+    def test_english(self):
+        self.assertEqual(la.guess_language([LyricLine(0, "Who can know")]), "en")
+
+    def test_mixed_more_chinese(self):
+        self.assertEqual(la.guess_language([LyricLine(0, "你好世界 hi")]), "zh")
+
+    def test_mixed_more_latin(self):
+        self.assertEqual(la.guess_language([LyricLine(0, "hello 世界")]), "en")
+
+    def test_punctuation_only_falls_back_to_zh(self):
+        self.assertEqual(la.guess_language([LyricLine(0, "…——")]), "zh")
+
+    def test_empty_lines_falls_back_to_zh(self):
+        self.assertEqual(la.guess_language([]), "zh")
+
+
+class TestOnsetInAlign(unittest.TestCase):
+    """`align_lyrics` 收到 onset 时，字边界要真的被峰吸附（v3.0.3）。"""
+
+    def test_uniform_spread_then_snapped_to_onset(self):
+        # 「故事」两字被识别成一个词 (0,600)：均分得边界 300，onset 峰在 200 → 吸到 200
+        lines = [LyricLine(0, "故事")]
+        onset = [0.0] * 100
+        onset[20] = 1.0                      # 200ms 处一个起音峰
+        outcome = la.align_lyrics(lines, [_w(0, 600, "故事")], onset=onset)
+        self.assertTrue(outcome.ok, outcome.detail)
+        words = outcome.lines[0].words
+        self.assertEqual("".join(w.text for w in words), "故事")
+        self.assertEqual(words[0].start_ms, 0)
+        self.assertEqual(words[1].start_ms, 200, "第二字起点应吸到 onset 峰而非均分的 300")
+
+    def test_without_onset_still_uniform(self):
+        # 不给 onset 时行为不变：仍按均分 300（零回归）
+        lines = [LyricLine(0, "故事")]
+        outcome = la.align_lyrics(lines, [_w(0, 600, "故事")])
+        self.assertEqual(outcome.lines[0].words[1].start_ms, 300)
+
+
 class TestRmsFast(unittest.TestCase):
     def test_matches_pure_python_version(self):
         """向量化 RMS 必须与现成的 `rms_envelope` 同口径。"""
@@ -530,7 +635,7 @@ class TestInterruption(unittest.TestCase):
         seen = {}
 
         def _fake_align(path, lines, model_dir, language="zh", progress=None,
-                        interrupted=None):
+                        interrupted=None, beam_size=5):
             seen["probe"] = interrupted
             return la.AlignOutcome(lines=[], matched_ratio=1.0)
 

@@ -1288,11 +1288,15 @@ class TestLyricsMenu(unittest.TestCase):
         self.assertNotIn("近似", label)
 
     def test_ai_align_emits_signal(self):
+        """点右键子菜单里的语言项要发出信号，且带出所选语言（v3.0.3）。"""
         panel = self._panel(True)
         got = []
-        panel.align_ai_requested.connect(lambda: got.append(1))
-        self._actions(panel)["AI 对齐歌词（逐字）"].trigger()
-        self.assertEqual(got, [1])
+        panel.align_ai_requested.connect(got.append)
+        submenu = self._actions(panel)["AI 对齐歌词（逐字）"].menu()
+        subs = {a.text(): a for a in submenu.actions()}
+        subs["自动识别语言"].trigger()
+        subs["按英文识别"].trigger()
+        self.assertEqual(got, ["auto", "en"])
 
     def test_words_clear_emits_and_gates_on_synced(self):
         panel = self._panel(True)

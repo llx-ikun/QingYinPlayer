@@ -927,3 +927,34 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py
 - [x] **J2** 全量回归：**34 模块 / 780 用例全绿**，14m11s
 - [x] **J3** 重打包：onefile 122.8MB / onedir 11.5MB，双 smoke + 真实平台 8s 通过
   - 真机验收 `tools/verify_abort_real.py`：4.5s 点关闭 → 10.2s 中止完成 → 自动关窗
+
+---
+
+## v3.0.3 提高逐字对齐准确率
+
+用户要求减少逐字对齐误差、提高准确率。范围：全都要（信号处理 + 英文歌语言 + 大 beam/大模型）。
+详见 DESIGN.md 40.19。
+
+### K. 信号处理（onset 吸附）
+
+- [x] **K1** `onset_envelope(rms, hop_ms, diff_ms)`：半波整流能量增量，抓音节起音上升沿
+- [x] **K2** `snap_to_onset(...)`：字边界 ±120ms 吸 onset 峰，`best_val > 0` 守卫静音不挪
+- [x] **K3** `align_lyrics(..., onset=)` + `align_track` 派生 onset 并透传；均分保底不退步
+
+### L. 语言自动 + 手动指定
+
+- [x] **L1** `guess_language(lines)`：汉字占比猜 zh/en，纯标点回退 zh
+- [x] **L2** `LyricsAsrWorker` 默认 `language="auto"`，`run()` 解析成具体语种
+- [x] **L3** 设置页「识别语言」下拉 + `Settings.lyrics_ai_language`
+- [x] **L4** 右键「AI 对齐歌词（逐字）」改子菜单（自动/中文/英文），信号带语种
+
+### M. 质量 / 大 beam
+
+- [x] **M1** `transcribe`/`align_track` 增 `beam_size`；`AI_QUALITY_BEAM = {fast:1, balanced:5, quality:10}`
+- [x] **M2** 设置页「识别质量」下拉 + `Settings.lyrics_ai_quality`
+
+### N. 验收
+
+- [x] **N1** ruff 干净；新增 `TestOnsetEnvelope`/`TestSnapToOnset`/`TestGuessLanguage`/
+      `TestOnsetInAlign` + 语言信号共 13 例单测
+- [x] **N2** 全量回归（本轮结果见交付说明）

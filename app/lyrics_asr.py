@@ -69,6 +69,11 @@ def describe_error(code: str) -> str:
     return _ERROR_MESSAGES.get(code, code or "")
 
 
+# 识别质量档位 → beam_size（v3.0.3）。beam 越大越准但推理越慢：
+#   fast=1 贪心（最快，词时间戳略粗）/ balanced=5（默认）/ quality=10（最准，慢约一倍）
+AI_QUALITY_BEAM = {"fast": 1, "balanced": 5, "quality": 10}
+
+
 @dataclass(frozen=True)
 class RecognizedWord:
     """whisper 识别出的一个词（时间单位已换成毫秒）。"""
@@ -382,7 +387,8 @@ def ensure_model(name: str, progress=None, interrupted=None) -> tuple[str, str, 
 
 
 def transcribe(audio_path: str, model_dir: str, language: str = "zh",
-               progress=None, predecoded=None, interrupted=None) -> AsrOutcome:
+               progress=None, predecoded=None, interrupted=None,
+               beam_size: int = 5) -> AsrOutcome:
     """L1+L2：解码 → whisper 推理 → 词级时间戳。
 
     一切异常都收敛成 `AsrOutcome.error`，**绝不向上抛**：对齐是后台任务，
@@ -435,7 +441,7 @@ def transcribe(audio_path: str, model_dir: str, language: str = "zh",
             language=(language or None),
             word_timestamps=True,
             vad_filter=False,      # VAD 要 onnxruntime（45MB），我们直接排除掉
-            beam_size=5,
+            beam_size=beam_size,
         )
         words: list[RecognizedWord] = []
         for seg in segments:        # 生成器：这里才真正开始推理
@@ -499,6 +505,30 @@ def normalize_recognized(words: list[RecognizedWord]) -> tuple[str, list[tuple[i
             spans.append((word.start_ms, word.end_ms))
             probs.append(word.probability)
     return "".join(chars), spans, probs
+
+
+def guess_language(lines: list[LyricLine]) -> str:
+    """按歌词正文的汉字占比猜识别语言（v3.0.3）。
+
+    为什么需要这个：`transcribe` 原来写死 `language="zh"`，英文歌会被识别成中文
+    乱码，匹配率直接掉到 0 对齐失败。用歌词文本猜一句，把「中文歌 / 英文歌」这个
+    最常见分歧解决掉，不用让 whisper 自己 detect（它在中英混杂 / 粤语上会误判）。
+
+    规则：CJK 汉字数 ≥ 拉丁字母数 → "zh"，否则 → "en"；两者都为 0（纯标点/无词）
+    回退旧默认 "zh"。
+    """
+    cjk = latin = 0
+    for line in lines or []:
+        for ch in line.text or "":
+            if "\u4e00" <= ch <= "\u9fff":
+                cjk += 1
+            elif ch.isascii() and ch.isalpha():
+                latin += 1
+    if cjk >= latin and cjk > 0:
+        return "zh"
+    if latin > cjk:
+        return "en"
+    return "zh"
 
 
 def _match_windows(lyric: str, recog: str, spans: list[tuple[int, int]]):
@@ -612,6 +642,48 @@ def snap_to_energy(windows: list[tuple[int, int] | None], rms: list[float],
     return out
 
 
+def snap_to_onset(windows: list[tuple[int, int] | None], onset: list[float],
+                  hop_ms: int = 10, snap_ms: int = SNAP_MS,
+                  min_char_ms: int = MIN_CHAR_MS) -> list[tuple[int, int] | None]:
+    """把字边界挪到 ±snap_ms 内的 onset 峰（音节起音），与 `snap_to_energy` 互补。
+
+    `snap_to_energy` 找的是能量**谷**（换气口 / 元音尾），适合句间边界；这里找的是
+    能量**上升沿**（辅音/咬字起音），适合 `_spread` 均分出来的字间边界。两者串联：
+    先谷吸附（静音/换气处没有 onset，这里的 `best_val > 0` 守卫会让边界留在谷里），
+    再峰吸附（有声段把字边界拽到真正的起音点）。
+
+    为什么守卫是 `best_val > 0` 而不是「一定吸」：onset 包络在稳态/衰减段是 0，
+    强行找「最大的 0」只会把边界随机挪到扫描窗口的端点，反而比均分更差。
+    """
+    if not onset or len(windows) < 2:
+        return windows
+    out = list(windows)
+    last_frame = len(onset) - 1
+
+    def frame_of(ms: int) -> int:
+        k = ms // hop_ms
+        return min(last_frame, max(0, k))
+
+    for i in range(len(out) - 1):
+        left, right = out[i], out[i + 1]
+        if left is None or right is None:
+            continue
+        boundary = left[1]
+        lo = max(left[0] + min_char_ms, boundary - snap_ms)
+        hi = min(right[1] - min_char_ms, boundary + snap_ms)
+        if hi <= lo:
+            continue
+        best_ms, best_val = boundary, None
+        for ms in range(lo, hi + 1, hop_ms):
+            val = onset[frame_of(ms)]
+            if best_val is None or val > best_val:
+                best_val, best_ms = val, ms
+        if best_val is not None and best_val > 0:
+            out[i] = (left[0], best_ms)
+            out[i + 1] = (best_ms, right[1])
+    return out
+
+
 # ---------- 逐行装配 ----------
 
 
@@ -664,12 +736,14 @@ def build_line_words(lines: list[LyricLine], positions: list[tuple[int, int]],
 
 
 def align_lyrics(lines: list[LyricLine], recognized: list[RecognizedWord],
-                 rms: list[float] | None = None, hop_ms: int = 10,
+                 rms: list[float] | None = None, onset: list[float] | None = None,
+                 hop_ms: int = 10,
                  min_match_ratio: float = MIN_MATCH_RATIO,
                  min_mean_prob: float = MIN_MEAN_PROB) -> AlignOutcome:
     """L3~L5 总装：词级时间戳 + 原歌词 → 逐字时间轴。
 
-    `rms` 传能量包络时启用 L4 吸附；不传就只做均分（纯逻辑可单测）。
+    `rms` 传能量包络时启用 L4 谷吸附；`onset` 传 onset 强度时额外做峰吸附（v3.0.3）。
+    不传就只做均分（纯逻辑可单测）。
     失败一律返回 `error` 且 **`lines` 原样返回**——调用方据此决定要不要落盘。
     """
     lines = list(lines or [])
@@ -694,6 +768,7 @@ def align_lyrics(lines: list[LyricLine], recognized: list[RecognizedWord],
     windows = _spread(windows)
     windows = _fill_gaps(windows)
     windows = snap_to_energy(windows, rms or [], hop_ms)
+    windows = snap_to_onset(windows, onset or [], hop_ms)
     blocks = build_line_words(lines, positions, windows)
     out = [LyricLine(line.time_ms, line.text, line.translation, block)
            for line, block in zip(lines, blocks, strict=True)]
@@ -729,7 +804,8 @@ def retime_lines(lines: list[LyricLine], min_gap_ms: int = 120) -> list[LyricLin
 
 
 def align_track(audio_path: str, lines: list[LyricLine], model_dir: str,
-                language: str = "zh", progress=None, interrupted=None) -> AlignOutcome:
+                language: str = "zh", progress=None, interrupted=None,
+                beam_size: int = 5) -> AlignOutcome:
     """端到端：解码 → 识别 → 对齐。给 UI 用的单入口。
 
     解码只做一次：pcm 既喂 whisper，也算 L4 的能量包络。
@@ -743,14 +819,15 @@ def align_track(audio_path: str, lines: list[LyricLine], model_dir: str,
         return AlignOutcome(list(lines or []), error="decode_failed",
                             detail=f"{type(exc).__name__}: {exc}")
     asr = transcribe(audio_path, model_dir, language, progress, predecoded=(pcm, sr),
-                     interrupted=interrupted)
+                     interrupted=interrupted, beam_size=beam_size)
     if not asr.ok:
         # 只带 `asr.detail`，**不要再 `or describe_error(...)`**：调用方本来就会先把
         # 错误码翻成中文，兜底会让提示变成「没有识别到任何人声（没有识别到任何人声）」。
         return AlignOutcome(list(lines or []), error=asr.error, detail=asr.detail)
     if progress:
         progress("align", 0.9)
-    outcome = align_lyrics(lines, asr.words, rms_fast(pcm, sr))
+    env = rms_fast(pcm, sr)
+    outcome = align_lyrics(lines, asr.words, rms=env, onset=onset_envelope(env))
     if progress:
         progress("done", 1.0)
     return outcome
@@ -779,6 +856,41 @@ def rms_fast(samples, sample_rate: int, frame_ms: int = 20,
     starts = np.arange(count, dtype=np.int64) * hop
     sums = csum[starts + frame] - csum[starts]
     return np.sqrt(sums / frame).tolist()
+
+
+def onset_envelope(rms: list[float], hop_ms: int = 10,
+                   diff_ms: int = 30) -> list[float]:
+    """从 RMS 包络派生 onset 强度（半波整流的短时能量增量）。
+
+    L4 原来只找 RMS 谷（换气口 / 元音尾），但**字与字的边界在能量的上升沿**——
+    音节起音（辅音/咬字）是一段能量突增。`onset[i] = max(0, rms[i] - rms[i-k])`
+    正好抓这个沿：稳态或衰减时是 0，起音时出一个峰。二者互补：谷适合句间边界，
+    峰适合字间边界（v3.0.3）。
+
+    纯逻辑、无音频依赖：`rms` 已在 `align_track` 算好，这里只做一次差分，避免重复
+    扫几十万个采样点。
+    """
+    if not rms:
+        return []
+    lookback = max(1, diff_ms // max(1, hop_ms))
+    try:
+        import numpy as np
+    except Exception:  # noqa: BLE001 - numpy 缺失就退回纯 Python，行为不变
+        out = [0.0] * len(rms)
+        for i in range(len(rms)):
+            prev = rms[i - lookback] if i >= lookback else rms[0]
+            out[i] = max(0.0, rms[i] - prev)
+        return out
+    arr = np.asarray(rms, dtype=np.float32)
+    # 短于 lookback 的包络（几乎不可能来自 rms_fast，但别在 numpy 路径里炸形状）
+    if arr.size > lookback:
+        prev = np.concatenate((np.full(lookback, arr[0], dtype=arr.dtype),
+                               arr[:-lookback]))
+    else:
+        prev = np.full(arr.size, arr[0], dtype=arr.dtype)
+    delta = arr - prev
+    np.maximum(delta, 0.0, out=delta)
+    return delta.tolist()
 
 
 # ---------- 后台线程 ----------
@@ -814,19 +926,27 @@ class LyricsAsrWorker(QThread):
     progress = Signal(str, int, str)
 
     def __init__(self, track_id: str, audio_path: str, lines: list[LyricLine],
-                 model_name: str = DEFAULT_AI_MODEL, language: str = "zh",
-                 parent=None) -> None:
+                 model_name: str = DEFAULT_AI_MODEL, language: str = "auto",
+                 quality: str = "balanced", parent=None) -> None:
         super().__init__(parent)
         self._track_id = track_id
         self._audio_path = audio_path
         self._lines = list(lines or [])
         self._model_name = model_name
         self._language = language
+        self._quality = quality
 
     def run(self) -> None:
         def _report(stage: str, fraction: float) -> None:
             percent = int(max(0.0, min(1.0, fraction)) * 100)
             self.progress.emit(self._track_id, percent, _STAGE_TEXT.get(stage, stage))
+
+        # v3.0.3：语言「auto」= 按歌词汉字占比猜，不再写死 zh（英文歌之前直接失败）。
+        # 质量档位 → beam_size，越大越准越慢（fast=1 / balanced=5 / quality=10）。
+        language = self._language
+        if language == "auto":
+            language = guess_language(self._lines)
+        beam_size = AI_QUALITY_BEAM.get(self._quality, 5)
 
         try:
             # `isInterruptionRequested` 一路传进去，下载与推理都能在下一个检查点收手
@@ -844,8 +964,9 @@ class LyricsAsrWorker(QThread):
                 self.failed.emit(self._track_id, describe_error("cancelled"))
                 return
             outcome = align_track(self._audio_path, self._lines, model_dir,
-                                  self._language, _report,
-                                  interrupted=self.isInterruptionRequested)
+                                  language, _report,
+                                  interrupted=self.isInterruptionRequested,
+                                  beam_size=beam_size)
         except Exception as exc:  # noqa: BLE001 - 线程里抛异常等于静默失败
             self.failed.emit(self._track_id, f"对齐出错：{type(exc).__name__}: {exc}")
             return

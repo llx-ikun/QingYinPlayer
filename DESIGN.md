@@ -2576,3 +2576,45 @@ windowed 产物没有 `sys.stdout`，所以报告写到 `%TEMP%\qy_ai_check.txt`
 **一个观察（🟡 未深究）**：上一轮 bug 状态下「中止后立刻接下一首」时，何者的匹配率
 只有 34%（干净状态跑同一首是 69%、置信度同为 0.76）。怀疑与两个 `WhisperModel`
 实例短暂共存有关。现在「关闭 = 停止整个队列」，该路径已不存在，暂不追。
+
+### 40.19 v3.0.3 提高逐字对齐准确率（2026-11-01）
+
+**需求**：减少 AI 逐字对齐误差、提高准确率。用户拍板范围：全都要（含换大模型/大 beam），
+英文歌语言用「按汉字占比猜 + 手动指定」。
+
+**误差源排序（读码定位）**：
+
+| # | 误差源 | 为什么 |
+|---|---|---|
+| 1 | `_spread` 纯均分 | whisper 对中文常把 3~7 字并成一个 word，等分让「拖长音」和「快字」节奏一样 |
+| 2 | `snap_to_energy` 只找 RMS 谷 | 谷是换气口/元音尾（句间边界），**字间边界在能量上升沿**（辅音/咬字起音） |
+| 3 | `language="zh"` 写死 | 英文歌识别成中文乱码，匹配率 0、直接失败 |
+| 4 | int8 + beam=5 | 词级时间戳精度上限 |
+
+**修法（三块）**：
+
+1. **P0 信号处理**（纯逻辑、零速度代价）：
+   - 新增 `onset_envelope(rms, hop_ms, diff_ms)`：半波整流的短时能量增量，抓音节起音上升沿。
+   - 新增 `snap_to_onset(...)`：字边界 ±120ms 内吸到 onset **峰**，与 RMS **谷**吸附互补；
+     守卫 `best_val > 0` 让静音/稳态处不挪（留在谷里）。
+   - `align_lyrics` 增 `onset` 参数；`align_track` 一次 `rms_fast` 后派生 onset 再喂给对齐。
+   - 流水线变为：`_spread`（均分保底）→ `_fill_gaps` → `snap_to_energy`（谷）→
+     `snap_to_onset`（峰）。找不到峰就保持均分，**保证不退步**。
+
+2. **P1 语言**：
+   - 新增 `guess_language(lines)`：CJK 汉字数 ≥ 拉丁字母数 → "zh"，否则 "en"，两者都 0 回退 "zh"。
+   - `LyricsAsrWorker` 默认 `language="auto"`，`run()` 里解析成具体语种再喂 whisper（whisper 不吃 "auto"）。
+   - 设置页新增「识别语言」下拉（auto/zh/en，`Settings.lyrics_ai_language`），
+     右键「AI 对齐歌词（逐字）」改子菜单（自动/中文/英文）按首覆盖。
+
+3. **P2 质量/大 beam**：
+   - `transcribe`/`align_track` 增 `beam_size` 参数；`AI_QUALITY_BEAM = {fast:1, balanced:5, quality:10}`。
+   - 设置页新增「识别质量」下拉（`Settings.lyrics_ai_quality`）；模型档位本就可换 tiny/base/small。
+
+**为什么不用 whisper 自判语言**：中英混杂/粤语会误判，汉字占比是确定性的、可单测。
+
+**量化口径（诚实）**：逐字无 ground truth，不能直接量「误差」。用合成包络单测钉「吸附后边界
+比均分更接近已知起音点」；真实曲库靠匹配率/置信度/字均时长分布观察趋势（见遗留 E4）。
+
+**验收**：`onset_envelope` / `snap_to_onset` / `guess_language` / onset 集成 / 语言信号 共 13 例新单测；
+ruff 干净；全量回归（本轮见 TASK K）。

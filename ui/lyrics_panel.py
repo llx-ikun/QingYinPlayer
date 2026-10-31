@@ -434,7 +434,8 @@ class LyricsPanel(QWidget):
     # 右键「转成 .lrc 文件（本地近似对齐）」：纯文本歌词本地对齐成 LRC（v2.6.9）
     align_local_requested = Signal()
     # v3.0.0 右键「AI 对齐歌词（逐字）」：本地 whisper 给每个字真实时间轴
-    align_ai_requested = Signal()
+    # v3.0.3 改为携带识别语言（auto/zh/en），右键可直接指定，兜底给英文歌用
+    align_ai_requested = Signal(str)
     # v3.0.0 右键「清除本曲逐字数据」：对齐结果不满意时退回线性插值
     words_clear_requested = Signal()
     # 右键「整体提前/延后 0.5s」：消掉对齐后的系统性偏移（v2.6.12）
@@ -802,11 +803,20 @@ class LyricsPanel(QWidget):
         # v3.0.0 右键「AI 对齐歌词（逐字）」：本地 whisper 识别演唱，把每个字钉到真实时刻。
         # 与上面那条并列、但精度不同：近似对齐只到「行」（误差可达几秒），
         # AI 对齐到「字」（误差约 ±80ms）。文案必须把这个差别说出来，否则用户不知道选哪个。
-        align_ai = QAction("AI 对齐歌词（逐字）", menu)
-        align_ai.setStatusTip("本地 AI 逐字对齐，精度最高；首次需下载模型，一首约几十秒")
-        align_ai.triggered.connect(self.align_ai_requested.emit)
-        align_ai.setEnabled(self._mode == "synced")
-        menu.addAction(align_ai)
+        # v3.0.3：改成子菜单，让用户能按首指定识别语言（英文歌自动猜错时手动兜底）。
+        align_ai_menu = QMenu("AI 对齐歌词（逐字）", menu)
+        align_ai_menu.setEnabled(self._mode == "synced")
+        ai_auto = QAction("自动识别语言", align_ai_menu)
+        ai_auto.setStatusTip("按歌词汉字占比自动判断（推荐）")
+        ai_auto.triggered.connect(lambda: self.align_ai_requested.emit("auto"))
+        align_ai_menu.addAction(ai_auto)
+        ai_zh = QAction("按中文识别", align_ai_menu)
+        ai_zh.triggered.connect(lambda: self.align_ai_requested.emit("zh"))
+        align_ai_menu.addAction(ai_zh)
+        ai_en = QAction("按英文识别", align_ai_menu)
+        ai_en.triggered.connect(lambda: self.align_ai_requested.emit("en"))
+        align_ai_menu.addAction(ai_en)
+        menu.addMenu(align_ai_menu)
         words_clear = QAction("清除本曲逐字数据", menu)
         words_clear.setStatusTip("退回按行匀速扫光（对齐结果不满意时用）")
         words_clear.triggered.connect(self.words_clear_requested.emit)

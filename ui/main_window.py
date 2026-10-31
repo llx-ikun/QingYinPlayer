@@ -1123,12 +1123,14 @@ class MainWindow(QMainWindow):
 
     # ---------- v3.0.0 AI 逐字对齐 ----------
 
-    def _align_lyrics_ai_for_current(self) -> None:
+    def _align_lyrics_ai_for_current(self, language: str = "auto") -> None:
         """右键「AI 对齐歌词（逐字）」：本地 whisper 给每个字钉真实时刻。
 
         前置条件只有一条：这首歌**已经有带时间轴的歌词**。AI 对齐做的是「把字的时刻算准」，
         行时间轴还是得先有（批量给人声打轴是另一件事，见 TASK.md 遗留）。
         没有同步歌词时给出明确指引，而不是默默什么都不做。
+
+        `language`（v3.0.3）来自右键子菜单（auto/zh/en），给英文歌手动兜底。
         """
         track = self.player.current_track
         if track is None:
@@ -1144,7 +1146,10 @@ class MainWindow(QMainWindow):
         model = self.store.settings.lyrics_ai_model
         if not model_ready(model_dir_for(model)) and not self._confirm_ai_model_download(model):
             return
-        worker = LyricsAsrWorker(track.id, track.path, synced, model, parent=self)
+        worker = LyricsAsrWorker(track.id, track.path, synced, model,
+                                 language=language,
+                                 quality=self.store.settings.lyrics_ai_quality,
+                                 parent=self)
         worker.progress.connect(self._on_asr_progress)
         worker.done.connect(self._on_asr_done)
         worker.failed.connect(self._on_asr_failed)
@@ -1213,6 +1218,20 @@ class MainWindow(QMainWindow):
         # 没说「已切换」就算失败：切换只是改设置，模型仍要等用到时才下载。
         self._toast(f"AI 模型已切换为 {name}（首次使用时会下载）", 3500)
 
+    def _on_settings_ai_language(self, value: str) -> None:
+        """识别语言（v3.0.3）：自动按歌词猜，或手动指定中文/英文。"""
+        if self.store.settings.lyrics_ai_language == value:
+            return
+        self.store.settings.lyrics_ai_language = value
+        self.store.save()
+
+    def _on_settings_ai_quality(self, value: str) -> None:
+        """识别质量（v3.0.3）：影响 beam 大小，越高质量越准越慢。"""
+        if self.store.settings.lyrics_ai_quality == value:
+            return
+        self.store.settings.lyrics_ai_quality = value
+        self.store.save()
+
     def _clear_all_words(self) -> None:
         removed = clear_all_words()
         self._lyrics_cache.clear()          # 全清了，缓存里的歌词也要重新贴一遍
@@ -1240,7 +1259,9 @@ class MainWindow(QMainWindow):
         from ui.dialogs import AiBatchAlignDialog
 
         dialog = AiBatchAlignDialog(
-            items, self._resolve_lyrics_for, model, self)
+            items, self._resolve_lyrics_for, model, self,
+            language=self.store.settings.lyrics_ai_language,
+            quality=self.store.settings.lyrics_ai_quality)
         dialog.finished_summary.connect(self._on_ai_batch_finished)
         dialog.start()
         dialog.exec()
@@ -1702,7 +1723,9 @@ class MainWindow(QMainWindow):
                                 bg_scope=self._current_bg_page(),
                                 lyrics_effect=s.lyrics_effect,
                                 lyrics_color=s.lyrics_color,
-                                ai_model=s.lyrics_ai_model)
+                                ai_model=s.lyrics_ai_model,
+                                ai_language=s.lyrics_ai_language,
+                                ai_quality=s.lyrics_ai_quality)
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
         dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
@@ -1711,6 +1734,8 @@ class MainWindow(QMainWindow):
         dialog.lyrics_effect_changed.connect(self._on_settings_lyrics_effect)
         dialog.lyrics_color_changed.connect(self._on_settings_lyrics_color)
         dialog.ai_model_changed.connect(self._on_settings_ai_model)
+        dialog.ai_language_changed.connect(self._on_settings_ai_language)
+        dialog.ai_quality_changed.connect(self._on_settings_ai_quality)
         dialog.ai_batch_requested.connect(self._open_ai_batch)
         dialog.words_clear_requested.connect(self._clear_all_words)
         dialog.background_changed.connect(self._on_settings_background)
