@@ -21,6 +21,10 @@ MODULES = [
     "tests.test_lyrics",
     # v2.9.0 逐曲歌词颜色 sidecar：round-trip / 坏数据容错 / 清空删文件（纯逻辑）
     "tests.test_lyrics_colors",
+    # v3.0.0 逐字时间轴：增强 LRC 标签解析 / sidecar 读写 / 文本校验贴回（纯逻辑）
+    "tests.test_lyrics_words",
+    # v3.0.0 AI 对齐：序列比对 / 能量谷吸附 / 置信度自检 / 逐行装配（不加载模型）
+    "tests.test_lyrics_asr",
     "tests.test_metadata",
     "tests.test_store",
     # v2.1.9 受管理曲库：导入即复制 / 去重 / 同名冲突 / 扫描器落库

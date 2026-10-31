@@ -944,6 +944,127 @@ class TestLyricsColor(unittest.TestCase):
         self.assertAlmostEqual(flat.start().y(), flat.finalStop().y(),
                                msg="horizontal 渐变轴必须水平")
 
+    # ---------- v3.0.0 逐字时间轴接入 ----------
+
+    def test_typed_from_words_uses_real_window(self):
+        """逐字时间轴：`typed` 按真实字时间窗算，不再假设字与字匀速。
+
+        这句 8 个字里，前 4 个字挤在 0~800ms、后 4 个拖到 800~4000ms。
+        按句内线性插值，t=2000（句内 50%）会报 4 字；按真实窗口应仍停在第 4 字
+        —— 因为第 5 字要 800ms 才开始，第 6 字才到 1600ms。这正是「拖腔」场景。
+        """
+        from app.lyrics import WordSpan
+        from ui.lyrics_panel import _typed_from_words
+
+        words = (WordSpan(0, 200, "谁"), WordSpan(200, 400, "也"),
+                 WordSpan(400, 600, "捉"), WordSpan(600, 800, "摸"),
+                 WordSpan(800, 2000, "不"), WordSpan(2000, 3000, "透"),
+                 WordSpan(3000, 3500, "啊"), WordSpan(3500, 4000, "呀"))
+        text = "谁也捉摸不透啊呀"
+        self.assertEqual(_typed_from_words(words, text, 0, 4000), 0)
+        self.assertEqual(_typed_from_words(words, text, 700, 4000), 4,
+                         "第 5 字 800ms 才开始，700ms 时只能亮 4 个")
+        self.assertEqual(_typed_from_words(words, text, 2400, 4000), 5,
+                         "2400ms 在第 6 字窗口(2000~3000)的 40% 处 → "
+                         "5 个字已过完 + round(1×0.4)=0 → 5")
+        self.assertEqual(_typed_from_words(words, text, 4000, 4000), 8)
+        self.assertEqual(_typed_from_words(words, text, 9999, 4000), 8,
+                         "超出整句 → 整行已唱完")
+
+    def test_typed_from_words_partial_word_rounds(self):
+        """词元内按比例折算：一个 2 字词元走到 60% 只亮 1 个字。"""
+        from app.lyrics import WordSpan
+        from ui.lyrics_panel import _typed_from_words
+
+        words = (WordSpan(0, 1000, "故事"),)
+        self.assertEqual(_typed_from_words(words, "故事", 200, 1000), 0)
+        self.assertEqual(_typed_from_words(words, "故事", 600, 1000), 1)
+        self.assertEqual(_typed_from_words(words, "故事", 800, 1000), 2)
+
+    def test_typed_from_words_last_span_unknown_end(self):
+        """末字「终点未知」用行尾兜底，不能当零长度直接跳完。"""
+        from app.lyrics import WordSpan
+        from ui.lyrics_panel import _typed_from_words
+
+        words = (WordSpan(0, 500, "故"), WordSpan(500, 0, "事"))
+        self.assertEqual(_typed_from_words(words, "故事", 500, 1500), 1)
+        self.assertEqual(_typed_from_words(words, "故事", 1000, 1500), 2)
+
+    def test_typed_from_words_rejects_broken_data(self):
+        """时间倒退 / 空数据 → 返回 None，调用方回退线性插值（坏 sidecar 不许乱跳）。"""
+        from app.lyrics import WordSpan
+        from ui.lyrics_panel import _typed_from_words
+
+        bad = (WordSpan(500, 600, "故"), WordSpan(100, 200, "事"))
+        self.assertIsNone(_typed_from_words(bad, "故事", 300, 2000))
+        self.assertIsNone(_typed_from_words((), "故事", 300, 2000))
+        self.assertIsNone(_typed_from_words(bad, "", 300, 2000))
+
+    def test_paint_block_prefers_word_times(self):
+        """有逐字数据时 `_paint_block` 用字时间窗；译文按同比例推进。"""
+        from app.lyrics import LyricLine, WordSpan
+
+        text, sub = "谁也捉摸不透", "nobody knows"
+        panel = self._panel()
+        # 两句：句边界 1000~5000 明确，进度 0.5 → 位置 3000ms
+        panel.set_synced([LyricLine(1000, text, sub,
+                                    words=(WordSpan(1000, 1100, "谁也"),
+                                           WordSpan(1100, 1200, "捉摸"),
+                                           WordSpan(1200, 5000, "不透"))),
+                          LyricLine(5000, "下一句")])
+        panel.set_effect("karaoke")
+        panel._current_index = 0
+        panel._progress_in_line = 0.5
+
+        calls = self._spy_draw(panel, text, sub)
+        main_typed, sub_typed = calls[0][1], calls[1][1]
+        self.assertEqual(main_typed, 5,
+                         "3000ms 在「不透」窗口(1200~5000)的 47% 处 → "
+                         "4 个字已过完 + round(2×0.47)=1 → 5")
+        self.assertEqual(sub_typed, round(len(sub) * main_typed / len(text)),
+                         "译文按原文比例同步推进")
+
+    def test_paint_block_without_words_keeps_v2_9_2(self):
+        """无逐字数据时输出必须与 v2.9.2 逐字节一致（零回归硬约束）。"""
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import _typed_split
+
+        text, sub = "Let's go, hit that pedal", "出发，油门踩到底"
+        panel = self._panel()
+        panel.set_synced([LyricLine(1000, text, sub)])
+        panel.set_effect("karaoke")
+        panel._current_index = 0
+        panel._progress_in_line = 0.5
+
+        calls = self._spy_draw(panel, text, sub)
+        self.assertEqual((calls[0][1], calls[1][1]), _typed_split(len(text), len(sub),
+                                                                 0.5, sync=True))
+
+    def _spy_draw(self, panel, text, sub):
+        """拦 `_draw_line`，记录每行的 (文本, typed, 其余实参)。"""
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QImage, QPainter
+
+        from ui.lyrics_panel import _LyricDelegate
+
+        calls = []
+        original = _LyricDelegate._draw_line
+
+        def spy(self_, *args, **kwargs):
+            calls.append((args[2], args[6], args, kwargs))
+
+        _LyricDelegate._draw_line = spy
+        try:
+            img = QImage(600, 90, QImage.Format.Format_ARGB32)
+            painter = QPainter(img)
+            panel._delegate._paint_block(
+                painter, QRect(0, 0, 600, 80), text, sub,
+                panel.list.font(), True, 0)
+            painter.end()
+        finally:
+            _LyricDelegate._draw_line = original
+        return calls
+
 
 class TestBilingualLyricsPanel(unittest.TestCase):
     """双语歌词（v2.6.10）：一句 = 原文 + 译文，两行作为一个整体显示与动效。"""
@@ -1149,6 +1270,37 @@ class TestLyricsMenu(unittest.TestCase):
         actions["整体提前 0.5 秒"].trigger()
         actions["整体延后 0.5 秒"].trigger()
         self.assertEqual(got, [-500, 500])
+
+    # ---------- v3.0.0 AI 逐字对齐入口 ----------
+
+    def test_ai_align_requires_synced_lyrics(self):
+        """AI 对齐只做「字级」：没有行时间轴时入口必须置灰，别让人点了没反应。"""
+        plain = self._actions(self._panel(False))
+        self.assertIn("AI 对齐歌词（逐字）", plain)
+        self.assertFalse(plain["AI 对齐歌词（逐字）"].isEnabled())
+        synced = self._actions(self._panel(True))
+        self.assertTrue(synced["AI 对齐歌词（逐字）"].isEnabled())
+
+    def test_ai_align_label_states_precision(self):
+        """文案要写清「逐字」，否则和「本地近似对齐」分不清哪个更准。"""
+        label = next(t for t in self._actions(self._panel(True)) if t.startswith("AI 对齐"))
+        self.assertIn("逐字", label)
+        self.assertNotIn("近似", label)
+
+    def test_ai_align_emits_signal(self):
+        panel = self._panel(True)
+        got = []
+        panel.align_ai_requested.connect(lambda: got.append(1))
+        self._actions(panel)["AI 对齐歌词（逐字）"].trigger()
+        self.assertEqual(got, [1])
+
+    def test_words_clear_emits_and_gates_on_synced(self):
+        panel = self._panel(True)
+        got = []
+        panel.words_clear_requested.connect(lambda: got.append(1))
+        self._actions(panel)["清除本曲逐字数据"].trigger()
+        self.assertEqual(got, [1])
+        self.assertFalse(self._actions(self._panel(False))["清除本曲逐字数据"].isEnabled())
 
 
 class TestIconRendering(unittest.TestCase):

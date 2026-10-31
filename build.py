@@ -146,12 +146,25 @@ def _pyinstaller(onefile: bool) -> str:
         # ModuleNotFoundError: No module named '_cffi_backend'（v2.6.9 实测，
         # 而且 windowed 产物还会弹错误框，把构建挂在 smoke 上）。必须显式声明。
         "--hidden-import", "_cffi_backend",
-        # 瘦身（v2.7.0）：miniaudio 顶层 `try: import numpy / except: numpy = None`
-        # 是可选依赖，PyInstaller 却顺着它把 numpy + numpy.libs（onedir 里约 27MB）
-        # 整包打进去。本程序不用 numpy（本地对齐是纯 Python 算 RMS），显式排除后
-        # miniaudio 会自动退化为 array 路径，exe 体积直接瘦一圈。
-        "--exclude-module", "numpy",
-        "--exclude-module", "numpy.libs",
+        # v3.0.0 AI 逐字对齐：numpy 从「排除」改为「必需」。
+        #
+        # v2.7.0 当时排除它的理由已经不成立了 —— 那时候不用 numpy（本地对齐是纯 Python
+        # 算 RMS），PyInstaller 却顺着 miniaudio 的可选 import 把 numpy+numpy.libs
+        # （约 27MB）整包塞进去。现在 ctranslate2 / whisper 真的要用它，而且我们自己的
+        # `rms_fast` 也靠它把能量包络从十几秒降到几十毫秒。
+        #
+        # 代价：包体 +27MB。这个代价换来的是「AI 对齐真的能跑」，值得。
+        "--hidden-import", "numpy",
+        "--collect-submodules", "numpy",
+        # ctranslate2 的 DLL 是 C++ 扩展，PyInstaller 的 PE 依赖扫描抓不到
+        # libiomp5md.dll（Intel OpenMP）。缺它的表现是**加载模型直接 segfault**
+        # （exit 139、零输出、无异常），Phase 0 为此白查了半天。必须显式收。
+        "--collect-binaries", "ctranslate2",
+        "--collect-submodules", "ctranslate2",
+        "--hidden-import", "faster_whisper",
+        "--collect-submodules", "faster_whisper",
+        "--hidden-import", "tokenizers",
+        "--collect-submodules", "huggingface_hub",
         # 其余绝不使用的重量级库（未安装时为无害 no-op，装了也不会被打进去）
         "--exclude-module", "scipy",
         "--exclude-module", "pandas",
@@ -161,6 +174,11 @@ def _pyinstaller(onefile: bool) -> str:
         "--exclude-module", "soundfile",
         "--exclude-module", "lameenc",
         "--exclude-module", "pypinyin",
+        # AI 只用到「识别」这一条路，下面这些全是 faster-whisper 的可选依赖：
+        # onnxruntime 45MB（只被 VAD 用，我们 vad_filter=False）、
+        # hf_xet 9MB（镜像站不支持 Xet，Phase 0 实测 401）。排除后实测可用。
+        "--exclude-module", "onnxruntime",
+        "--exclude-module", "hf_xet",
     ]
     if onefile:
         cmd.append("--onefile")

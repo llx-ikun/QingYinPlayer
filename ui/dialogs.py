@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -235,3 +236,162 @@ class StorageMoveDialog(QDialog):
             self.worker.requestInterruption()
             self.worker.wait()
         super().closeEvent(event)
+
+
+class AiBatchAlignDialog(QDialog):
+    """全库批量 AI 逐字对齐（v3.0.0）。
+
+    设计取向：**逐首串行**，失败的记下来继续下一首，绝不因为一首失败就整体中断。
+    逐首而不是并行，理由是实测：whisper-base 单进程推理已能吃满几核，并行只会互相
+    抢 CPU 且内存翻倍（模型常驻约 500MB）；串行对用户更友好（进度可预测）。
+
+    关闭行为：正在跑的时候不允许关（`closeEvent` 忽略），否则就是「带活线程析构窗口」
+    那类崩溃的老坑。要停请点「停止」，它会跑完当前这首就结束，不再开始下一首。
+    """
+
+    finished_summary = Signal(int, int)      # (成功数, 失败数)
+
+    def __init__(self, items: list[tuple[str, str, str]], resolver, model_name: str,
+                 parent=None):
+        """`items` = `[(track_id, 显示名, 音频绝对路径)]`；`resolver(track_id)` 取同步歌词。"""
+        super().__init__(parent)
+        from app.lyrics_asr import LyricsAsrWorker
+
+        self._worker_cls = LyricsAsrWorker
+        self._queue = list(items)
+        self._resolver = resolver
+        self._model = model_name
+        self._index = 0
+        self._stop = False
+        self._ok = 0
+        self._failed: list[tuple[str, str]] = []
+        self._worker = None
+
+        self.setWindowTitle("批量 AI 对齐歌词")
+        self.setMinimumWidth(460)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 16)
+        root.setSpacing(10)
+
+        self.title_label = QLabel(f"共 {len(self._queue)} 首，逐首处理")
+        self.title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        root.addWidget(self.title_label)
+
+        self.stage_label = QLabel("准备中…")
+        self.stage_label.setObjectName("Dim")
+        self.stage_label.setWordWrap(True)
+        root.addWidget(self.stage_label)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, max(1, len(self._queue)))
+        self.bar.setValue(0)
+        root.addWidget(self.bar)
+
+        self.list = QListWidget()
+        self.list.setMinimumHeight(180)
+        root.addWidget(self.list, 1)
+        for _tid, name, _path in self._queue:
+            self.list.addItem(f"待处理 · {name}")
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.clicked.connect(self._on_stop)
+        buttons.addWidget(self.stop_btn)
+        self.close_btn = QPushButton("关闭")
+        self.close_btn.setObjectName("Primary")
+        self.close_btn.clicked.connect(self.close)
+        buttons.addWidget(self.close_btn)
+        root.addLayout(buttons)
+
+    # ---------- 流程 ----------
+
+    def start(self) -> None:
+        self._index = 0
+        self._start_next()
+
+    def _set_row(self, index: int, text: str) -> None:
+        item = self.list.item(index)
+        if item is not None:
+            item.setText(text)
+
+    def _start_next(self) -> None:
+        if self._stop or self._index >= len(self._queue):
+            self._finish()
+            return
+        track_id, name, path = self._queue[self._index]
+        self.bar.setValue(self._index)
+        self._set_row(self._index, f"进行中 · {name}")
+        self.title_label.setText(f"第 {self._index + 1} / {len(self._queue)} 首：{name}")
+
+        lines = []
+        try:
+            lines = self._resolver(track_id) or []
+        except Exception:  # noqa: BLE001 - 单首取歌词失败不该中断整批
+            lines = []
+        if not lines:
+            self._failed.append((name, "没有同步歌词，跳过"))
+            self._set_row(self._index, f"跳过 · {name}（没有同步歌词）")
+            self._index += 1
+            self._start_next()
+            return
+
+        worker = self._worker_cls(track_id, path, lines, self._model, parent=self)
+        worker.progress.connect(self._on_progress)
+        worker.done.connect(self._on_done)
+        worker.failed.connect(self._on_failed)
+        self._worker = worker
+        worker.start()
+
+    def _on_progress(self, _track_id: str, percent: int, stage: str) -> None:
+        self.stage_label.setText(f"{stage}… {percent}%")
+
+    def _on_done(self, _track_id: str, outcome) -> None:
+        _tid, name, _path = self._queue[self._index]
+        self._ok += 1
+        self._set_row(self._index, f"完成 · {name}（匹配 {outcome.matched_ratio:.0%}）")
+        self._index += 1
+        self._start_next()
+
+    def _on_failed(self, _track_id: str, message: str) -> None:
+        _tid, name, _path = self._queue[self._index]
+        self._failed.append((name, message))
+        self._set_row(self._index, f"失败 · {name}（{message}）")
+        self._index += 1
+        self._start_next()
+
+    def _on_stop(self) -> None:
+        self._stop = True
+        self.stop_btn.setEnabled(False)
+        self.stage_label.setText("正在停止：跑完当前这首就结束…")
+
+    def _finish(self) -> None:
+        self._worker = None
+        self.bar.setValue(len(self._queue))
+        self.stop_btn.setEnabled(False)
+        total = len(self._queue)
+        text = f"结束：成功 {self._ok} 首 / 共 {total} 首"
+        if self._failed:
+            text += f"，失败 {len(self._failed)} 首"
+        self.title_label.setText(text)
+        self.stage_label.setText("可以关闭窗口了")
+        self.finished_summary.emit(self._ok, len(self._failed))
+
+    # ---------- 关闭 ----------
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """跑着的时候不许关：带着活线程析构这个对话框就是崩溃。"""
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            event.ignore()
+            self.stage_label.setText("正在处理，先点「停止」再关闭")
+            return
+        super().closeEvent(event)
+
+    def fail_summary(self) -> str:
+        """失败清单（给主窗口做 toast 用，最多列 3 条）。"""
+        if not self._failed:
+            return ""
+        head = "；".join(f"{name}：{reason}" for name, reason in self._failed[:3])
+        more = f" 等 {len(self._failed)} 首" if len(self._failed) > 3 else ""
+        return head + more

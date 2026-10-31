@@ -815,37 +815,55 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py
 
 ### A. 数据模型与解析
 
-- [ ] **A1** `app/lyrics.py`：新增 `WordSpan`，`LyricLine` 增 `words` 字段（默认空，零回归）
-- [ ] **A2** 增强 LRC 逐字标签解析：`[mm:ss.xx]<mm:ss.xx>字` → 填 `words`
-- [ ] **A3** `app/paths.py`：`lyrics_words_dir()`；`DATA_SUBDIRS` 增 `lyrics_words`
-- [ ] **A4** `app/lyrics_words.py`：sidecar 读写（键=行 time_ms），坏数据逐条跳过
-- [ ] **A5** 单测：`tests/test_lyrics_words.py`（roundtrip / 坏 JSON / 键漂移防护）
+- [x] **A1** `app/lyrics.py`：新增 `WordSpan`，`LyricLine` 增 `words` 字段（默认空，零回归）
+- [x] **A2** 增强 LRC 逐字标签解析：`[mm:ss.xx]<mm:ss.xx>字` → 填 `words`
+  - 关键约束：段内文字不 strip（英文空格）；末尾空段=结尾戳补 `end_ms`；
+    首标签前的残留文字并入第一段；多时间标签按 `t - times[0]` 平移；**`offset` 同步平移逐字**
+- [x] **A3** `app/paths.py`：`lyrics_words_dir()`；`DATA_SUBDIRS` 增 `lyrics_words`
+- [x] **A4** `app/lyrics_words.py`：sidecar 读写（键=行 time_ms），坏数据逐条跳过
+  - 另含 `attach_words()`：贴回时校验「字元拼接 == 行文本」，不等则只丢该行
+- [x] **A5** 单测：`tests/test_lyrics_words.py`（**22 例**：roundtrip / 坏 JSON / 键漂移防护 / 文本不匹配丢弃）
+  - 验收：`test_lyrics_words` + `test_lyrics` + `test_lyrics_colors` + `test_lyrics_multi` 全绿 ✅
 
 ### B. 对齐引擎（依赖 P0）
 
-- [ ] **B1** `app/lyrics_asr.py`：L1 声道 mid 提取 + L2 faster-whisper 推理（延迟导入）
-- [ ] **B2** L3 `map_words_to_chars()`：difflib 序列比对，识别词 → 原文字级窗口
-- [ ] **B3** L4 能量谷吸附：复用 `rms_envelope` 微调字边界
-- [ ] **B4** L5 置信度自检：`matched_ratio` + 覆盖率，低于阈值返回 `low_confidence`
-- [ ] **B5** 单测：用**构造的**词时间戳验证 L3/L4/L5 纯逻辑（不依赖模型）
+- [x] **B1** `app/lyrics_asr.py`：L1 声道 mid 提取 + L2 faster-whisper 推理（延迟导入）
+  - L1 用 miniaudio 立体声解码取 `(L+R)/2`；左右几乎一致（伪立体声）时不提取，免得白降信噪比
+  - `ensure_model()` 首下（镜像 `hf-mirror.com`），`model_ready()` 要求 4 个文件齐全
+  - 真机实测：`transcribe` 跑通，6 词 / 2 秒音频 9.7s（含模型加载）
+- [x] **B2** L3 序列比对：difflib 把识别词映射回原文字级窗口（`_match_windows` + `_spread` + `_fill_gaps`）
+- [x] **B3** L4 能量谷吸附：`snap_to_energy()` ±120ms 找 RMS 极小点，受 `MIN_CHAR_MS` 保护
+  - 另加 `rms_fast()`：向量化 RMS，比纯 Python `rms_envelope` 快两个数量级（单测钉住两者同口径）
+- [x] **B4** L5 置信度自检：匹配率 <0.55 或平均概率 <0.25 → `low_confidence`，**不写盘**
+  - 真机验证：合成音（无人声）被 whisper 幻觉成「你认识了我吗」，p=0.02~0.48 → 正确拒绝
+- [x] **B5** 单测：`tests/test_lyrics_asr.py` **26 例**，全部用构造的词时间戳，不加载模型
+- [x] **B6**（临时新增）`retime_lines()`：用首字时刻重打行时间轴，为「行级 6.04s → <0.5s」备好手段
 
 ### C. 渲染接入
 
-- [ ] **C1** `ui/lyrics_panel.py`：`_typed_from_words()` 按字窗口求 `typed`；无 words 走原路径
-- [ ] **C2** 确保 karaoke 同步口径、颜色覆盖、band 逻辑在有 words 时仍正确
-- [ ] **C3** 单测：有/无 words 两条路径各自断言，且无 words 时输出与 v2.9.2 完全一致
+- [x] **C1** `ui/lyrics_panel.py`：`_typed_from_words()` 按字窗口求 `typed`；无 words 走原路径
+  - 实测：`_draw_line` 只认整数 `typed`，所以画法一行没改，只换 `typed` 来源（零风险根）
+- [x] **C2** 确保 karaoke 同步口径、颜色覆盖、band 逻辑在有 words 时仍正确
+  - 译文无词元 → 按 `typed/len(text)` 比例推进，与 v2.9.2 同口径；颜色覆盖路径完全正交
+- [x] **C3** 单测：有/无 words 两条路径各自断言，且无 words 时输出与 v2.9.2 完全一致
+  - `tests/test_widgets.py` 新增 6 例全绿；视觉探针 `tools/probe_lyrics_words.py` 复核
+    （2000ms：线性亮 4 字 / 逐字亮 7 字，与 stdout 一致）
 
 ### D. 界面与批量
 
-- [ ] **D1** 歌词右键「AI 对齐歌词（逐字）」，与「本地近似·免 Key」并列并标注精度
-- [ ] **D2** 设置→歌词页「AI 对齐」区：模型档位、批量入口、清空字级数据
-- [ ] **D3** 批量对齐对话框：逐首进度、可中断、失败清单不影响整体
-- [ ] **D4** 模型缺失/未下载时的引导与置灰（不允许静默失败）
+- [x] **D1** 歌词右键「AI 对齐歌词（逐字）」+「清除本曲逐字数据」，无同步歌词时置灰
+- [x] **D2** 设置→歌词页「AI 对齐」区：模型档位（tiny/base/small，默认 base）、批量入口、清空字级数据
+- [x] **D3** 批量对齐对话框 `AiBatchAlignDialog`：逐首串行、可停止、失败不中断并有清单
+  - 关闭保护：跑着时 `closeEvent` 忽略（避免带活线程析构）
+- [x] **D4** 模型缺失时弹「需要下载 XX MB」确认；失败收敛成中文 toast，绝不静默
 
 ### E. 打包与验收
 
-- [ ] **E1** `build.py`：解禁 numpy、加 ctranslate2/av/onnxruntime 的 collect 规则
-- [ ] **E2** 模型分发落地（按 P0-4 结论）
-- [ ] **E3** 全量回归（后台、独立进程）
+- [x] **E1** `build.py`：解禁 numpy + `--collect-binaries ctranslate2` + 排除 onnxruntime/hf_xet
+  - `av`（68MB）**本轮保留**：stub 顶替只省体积，但会让风险挪到运行时，必须单独验证
+- [x] **E2** 模型分发：运行时内置 + 首下到 `<数据根>/models/<档位>`（走 hf-mirror）
+- [x] **E3** 全量回归：**34 模块 / 746 用例全绿**，12m28s
 - [ ] **E4** `tools/eval_align.py` 量化对比：行级中位误差 6.04s → 目标 < 0.5s
-- [ ] **E5** 双产物 smoke + 真实平台；`--check` 输出 v3.0.0
+  - **卡在素材**：夹具全是合成音（无唱词），拿不到真值；`retime_lines()` 已备好手段
+- [x] **E5** 双产物 smoke + 真实平台；`--check` 输出 v3.0.0；onefile 122.8MB / onedir 11.4MB
+- [x] **E6**（临时新增）`main.py --check-ai`：用**冻结产物**验证模型能加载并推理 ✅

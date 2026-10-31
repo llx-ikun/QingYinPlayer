@@ -2211,10 +2211,14 @@ class LyricLine:
 
 持久化：`%APPDATA%/轻音播放器/lyrics_words/<track_id>.json`
 ```json
-{"version": 1, "model": "base-int8", "confidence": 0.87,
+{"version": 1,
  "lines": {"12345": [[12500, 12680, "故"], [12680, 12820, "事"]]}}
 ```
 键是行时间戳（与 `lyrics_colors` 同构，换歌词文件也不会错位到别的行）。
+`终点 == 0` 表示「终点未知」（增强 LRC 末段没有结尾戳），渲染按下一个字或行尾兜底。
+
+`model` / `confidence` **刻意先不落盘**：现在没有任何界面消费它们，存下来就是死字段；
+`version` 留好了，等 D2 要做「对齐质量」展示时再加字段即可，旧文件读起来不受影响。
 
 ### 40.6 渲染接入
 
@@ -2223,6 +2227,14 @@ class LyricLine:
 - 无 words → 现有 `_typed_split` 线性插值（karaoke 同步口径保持 v2.9.2 行为）
 
 颜色覆盖（v2.9.x）不动，两条路径正交。
+
+**关键实现取舍**：`_draw_line` 的接口只有一个整数 `typed`（`text[:typed]` + 按字宽算交界
+x），所以「逐字对齐」不需要碰任何画法，只需把 `typed` 的来源换掉 —— 这是零风险的根。
+`_typed_from_words()` 返回 `None` 表示「数据不可用」（时间倒退 / 空 / 行文本为空），
+调用方回退线性插值：**坏 sidecar 的后果只能是「退化」，不能是「乱跳」**。
+
+译文行没有自己的词元（数据模型里没有这个字段），按 `typed / len(text)` 的比例推进，
+与 v2.9.2 的「两行同步扫光」口径一致。
 
 ### 40.7 体积与模型分发（**需二次确认**）
 
@@ -2330,3 +2342,124 @@ class LyricLine:
    打包验证通过。
 7. **幻觉置信度可自动识别**：合成音（无语音）测试里 whisper 仍"听"出 7 个字，
    但 `probability` 只有 0.03~0.12。L5 自检用这个指标即可判「不可信」，无需人耳。
+
+### 40.14 Phase A / C 实施记录（2026-10-31，已完成 ✅）
+
+**A. 数据层**
+
+`app/lyrics.py`：
+- `WordSpan(start_ms, end_ms, text)` + `LyricLine.words`（默认空元组 = 零回归开关）。
+- `_parse_word_tags()` 解析增强 LRC 的行内 `<mm:ss.xx>`。四个必须守住的细节：
+  1. **段落不 strip**：英文靠空格分词，拆完拼回去必须与「删标签后的纯文本」逐字符相等；
+  2. **末尾空段 = 结尾时间戳**：`...事<00:13.00>` 那个标签没有后续文字，是给「事」补
+     `end_ms` 的，不能当成空词元塞进序列；
+  3. **首个标签前的残留文字并入第一段**：`前<00:01.00>奏` 里「前」没有自己的时间；
+  4. **`offset` 必须同步平移逐字**（漏了的话：行高亮到了、字还停在原地）。
+  另外一行挂多个时间标签（副歌重复）时，逐字按 `t - times[0]` 整体平移，
+  否则第二遍的逐字全挤在第一句的位置。
+- `merge_translations()` 保留原文那一行的 `words`；译文行的逐字标签丢弃（模型里没有
+  「译文词元」，硬塞会破坏「字元拼接 == 行文本」的对位前提）。
+
+`app/paths.py`：`lyrics_words_dir()` + `DATA_SUBDIRS` 增 `lyrics_words`
+（漏了这行 → 用户换数据目录时这份 sidecar 会被迁移逻辑孤立丢弃）。
+
+`app/lyrics_words.py`：sidecar 读写，接口 `load_line_words / save_line_words /
+attach_words / apply_track_words / save_from_lines / clear_song_words`。
+`attach_words()` 的硬门槛：**`words` 拼起来的字符串必须等于该行 `text`**，否则整行丢弃
+退回线性插值。理由：sidecar 可能配到被替换过的 .lrc 上，时间戳碰巧撞上、文本却不同，
+硬贴会让高亮按错误字数切片（表现为「扫光跑到句子中间」）。校验失败只影响该行。
+
+**C. 渲染接入**
+
+`ui/lyrics_panel.py`：
+- `_typed_from_words(words, text, position_ms, line_end_ms)`：按真实字时间窗求字符下标。
+  落在某字窗口内按比例折算并四舍五入；末字「终点未知」用已知窗口平均时长或行尾兜底；
+  时间不单调 / 空数据返回 `None` → 回退 `_typed_split`。
+- `_paint_block` 里 words 优先、译文按 `typed/len(text)` 比例推进；
+- `LyricsPanel._row_words()` / `_line_bounds()` 两个小助手，`_line_progress` 改用
+  `_line_bounds` 保证「逐字求解」与「句内进度」同源。
+- `ui/main_window.py::_load_lyrics` 显示时 `apply_track_words(synced, track.id)`，
+  缓存里存的是**没有**逐字数据的基准行 → 重新对齐后无需清缓存即可生效。
+
+**验证**
+- `tests/test_lyrics_words.py` 22 例；`tests/test_widgets.py` 新增 6 例，其中
+  `test_paint_block_without_words_keeps_v2_9_2` 断言「无 words 时与 v2.9.2 逐字节一致」。
+- `tools/probe_lyrics_words.py` 视觉探针：同一句、同一进度，两行分别是线性插值 /
+  逐字时间窗。2000ms（进度 50%）实测：线性亮到第 4 字「随记忆一」，逐字亮到第 7 字
+  「随记忆一直晃到」—— 与 stdout 打印的 `线性=4 / 逐字=7` 一致。
+  截图 `shots/lyrics_words_2000.png`。
+
+### 40.15 Phase B / D 实施记录（2026-10-31，已完成 ✅）
+
+**B. 对齐引擎 `app/lyrics_asr.py`**
+
+五层全部落地，**每一层的失败都只是一种降级，不是崩溃**：
+
+| 层 | 实现 | 失败时的行为 |
+|---|---|---|
+| L1 | `decode_for_asr()`：miniaudio 立体声解码 → `(L+R)/2` | 伪立体声/解码失败 → 退回单声道；`av` 完全不参与 |
+| L2 | `transcribe()`：faster-whisper int8，`word_timestamps=True` | 缺依赖/模型缺失 → 错误码，不抛异常 |
+| L3 | `_match_windows()` + `_spread()` + `_fill_gaps()`：difflib 三件套 | 匹配率低 → L5 拒绝整份结果 |
+| L4 | `snap_to_energy()`：±120ms 找 RMS 极小点 | 拿不到包络 → 跳过吸附，均分照用 |
+| L5 | 匹配率 `<0.55` 或平均概率 `<0.25` → `low_confidence` | **不写盘**，`lines` 原样返回 |
+
+关键决策与理由：
+
+1. **必须自己解码，不能把文件路径交给 whisper**。faster-whisper 1.2.1 走
+   `av.open(metadata_errors=...)`，而 av 19 已删掉该参数 → 直接 `TypeError`。
+   自己解码成 numpy 数组喂进去既绕开这个雷，又顺带做了 L1，还让 `av`（68MB）
+   将来可以从安装包里整个排除。
+2. **L3 用 difflib 而不是「按字数比例切分」**。唱歌时 whisper 必错字，但错的只是
+   **文本**；`SequenceMatcher` 会把错字当成插入/删除跳过，剩下的匹配块照样给出时间。
+   单测里「黄→苦」听错一个字，匹配率 5/6 仍然过门槛，逐字数据完整。
+3. **`_spread()` 不能省**。一个中文词往往 2~3 个字共享一个词窗，不拆开的话
+   「故事的小黄花」会整句同时亮，逐字效果直接退化成整行。
+4. **`_fill_gaps()` 靠邻居插值**。只识别出前半句时，后半句按最后一个字的结束时间
+   外推，保证 `words` 覆盖整行 —— 渲染层要求「字元拼接 == 行文本」。
+5. **`rms_fast()` 取代 `rms_envelope()`**。后者是纯 Python 双重循环，4 分钟歌要过
+   960 万个采样点（十几秒）；向量化后用平方累积和做滑窗，几十毫秒。单测直接比对
+   两者输出，钉死「同口径」。
+6. **`retime_lines()` 是「行级 6.04s → <0.5s」的落点**，但**当前不自动写回 .lrc**：
+   改用户的歌词文件属于破坏性动作，需要先确认。界面在偏差 >1s 时会明确提示
+   「行时间偏了 X 秒，建议先用逐句打轴校正」，不假装对齐成功了。
+
+**真机验证（合成音频，无人声）**：
+whisper-base 仍幻觉出「你认识了我吗」，`probability` 只有 0.02~0.48 →
+L3 匹配率 0% → L5 判定 `low_confidence`，`words` 保持空元组。
+**这正是设计要的结果：宁可不给，也别给错。**
+
+**D. 界面**
+
+- 歌词右键：「AI 对齐歌词（逐字）」+「清除本曲逐字数据」，无同步歌词时置灰
+  （AI 对齐解决的是「字在什么时候亮」，行时间轴得先有 —— 文案与置灰状态都说明这点）。
+- 设置 → 歌词与统计：「AI 逐字对齐」区（档位 tiny/base/small + 批量入口 + 清空字级数据）。
+- 批量 `AiBatchAlignDialog`：逐首串行（并行只会抢 CPU 且内存翻倍）、失败不中断、
+  可停止、失败有清单；**跑着的时候 `closeEvent` 直接忽略**，避免带活线程析构。
+- 打开批量**不预扫全库**：`_resolve_lyrics` 每首都可能触发 mutagen 读标签，
+  几千首会把界面卡住；改成对话框逐首判断，没有歌词的标「跳过」。
+- 模型缺失 → 弹「需要下载 XX MB」确认后再下（142MB 不该在用户不知情时发生）；
+  下载在 worker 里做，界面不冻。
+
+### 40.16 Phase E 验收记录（2026-10-31）
+
+| 验收项（40.9） | 结果 |
+|---|---|
+| 零回归：`words` 为空的歌与 v2.9.2 逐字节一致 | ✅ 单测 `test_paint_block_without_words_keeps_v2_9_2` 直接对比 `_typed_split` 输出 |
+| 兜底可用：拔掉模型 → AI 项不可用且不静默 | ✅ 菜单项按「有无同步歌词」置灰；模型缺失弹下载确认；失败收敛成中文 toast |
+| 全量回归全绿 | ✅ **34 模块 / 746 用例**，12m28s |
+| ruff 干净 | ✅ `All checks passed!` |
+| 打包 smoke 通过 | ✅ onefile + onedir 双产物，含音频解码 smoke + 真实平台 8s 不崩 |
+| `--check` 输出 v3.0.0 | ✅ |
+| **打包后能加载模型**（Phase 0 的最大风险） | ✅ **用冻结产物实跑 `--check-ai`：import OK / 模型就绪 / 解码 OK / 推理 OK** |
+| 行级误差 6.04s → <0.5s（`tools/eval_align.py`） | ⏳ 待办：需要一首**真人声**的歌做真值对比，现有夹具全是合成音（无唱词），无法量化 |
+| 字级偏差 <200ms（人工抽 3 首） | ⏳ 同上，等真实音频 |
+
+**体积**：onefile 56.8MB → **122.8MB**（+66MB，AI 增量）。
+onefile 压缩后仍比预估的 164MB 增量小，因为 DLL 压缩率不错。
+`av`（68MB）本轮**没有**用 stub 顶掉 —— 这条优化只省体积，但会让「打包后 import av
+到底行不行」变成运行时才暴露的风险，必须单独验证，不能塞进这一版一起上。
+
+**新增诊断入口**：`main.py --check-ai <模型目录> [音频]`。
+windowed 产物没有 `sys.stdout`，所以报告写到 `%TEMP%\qy_ai_check.txt`。
+它的存在理由就是上面那个打勾项 —— 「冻结后加载模型 segfault」这种失败**不抛异常、
+不打印任何东西**，只能靠一个能跑通的命令来证伪。

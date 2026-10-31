@@ -56,6 +56,8 @@ from app.lyrics import (LyricLine, format_lrc, is_structure_marker, lyrics_from_
 from app.lyrics_align import sidecar_lrc_path, write_sidecar_lrc
 from app.lyrics_colors import (clear_line_color, clear_song_colors,
                                load_line_colors, set_line_color)
+from app.lyrics_asr import LyricsAsrWorker, model_dir_for, model_ready
+from app.lyrics_words import apply_track_words, clear_all_words, clear_song_words
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
 from app.lyrics_multi import DEFAULT_SOURCES, MultiSourceWorker
@@ -63,7 +65,8 @@ from app.lyrics_online import (build_web_search_url, clear_miss,
                                read_cache, read_miss, write_cache, write_miss)
 from app.metadata import read_track
 from app.library import is_in_library
-from app.models import PLAYLIST_FAVORITES, PLAYLIST_LIBRARY, PLAYLIST_RECENT, BackgroundConfig, Track
+from app.models import (LYRICS_AI_MODEL_SIZES, PLAYLIST_FAVORITES, PLAYLIST_LIBRARY,
+                        PLAYLIST_RECENT, BackgroundConfig, Track)
 from app.paths import covers_dir, data_file, library_dir
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
@@ -173,6 +176,9 @@ class MainWindow(QMainWindow):
         self._lyrics_workers: dict[str, MultiSourceWorker] = {}
         # 歌词本地近似对齐（v2.6.9）：纯文本 → LRC，同一首同时只跑一个
         self._align_workers: dict[str, LyricsLocalAlignWorker] = {}
+        # AI 逐字对齐（v3.0.0）：单曲后台任务，同一首同时只跑一个
+        self._asr_workers: dict[str, LyricsAsrWorker] = {}
+        self._last_asr_percent = -1
         # 逐句打轴（v2.7.4）：打轴中的行与已打时间戳；结束后要么写 .lrc、要么丢弃
         self._tapping = False
         self._tap_rows: list[tuple[str, str]] = []      # (原文, 译文)
@@ -403,6 +409,9 @@ class MainWindow(QMainWindow):
         # 歌词区右键「转成 .lrc 文件（本地近似对齐）」：纯文本 → 带时间轴 LRC
         self.now_playing.lyrics.align_local_requested.connect(
             self._align_lyrics_local_for_current)
+        # 歌词区右键「AI 对齐歌词（逐字）」（v3.0.0）：本地 whisper 给每个字真实时刻
+        self.now_playing.lyrics.align_ai_requested.connect(self._align_lyrics_ai_for_current)
+        self.now_playing.lyrics.words_clear_requested.connect(self._clear_words_for_current)
         # 歌词区右键「整体提前/延后 0.5 秒」（v2.6.12）：对齐后的系统性偏移微调
         self.now_playing.lyrics.shift_lyrics_requested.connect(
             self._shift_current_lyrics)
@@ -674,7 +683,10 @@ class MainWindow(QMainWindow):
             self._lyrics_cache[track.id] = cached
         synced, plain, source = cached
         if synced:
-            self.now_playing.set_synced(synced)
+            # v3.0.0：贴回逐字时间轴（AI 对齐 sidecar）。缓存里存的是**没有**逐字数据
+            # 的基准行，每次显示时才贴——重新对齐后无需清缓存也能立刻生效。
+            # 贴回要过文本校验，对不上就整行回退线性插值（见 app/lyrics_words.py）。
+            self.now_playing.set_synced(apply_track_words(synced, track.id))
             self.now_playing.set_source(source)
         elif plain:
             self.now_playing.set_plain(plain)
@@ -1108,6 +1120,152 @@ class MainWindow(QMainWindow):
     def _on_align_done_local(self, track_id: str, lrc: str) -> None:
         self._apply_aligned_lrc(track_id, lrc, soft_fail=False,
                                 source_label="来源：本地对齐", approx=True)
+
+    # ---------- v3.0.0 AI 逐字对齐 ----------
+
+    def _align_lyrics_ai_for_current(self) -> None:
+        """右键「AI 对齐歌词（逐字）」：本地 whisper 给每个字钉真实时刻。
+
+        前置条件只有一条：这首歌**已经有带时间轴的歌词**。AI 对齐做的是「把字的时刻算准」，
+        行时间轴还是得先有（批量给人声打轴是另一件事，见 TASK.md 遗留）。
+        没有同步歌词时给出明确指引，而不是默默什么都不做。
+        """
+        track = self.player.current_track
+        if track is None:
+            self._toast("先播放一首歌再用 AI 对齐", 2500)
+            return
+        if track.id in self._asr_workers:
+            self._toast("这首歌正在 AI 对齐中，请稍候", 2000)
+            return
+        synced = (self._lyrics_cache.get(track.id) or self._resolve_lyrics(track))[0]
+        if not synced:
+            self._toast("AI 对齐需要带时间轴的歌词：先导入 .lrc，或用「转成 .lrc 文件」", 4500)
+            return
+        model = self.store.settings.lyrics_ai_model
+        if not model_ready(model_dir_for(model)) and not self._confirm_ai_model_download(model):
+            return
+        worker = LyricsAsrWorker(track.id, track.path, synced, model, parent=self)
+        worker.progress.connect(self._on_asr_progress)
+        worker.done.connect(self._on_asr_done)
+        worker.failed.connect(self._on_asr_failed)
+        worker.finished.connect(lambda tid=track.id: self._asr_workers.pop(tid, None))
+        self._asr_workers[track.id] = worker
+        self._last_asr_percent = -1
+        worker.start()
+        self._toast("AI 对齐已开始，可以继续播放", 3000)
+
+    def _confirm_ai_model_download(self, model: str) -> bool:
+        """模型没下载时先问一句。142MB 的下载不该在用户不知情时发生。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("需要先下载 AI 模型")
+        box.setText(
+            f"AI 逐字对齐需要模型「{model}」（约占 {LYRICS_AI_MODEL_SIZES.get(model, '?')}）。\n"
+            "只在第一次使用时下载一次，之后完全离线。\n\n"
+            "继续下载吗？")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _on_asr_progress(self, track_id: str, percent: int, stage: str) -> None:
+        current = self.player.current_track
+        if current is None or current.id != track_id:
+            return
+        # 推理时每段都会报进度，全量播会在几秒内刷几十条 toast。
+        # 只在百分比前进 5% 以上时更新一次。
+        if percent < self._last_asr_percent + 5 and percent < 100:
+            return
+        self._last_asr_percent = percent
+        self._toast(f"{stage}… {percent}%", 4000)
+
+    def _on_asr_done(self, track_id: str, outcome) -> None:
+        # 缓存里存的是没有逐字数据的基准行，丢掉它让下次显示重新贴一遍
+        self._lyrics_cache.pop(track_id, None)
+        current = self.player.current_track
+        if current is not None and current.id == track_id:
+            self._load_lyrics(current)
+        message = f"AI 逐字对齐完成（匹配率 {outcome.matched_ratio:.0%}）"
+        shift = int(getattr(outcome, "max_shift_ms", 0) or 0)
+        if shift > 1000:
+            # 字级数据对了，但行时间本身偏了几秒 —— 逐字效果会跟着错位。
+            # 这个必须说出来，否则用户只会觉得「AI 对齐没用」。
+            message += (f"；但这首歌的行时间整体偏了 {shift / 1000:.1f} 秒，"
+                        "逐字效果会跟着偏，建议先用「逐句打轴」校正行时间")
+        self._toast(message, 6000)
+
+    def _on_asr_failed(self, track_id: str, message: str) -> None:
+        self._toast(f"AI 对齐失败：{message}", 6000)
+
+    def _clear_words_for_current(self) -> None:
+        """右键「清除本曲逐字数据」：退回按行匀速扫光。"""
+        track = self.player.current_track
+        if track is None:
+            return
+        clear_song_words(track.id)
+        self._lyrics_cache.pop(track.id, None)
+        self._load_lyrics(track)
+        self._toast("已清除本曲逐字数据", 2500)
+
+    def _on_settings_ai_model(self, name: str) -> None:
+        if self.store.settings.lyrics_ai_model == name:
+            return
+        self.store.settings.lyrics_ai_model = name
+        self.store.save()
+        # 没说「已切换」就算失败：切换只是改设置，模型仍要等用到时才下载。
+        self._toast(f"AI 模型已切换为 {name}（首次使用时会下载）", 3500)
+
+    def _clear_all_words(self) -> None:
+        removed = clear_all_words()
+        self._lyrics_cache.clear()          # 全清了，缓存里的歌词也要重新贴一遍
+        track = self.player.current_track
+        if track is not None:
+            self._load_lyrics(track)
+        self._toast(f"已清空 {removed} 首歌的逐字数据", 3000)
+
+    def _open_ai_batch(self) -> None:
+        """设置页「全库批量对齐」。
+
+        **不在打开时预扫全库**：`_resolve_lyrics` 每首都可能触发 mutagen 读标签，
+        几千首的曲库会把界面卡住几十秒。改成把「这首有没有同步歌词」交给对话框
+        逐首判断 —— 反正它本来就是逐首跑的，没有歌词的直接标「跳过」。
+        """
+        # store.tracks 是 dict[str, Track]，不是 list —— 直接迭代拿到的是 id 字符串
+        items = [(track.id, track.display_title, track.path)
+                 for track in self.store.tracks.values() if not track.is_video]
+        if not items:
+            self._toast("曲库里还没有歌曲", 3000)
+            return
+        model = self.store.settings.lyrics_ai_model
+        if not model_ready(model_dir_for(model)) and not self._confirm_ai_model_download(model):
+            return
+        from ui.dialogs import AiBatchAlignDialog
+
+        dialog = AiBatchAlignDialog(
+            items, self._resolve_lyrics_for, model, self)
+        dialog.finished_summary.connect(self._on_ai_batch_finished)
+        dialog.start()
+        dialog.exec()
+
+    def _resolve_lyrics_for(self, track_id: str) -> list[LyricLine]:
+        """按 track_id 取同步歌词（批量对齐用）。走缓存，避免每首都重读文件。"""
+        cached = self._lyrics_cache.get(track_id)
+        if cached is None:
+            track = self.store.get_track(track_id)
+            if track is None:
+                return []
+            cached = self._resolve_lyrics(track)
+            self._lyrics_cache[track_id] = cached
+        return cached[0]
+
+    def _on_ai_batch_finished(self, ok: int, failed: int) -> None:
+        # 批量刚跑完：清掉歌词缓存，让当前这首立刻用上新数据
+        self._lyrics_cache.clear()
+        track = self.player.current_track
+        if track is not None:
+            self._load_lyrics(track)
+        message = f"批量对齐结束：成功 {ok} 首"
+        if failed:
+            message += f"，失败 {failed} 首"
+        self._toast(message, 6000)
 
     def _apply_aligned_lrc(self, track_id: str, lrc: str, soft_fail: bool,
                            source_label: str, approx: bool = False) -> None:
@@ -1543,7 +1701,8 @@ class MainWindow(QMainWindow):
                                             "now_playing": s.bg_now},
                                 bg_scope=self._current_bg_page(),
                                 lyrics_effect=s.lyrics_effect,
-                                lyrics_color=s.lyrics_color)
+                                lyrics_color=s.lyrics_color,
+                                ai_model=s.lyrics_ai_model)
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
         dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
@@ -1551,6 +1710,9 @@ class MainWindow(QMainWindow):
         dialog.font_scale_changed.connect(self._on_settings_font_scale)
         dialog.lyrics_effect_changed.connect(self._on_settings_lyrics_effect)
         dialog.lyrics_color_changed.connect(self._on_settings_lyrics_color)
+        dialog.ai_model_changed.connect(self._on_settings_ai_model)
+        dialog.ai_batch_requested.connect(self._open_ai_batch)
+        dialog.words_clear_requested.connect(self._clear_all_words)
         dialog.background_changed.connect(self._on_settings_background)
         dialog.storage_changed.connect(self._on_storage_changed)
         dialog.exec()
@@ -2055,6 +2217,14 @@ class MainWindow(QMainWindow):
             worker.requestInterruption()
         for worker in list(self._align_workers.values()):
             worker.wait(5000)
+        # AI 对齐（v3.0.0）：解码 + 推理可能跑几十秒，同样先喊停再等。
+        # 等待上限给 8000：模型加载那一步不可中断（ctranslate2 内部循环），
+        # 卡在加载时 5 秒不一定够。
+        for worker in list(self._asr_workers.values()):
+            worker.requestInterruption()
+        for worker in list(self._asr_workers.values()):
+            worker.wait(8000)
+        self._asr_workers.clear()
         self._align_workers.clear()
         self.player.stop()
         self.store.save()

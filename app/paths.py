@@ -29,7 +29,8 @@ PORTABLE_MARKER = "data"            # 软件目录下这个文件夹存在 = 便
 POINTER_NAME = "location.txt"       # 默认目录里的「数据实际位置」指针
 
 # 由迁移逻辑负责搬运的子项（供 storage.migrate 使用）
-DATA_SUBDIRS = ("covers", "library", "lyrics_cache", "bgs", "lyrics_colors")
+DATA_SUBDIRS = ("covers", "library", "lyrics_cache", "bgs", "lyrics_colors",
+                "lyrics_words", "models")
 
 
 def _frozen() -> bool:
@@ -208,3 +209,24 @@ def lyrics_colors_dir() -> str:
     这些颜色仍留在原曲名下。
     """
     return _subdir("lyrics_colors")
+
+
+def lyrics_words_dir() -> str:
+    """逐曲「逐字时间轴」sidecar 目录（v3.0.0 AI 对齐产物）。
+
+    每首歌一个 `<track_id>.json`，存「行时间戳 -> 每字起止」的映射。与
+    `lyrics_colors_dir()` 同理：对齐结果不能塞进通用 .lrc，否则外部播放器会看到
+    一堆不认识的行内标签；而且重新联网/换一份 .lrc 时逐字数据不该跟着丢。
+    """
+    return _subdir("lyrics_words")
+
+
+def models_dir() -> str:
+    """AI 模型目录（v3.0.0）：`<数据根>/models/<档位>/`。
+
+    走进数据目录而不是软件目录的两个理由：① onefile 打包后软件目录可能是只读的
+    临时解压目录；② 模型 142MB，跟着数据目录一起搬走比「换个位置就得重下」友好。
+    这也是 `DATA_SUBDIRS` 收录 `models` 的原因 —— 迁移时漏了它，用户换盘后
+    会莫名其妙被要求重新下载一次。
+    """
+    return _subdir("models")

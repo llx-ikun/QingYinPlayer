@@ -159,5 +159,43 @@ class TestResourcePath(unittest.TestCase):
         self.assertTrue(os.path.isfile(expected))
 
 
+class TestAiCheckCommand(unittest.TestCase):
+    """`main.py --check-ai`（v3.0.0）：打包后验证「模型能不能加载」的唯一手段。
+
+    这条命令的价值在于 windowed 产物没有 stdout，只能靠它把结论写进文件；
+    所以它自己**不能崩** —— 参数给错、模型缺失都得返回正常的结果码。
+    """
+
+    def test_runs_without_model(self) -> None:
+        import main as main_mod
+        from unittest import mock
+
+        with mock.patch.object(main_mod, "AI_CHECK_REPORT", os.devnull):
+            code = main_mod._check_ai(["main.py", "--check-ai"])
+        self.assertEqual(code, 0, "没有给模型目录时应只是跳过推理，不算失败")
+
+    def test_missing_audio_reports_code_2(self) -> None:
+        import main as main_mod
+        from unittest import mock
+
+        with mock.patch.object(main_mod, "AI_CHECK_REPORT", os.devnull):
+            code = main_mod._check_ai(["main.py", "--check-ai", "", "no_such_file.mp3"])
+        self.assertEqual(code, 2)
+
+    def test_report_file_written(self) -> None:
+        import tempfile
+
+        import main as main_mod
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "r.txt")
+            with mock.patch.object(main_mod, "AI_CHECK_REPORT", out):
+                main_mod._check_ai(["main.py", "--check-ai"])
+            self.assertTrue(os.path.isfile(out))
+            with open(out, encoding="utf-8") as f:
+                self.assertIn("AI 自检", f.read())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,18 @@ PLAY_MODES = (MODE_SEQUENTIAL, MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE)
 # karaoke 颜色随进度逐渐覆盖。单选，值持久化进 Settings.lyrics_effect。
 LYRICS_EFFECTS = ("none", "zoom", "typewriter", "karaoke")
 
+# AI 逐字对齐的模型档位（v3.0.0）。体积 / 精度 / 速度三档权衡，默认 base：
+#   tiny  ~75MB   最快，中文识别勉强，字边界容易飘
+#   base  ~142MB  默认档，日常足够
+#   small ~480MB  明显更准，代价是首下与推理都翻几倍
+# 值持久化进 Settings.lyrics_ai_model；实际目录由 `app.lyrics_asr.model_dir_for` 解析。
+LYRICS_AI_MODELS = ("tiny", "base", "small")
+LYRICS_AI_MODEL_LABELS = {"tiny": "tiny · 75MB 最快", "base": "base · 142MB 推荐",
+                          "small": "small · 480MB 最准"}
+# 下载前要告诉用户多大，别在设置里只写个名字
+LYRICS_AI_MODEL_SIZES = {"tiny": "75MB", "base": "142MB", "small": "480MB"}
+DEFAULT_AI_MODEL = "base"
+
 # 虚拟歌单标识
 PLAYLIST_LIBRARY = "__library__"   # 音乐库
 PLAYLIST_RECENT = "__recent__"     # 最近播放
@@ -348,6 +360,7 @@ class Settings:
     accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
     font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
     lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/zoom/typewriter/karaoke）
+    lyrics_ai_model: str = DEFAULT_AI_MODEL   # v3.0.0：AI 逐字对齐的模型档位
     lyrics_color: LyricsColorConfig = field(default_factory=LyricsColorConfig)  # v2.9.0
     # v2.2 自定义背景：三个作用域（全部 / 列表页 / 正在播放页）
     bg_all: BackgroundConfig = field(default_factory=BackgroundConfig)
@@ -384,6 +397,7 @@ class Settings:
             "accent_color": self.accent_color,
             "font_scale": self.font_scale,
             "lyrics_effect": self.lyrics_effect,
+            "lyrics_ai_model": self.lyrics_ai_model,
             "lyrics_color": self.lyrics_color.to_dict(),
             "bg": {
                 "all": self.bg_all.to_dict(),
@@ -418,6 +432,9 @@ class Settings:
         s.font_scale = _as_float(d.get("font_scale"), 1.0, 0.5, 3.0)
         effect = d.get("lyrics_effect")
         s.lyrics_effect = effect if effect in LYRICS_EFFECTS else "none"
+        ai_model = d.get("lyrics_ai_model")
+        # 老数据没有这个字段 → 默认档；写了不认识的档位也回默认（别让界面拿到空值）
+        s.lyrics_ai_model = ai_model if ai_model in LYRICS_AI_MODELS else DEFAULT_AI_MODEL
         s.lyrics_color = LyricsColorConfig.from_dict(d.get("lyrics_color") or {})
         bg = d.get("bg") or {}
         if isinstance(bg, dict):

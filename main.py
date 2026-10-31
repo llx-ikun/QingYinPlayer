@@ -2,8 +2,10 @@
 """轻音播放器 —— 本地音乐播放器入口。
 
 用法：
-    python main.py          启动应用
-    python main.py --check  环境自检（不加载 GUI）
+    python main.py                         启动应用
+    python main.py --check                 环境自检（不加载 GUI）
+    python main.py --check-ai <模型目录> [音频]
+                                           AI 对齐链路自检（不加载 GUI，报告写文件）
 """
 import os
 import sys
@@ -14,6 +16,64 @@ from PySide6.QtGui import QIcon
 # 原来 APP_VERSION 只在本文件定义，而 ui/main_window.py 里另写死了一个
 # "v2.6.12" —— 两个数字各说各话，界面显示永远是旧的。
 from app.version import APP_NAME, APP_VERSION
+
+# `--check-ai` 报告落点。为什么写文件而不是 print：windowed 打包产物里
+# sys.stdout 是 None，print 出去的诊断信息直接消失，最适合「打包后到底能不能
+# 加载模型」这种只能在产物里验证的问题。
+AI_CHECK_REPORT = os.path.join(
+    os.environ.get("TEMP") or os.environ.get("TMP") or ".", "qy_ai_check.txt")
+
+
+def _check_ai(argv: list[str]) -> int:
+    """验证 AI 对齐链路（v3.0.0）：能 import 组件、能加载模型、能推理出词级时间戳。
+
+    为什么需要这个入口：`ctranslate2` 在 PyInstaller 产物里加载模型会 segfault
+    （Phase 0 实测，4.8.4 必崩、4.6.0 正常），这种失败**不抛异常、不打印任何东西**，
+    只能靠一个能跑通的诊断命令来证明。开发态和打包态都能用同一个命令对比。
+    """
+    args = [a for a in argv[argv.index("--check-ai") + 1:] if not a.startswith("--")]
+    model_dir = args[0] if args else ""
+    audio = args[1] if len(args) > 1 else ""
+    lines = [f"{APP_NAME} v{APP_VERSION} AI 自检"]
+    code = 0
+    try:
+        from app import lyrics_asr as la
+        lines.append(f"import app.lyrics_asr OK（默认档位 {la.DEFAULT_AI_MODEL}）")
+        lines.append(f"模型目录存在: {os.path.isdir(model_dir)}  就绪: {la.model_ready(model_dir)}")
+        if audio:
+            if not os.path.isfile(audio):
+                lines.append(f"音频不存在: {audio}")
+                code = 2
+            else:
+                pcm, sr = la.decode_for_asr(audio)
+                lines.append(f"解码 OK: {len(pcm) / sr:.2f}s @ {sr}Hz")
+                outcome = None
+                if la.model_ready(model_dir):
+                    outcome = la.transcribe(audio, model_dir, "zh",
+                                            predecoded=(pcm, sr))
+                    if outcome.ok:
+                        lines.append(f"推理 OK: 语言 {outcome.language} "
+                                     f"时长 {outcome.duration_ms}ms 词数 {len(outcome.words)}")
+                        for word in outcome.words[:5]:
+                            lines.append(f"  {word.start_ms}~{word.end_ms} "
+                                         f"p={word.probability:.2f} {word.text!r}")
+                    else:
+                        # 没有语音内容 / 置信度低不算「环境坏了」，只是这份音频对不上
+                        lines.append(f"推理返回: {outcome.error} {outcome.detail}")
+                else:
+                    lines.append("模型未就绪，跳过推理")
+    except Exception as exc:  # noqa: BLE001 - 自检要把崩溃原因也写下来
+        lines.append(f"失败: {type(exc).__name__}: {exc}")
+        code = 1
+    text = "\n".join(lines)
+    try:
+        with open(AI_CHECK_REPORT, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except OSError:
+        pass
+    print(text)
+    print(f"报告: {AI_CHECK_REPORT}")
+    return code
 
 
 def _resolve_app_icon() -> str | None:
@@ -30,6 +90,9 @@ def _apply_app_icon(app) -> None:
 
 
 def main() -> int:
+    if "--check-ai" in sys.argv:
+        return _check_ai(sys.argv)
+
     if "--check" in sys.argv:
         print(f"{APP_NAME} v{APP_VERSION} (Python {sys.version.split()[0]})")
         try:

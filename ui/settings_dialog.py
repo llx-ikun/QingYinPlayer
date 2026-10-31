@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 
 from app import paths as app_paths
 from app.library import import_background
-from app.models import BackgroundConfig, LYRICS_EFFECTS, LyricsColorConfig
+from app.models import (DEFAULT_AI_MODEL, LYRICS_AI_MODEL_LABELS, LYRICS_AI_MODELS,
+                        BackgroundConfig, LYRICS_EFFECTS, LyricsColorConfig)
 from app.paths import bgs_dir
 from app.version import APP_NAME, version_text
 from ui import theme as ui_theme
@@ -142,6 +143,9 @@ class SettingsDialog(QDialog):
     font_scale_changed = Signal(float)
     lyrics_effect_changed = Signal(str)  # none / zoom / typewriter / karaoke
     lyrics_color_changed = Signal(object)  # v2.9.0：LyricsColorConfig
+    ai_model_changed = Signal(str)       # v3.0.0：AI 逐字对齐的模型档位
+    ai_batch_requested = Signal()        # v3.0.0：打开全库批量对齐对话框
+    words_clear_requested = Signal()     # v3.0.0：清空全部字级数据
     background_changed = Signal(str, object)   # (作用域, BackgroundConfig)
     storage_changed = Signal(str)        # 数据目录搬到的新位置（需重启生效）
 
@@ -149,7 +153,8 @@ class SettingsDialog(QDialog):
                  online_lyrics: bool = True, accent_color: str = "",
                  font_scale: float = 1.0, bg_configs: dict | None = None,
                  bg_scope: str = "all", lyrics_effect: str = "none",
-                 lyrics_color: LyricsColorConfig | None = None):
+                 lyrics_color: LyricsColorConfig | None = None,
+                 ai_model: str = DEFAULT_AI_MODEL):
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
@@ -160,6 +165,7 @@ class SettingsDialog(QDialog):
         self._lyrics_effect = lyrics_effect if lyrics_effect in LYRICS_EFFECTS else "none"
         self._lyrics_color = LyricsColorConfig.from_dict(
             lyrics_color.to_dict() if isinstance(lyrics_color, LyricsColorConfig) else {})
+        self._ai_model = ai_model if ai_model in LYRICS_AI_MODELS else DEFAULT_AI_MODEL
         self._loading = False
         self._bg_scope = bg_scope if bg_scope in ("all", "library", "now_playing") else "all"
         self._bg: dict[str, BackgroundConfig] = {}
@@ -427,10 +433,47 @@ class SettingsDialog(QDialog):
         effect_hint.setWordWrap(True)
         root.addWidget(effect_hint)
 
+        # ---- AI 逐字对齐（v3.0.0）----
+        #
+        # 放在这里而不是单独开一页：它和「歌词动效」「颜色覆盖」是同一件事的三个侧面
+        # （字怎么动 / 字什么颜色 / 字在什么时候亮），分散到两页反而找不到。
+        root.addSpacing(8)
+        root.addWidget(QLabel("AI 逐字对齐"))
+        ai_row = QHBoxLayout()
+        ai_row.setSpacing(10)
+        ai_row.addWidget(QLabel("模型档位"))
+        self.ai_model_combo = ChevronComboBox()
+        self.ai_model_combo.setObjectName("FontScaleCombo")
+        for name in LYRICS_AI_MODELS:
+            self.ai_model_combo.addItem(LYRICS_AI_MODEL_LABELS.get(name, name), name)
+        self.ai_model_combo.setCurrentIndex(
+            max(0, self.ai_model_combo.findData(self._ai_model)))
+        self.ai_model_combo.currentIndexChanged.connect(self._on_ai_model_combo)
+        ai_row.addWidget(self.ai_model_combo)
+        ai_row.addStretch(1)
+        root.addLayout(ai_row)
+        ai_hint = QLabel("本地识别演唱、把每个字钉到真实时刻（误差约 ±80ms）。"
+                         "首次使用需下载模型，之后完全离线；换档位需重新下载。")
+        ai_hint.setObjectName("Dim")
+        ai_hint.setWordWrap(True)
+        root.addWidget(ai_hint)
+
+        ai_buttons = QHBoxLayout()
+        ai_buttons.setSpacing(8)
+        batch_btn = QPushButton("全库批量对齐…")
+        batch_btn.setToolTip("逐首跑 AI 对齐，可随时中断；失败的会列出来，不影响其他歌")
+        batch_btn.clicked.connect(self.ai_batch_requested.emit)
+        ai_buttons.addWidget(batch_btn)
+        clear_btn = QPushButton("清空字级数据")
+        clear_btn.setToolTip("删掉所有歌的逐字时间轴，退回按行匀速扫光")
+        clear_btn.clicked.connect(self._on_clear_words)
+        ai_buttons.addWidget(clear_btn)
+        ai_buttons.addStretch(1)
+        root.addLayout(ai_buttons)
+
         # ---- 歌词颜色覆盖（v2.9.0）：只作用于正在播放页的当前这一句 ----
         root.addSpacing(8)
         root.addWidget(QLabel("歌词颜色覆盖"))
-
         self.color_enabled_box = QCheckBox("启用（只作用于正在播放页当前这句）")
         self.color_enabled_box.setChecked(self._lyrics_color.enabled)
         self.color_enabled_box.toggled.connect(self._on_color_enabled)
@@ -692,6 +735,24 @@ class SettingsDialog(QDialog):
         value = self.effect_combo.itemData(index)
         if value is not None and not self._loading:
             self.lyrics_effect_changed.emit(value)
+
+    # ---------- AI 逐字对齐（v3.0.0） ----------
+
+    def _on_ai_model_combo(self, index: int) -> None:
+        value = self.ai_model_combo.itemData(index)
+        if value is not None and not self._loading:
+            self.ai_model_changed.emit(value)
+
+    def _on_clear_words(self) -> None:
+        """清空字级数据：删的是「对齐结果」，不是歌词本身，所以默认按钮仍是「否」。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("清空字级数据")
+        box.setText("将删除所有歌的逐字时间轴（不影响歌词文件与颜色设置）。\n"
+                    "之后可以重新对齐，但要再跑一遍。继续吗？")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self.words_clear_requested.emit()
 
     # ---------- 歌词颜色覆盖（v2.9.0） ----------
 

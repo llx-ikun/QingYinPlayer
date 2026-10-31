@@ -115,6 +115,58 @@ def _typed_split(main_len: int, sub_len: int, progress: float,
     return main_typed, max(0, typed - main_len)
 
 
+def _typed_from_words(words, text: str, position_ms: int,
+                      line_end_ms: int = 0) -> int | None:
+    """有逐字时间轴时，按**真实时间窗**求「已经唱到第几个字」（v3.0.0）。
+
+    返回 None 表示「这份逐字数据没法用」，调用方回退 `_typed_split` 的线性插值
+    —— 宁可退化成 v2.9.2 的老效果，也不能因为一份坏 sidecar 让高亮乱跳。
+
+    为什么要它而不是「按句进度插值」：句内插值假设字与字匀速，前奏长、拖腔、
+    一字一顿的地方全错；逐字时间轴是这些时间的实测值，直接用才是「逐字卡准」。
+
+    判定口径（`typed` 是**字符下标**，不是词元下标）：
+    - 落在某个字的时间窗内 → 按窗内比例把该字的字符数折算后四舍五入
+      （「故事」是一个词元、窗口走到 60% → typed=1，即只亮出「故」）；
+    - 还没到第一个字 → 0；过了最后一个字 → 整行（`len(text)`）。
+    """
+    n = len(text)
+    if not words or n <= 0:
+        return None
+    # 时间必须单调不减，否则说明 sidecar 被改坏了：直接认输回退
+    prev = -1
+    for span in words:
+        if span.start_ms < prev:
+            return None
+        prev = span.start_ms
+    # 「终点未知」(end<=start) 的兜底时长：取已知窗口的平均值，没有已知值就用 250ms
+    known = [s.end_ms - s.start_ms for s in words if s.end_ms > s.start_ms]
+    avg = (sum(known) // len(known)) if known else 250
+    if avg <= 0:
+        avg = 250
+
+    if position_ms <= words[0].start_ms:
+        return 0
+    typed = 0
+    for i, span in enumerate(words):
+        start = span.start_ms
+        end = span.end_ms
+        if end <= start:
+            end = (words[i + 1].start_ms if i + 1 < len(words)
+                   else max(line_end_ms, start + avg))
+        if end <= start:
+            end = start + 1
+        if position_ms < start:
+            return typed
+        if position_ms < end:
+            frac = (position_ms - start) / (end - start)
+            return min(n, typed + int(len(span.text) * frac + 0.5))
+        typed += len(span.text)
+        if typed >= n:
+            return n
+    return n
+
+
 def _uncovered_color() -> QColor:
     """karaoke「未唱到的字」用半透明常态色：比已唱的强调色明显更暗。
 
@@ -221,10 +273,23 @@ class _LyricDelegate(QStyledItemDelegate):
 
         # 逐字进度：typewriter 沿「原文打完再打译文」的连打节奏；karaoke 两行同步
         # 推进（v2.9.2），译文跟着主歌词一起扫。
+        #
+        # v3.0.0：有逐字时间轴（AI 对齐产物 / 增强 LRC）时改用真实字时间窗求 `typed`，
+        # 译文按同一比例推进。没有逐字数据时**逐字符**走原来的 `_typed_split`，
+        # 输出与 v2.9.2 完全一致 —— 这是零回归的硬约束。
         main_typed, sub_typed = len(text), len(sub)
         if is_current and effect in ("typewriter", "karaoke"):
             main_typed, sub_typed = _typed_split(len(text), len(sub), progress,
                                                  sync=(effect == "karaoke"))
+            words = panel._row_words(row)
+            if words:
+                start_ms, end_ms = panel._line_bounds(row)
+                exact = _typed_from_words(words, text,
+                                         int(start_ms + progress * (end_ms - start_ms)),
+                                         end_ms)
+                if exact is not None:
+                    main_typed = exact
+                    sub_typed = (round(len(sub) * exact / len(text)) if text and sub else 0)
 
         # v2.9.0：颜色覆盖只作用于当前句；未启用时 pair=None，完全走原有配色分支。
         # v2.9.1：译文行与原文**同色**（不再压 alpha 205）。原先那层「次级色」在
@@ -368,6 +433,10 @@ class LyricsPanel(QWidget):
     search_online_requested = Signal()
     # 右键「转成 .lrc 文件（本地近似对齐）」：纯文本歌词本地对齐成 LRC（v2.6.9）
     align_local_requested = Signal()
+    # v3.0.0 右键「AI 对齐歌词（逐字）」：本地 whisper 给每个字真实时间轴
+    align_ai_requested = Signal()
+    # v3.0.0 右键「清除本曲逐字数据」：对齐结果不满意时退回线性插值
+    words_clear_requested = Signal()
     # 右键「整体提前/延后 0.5s」：消掉对齐后的系统性偏移（v2.6.12）
     shift_lyrics_requested = Signal(int)
     # 右键「逐句打轴」：播放中按空格给每一句手动盖时间戳（v2.7.4）
@@ -477,6 +546,28 @@ class LyricsPanel(QWidget):
         if 0 <= row < len(self._lines):
             return self._lines[row].time_ms
         return None
+
+    def _row_words(self, row: int):
+        """第 row 句的逐字时间轴；没有则返回空元组（v3.0.0）。
+
+        空元组 = 该句走线性插值，与 v2.9.2 完全一致。渲染层只认这个开关。
+        """
+        if 0 <= row < len(self._lines):
+            return self._lines[row].words or ()
+        return ()
+
+    def _line_bounds(self, row: int) -> tuple[int, int]:
+        """第 row 句的起止时间 `(start_ms, end_ms)`。
+
+        末句没有「下一句」可参照，沿用 +3000ms 的兜底（与 `_line_progress` 同口径）。
+        逐字求解也用它做「终点未知」的字的时间上限，所以必须与进度算法同源。
+        """
+        if 0 <= row < len(self._lines):
+            start = self._lines[row].time_ms
+            end = (self._lines[row + 1].time_ms if row + 1 < len(self._lines)
+                   else start + 3000)
+            return start, end
+        return 0, 0
 
     def _active_color_cfg(self):
         """返回启用中的颜色配置；None 表示走旧逻辑（这是唯一的开关判断）。"""
@@ -633,9 +724,7 @@ class LyricsPanel(QWidget):
         """当前行内的播放进度 0~1（打字机/颜色覆盖按它推进）。"""
         if index < 0 or index >= len(self._lines):
             return 0.0
-        start = self._lines[index].time_ms
-        end = (self._lines[index + 1].time_ms if index + 1 < len(self._lines)
-               else start + 3000)
+        start, end = self._line_bounds(index)
         span = end - start
         if span <= 0:
             return 0.0
@@ -710,6 +799,19 @@ class LyricsPanel(QWidget):
         align_local.setStatusTip("离线分析音频节奏，大致跟唱；可能整体差几秒")
         align_local.triggered.connect(self.align_local_requested.emit)
         menu.addAction(align_local)
+        # v3.0.0 右键「AI 对齐歌词（逐字）」：本地 whisper 识别演唱，把每个字钉到真实时刻。
+        # 与上面那条并列、但精度不同：近似对齐只到「行」（误差可达几秒），
+        # AI 对齐到「字」（误差约 ±80ms）。文案必须把这个差别说出来，否则用户不知道选哪个。
+        align_ai = QAction("AI 对齐歌词（逐字）", menu)
+        align_ai.setStatusTip("本地 AI 逐字对齐，精度最高；首次需下载模型，一首约几十秒")
+        align_ai.triggered.connect(self.align_ai_requested.emit)
+        align_ai.setEnabled(self._mode == "synced")
+        menu.addAction(align_ai)
+        words_clear = QAction("清除本曲逐字数据", menu)
+        words_clear.setStatusTip("退回按行匀速扫光（对齐结果不满意时用）")
+        words_clear.triggered.connect(self.words_clear_requested.emit)
+        words_clear.setEnabled(self._mode == "synced")
+        menu.addAction(words_clear)
         # 右键「逐句打轴」：跟唱打拍子，每一句都卡在你按下的那一刻（v2.7.4）。
         # 这是唯一能让时间「完全准确」的路子——本地对齐只是近似（误差天花板 ~6s）。
         tap = QAction("逐句打轴（手动卡时间）", menu)

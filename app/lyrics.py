@@ -3,6 +3,7 @@
 
 支持：
 - 标准 LRC：`[mm:ss.xx]` 时间标签（xx 为百分秒；也兼容三位毫秒）
+- 增强 LRC：行内 `<mm:ss.xx>` 逐字标签（v3.0.0），解析成 `LyricLine.words`
 - 一行多个时间标签（副歌重复）
 - 元数据行 `[ti:]` `[ar:]` `[al:]` `[offset:]`（offset 可正可负，单位毫秒）
 - 非同步歌词（如 ID3 USLT）按纯文本展示
@@ -17,6 +18,22 @@ from itertools import pairwise
 _TIME_TAG = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _META_TAG = re.compile(r"^\[([A-Za-z]+):([^\]]*)\]$")
 
+# 增强 LRC 的逐字标签（v3.0.0）：`[00:12.34]<00:12.34>故<00:12.56>事`
+_WORD_TAG = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")
+
+
+@dataclass(frozen=True)
+class WordSpan:
+    """一个字/词在音频里的时间窗（v3.0.0 AI 对齐产物 / 增强 LRC）。
+
+    `end_ms == start_ms` 表示「终点未知」——增强 LRC 的最后一段后面没有下一个标签，
+    渲染时按下一个字的起点或行尾兜底，不要当成零长度。
+    """
+
+    start_ms: int
+    end_ms: int
+    text: str
+
 
 @dataclass
 class LyricLine:
@@ -25,6 +42,9 @@ class LyricLine:
     # 译文（双语歌词）。一句 = 原文 text + 可选译文 translation；渲染成同一条目里的
     # 两行，对齐/高亮/滚动/动效都按「句」为单位，所以译文不能自己占一行。
     translation: str = ""
+    # 逐字时间轴（v3.0.0）。空元组 = 没有字级数据，逐字动效回退到「行内线性插值」，
+    # 渲染路径与 v2.9.2 完全一致 —— 这是零回归的保证。
+    words: tuple[WordSpan, ...] = ()
 
 
 def _tag_to_ms(minute: str, second: str, frac: str | None) -> int:
@@ -39,8 +59,64 @@ def _tag_to_ms(minute: str, second: str, frac: str | None) -> int:
     return ms
 
 
+def _parse_word_tags(content: str) -> tuple[str, tuple[WordSpan, ...]]:
+    """拆增强 LRC 行内的 `<mm:ss.xx>` 逐字标签，返回 `(纯文本, 词元元组)`。
+
+    没有逐字标签时原样返回、词元为空元组（调用方据此走 v2.9.2 老路径）。
+
+    三个必须守住的细节：
+    1. **段落不 strip**：英文靠空格分词，`Who can` 拆完还得是 `Who can`；
+       拼接后必须与「删掉所有标签的纯文本」逐字符相等，这是渲染对位的前提。
+    2. **末尾空段 = 结尾时间戳**：`...事<00:13.00>` 里那个标签没有后续文字，
+       它是给「事」补终点用的，不能当成一个空词元塞进序列。
+    3. **首个标签前的残留文字并入第一段**：`前<00:01.00>奏` 这种写法里「前」
+       没有自己的时间，只能挂在第一个标签上（起点=标签时间）。
+    """
+    matches = list(_WORD_TAG.finditer(content))
+    if not matches:
+        return content, ()
+    text = _WORD_TAG.sub("", content)
+    head = content[:matches[0].start()]
+
+    spans: list[WordSpan] = []
+    for i, match in enumerate(matches):
+        start_ms = _tag_to_ms(match.group(1), match.group(2), match.group(3))
+        end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        seg = content[match.end():end_pos]
+        if i == 0 and head:
+            seg = head + seg
+        if not seg:
+            # 空段：纯结尾时间戳，给上一个字补 end_ms（没有上一个字就丢弃）
+            if spans:
+                prev = spans[-1]
+                spans[-1] = WordSpan(prev.start_ms, start_ms, prev.text)
+            continue
+        spans.append(WordSpan(start_ms, 0, seg))
+
+    # end_ms 兜底：默认取下一个字的起点；最后一个字若没结尾戳则留 0（终点未知）
+    fixed = tuple(
+        WordSpan(span.start_ms,
+                 spans[i + 1].start_ms if i + 1 < len(spans) else span.end_ms,
+                 span.text)
+        for i, span in enumerate(spans)
+    )
+    return text, fixed
+
+
+def _shift_words(words: tuple[WordSpan, ...], delta_ms: int) -> tuple[WordSpan, ...]:
+    """整组词元平移（一行挂多个时间标签时，逐字时间跟着那一遍走）。"""
+    if not delta_ms:
+        return words
+    return tuple(WordSpan(w.start_ms + delta_ms, w.end_ms + delta_ms, w.text)
+                 for w in words)
+
+
 def parse_lrc(text: str) -> list[LyricLine]:
-    """解析 LRC 文本，返回按时间排序的同步歌词行（忽略无时间标签的行）。"""
+    """解析 LRC 文本，返回按时间排序的同步歌词行（忽略无时间标签的行）。
+
+    增强 LRC（行内 `<mm:ss.xx>`）的逐字时间会填进 `LyricLine.words`；普通 LRC
+    该字段保持空元组，渲染层据此走零回归路径。
+    """
     lines: list[LyricLine] = []
     offset_ms = 0
     for raw in (text or "").splitlines():
@@ -67,7 +143,22 @@ def parse_lrc(text: str) -> list[LyricLine]:
         content = rest.strip()
         if not content:
             continue
-        lines.extend(LyricLine(t + offset_ms, content) for t in times)
+        body, words = _parse_word_tags(content)
+        if not body:
+            continue  # 整行只有标签没有文字（畸形文件），丢掉别占一个时间槽
+        if not words:
+            lines.extend(LyricLine(t + offset_ms, body) for t in times)
+            continue
+        # 逐字标签只按「第一个时间标签」记绝对时间；一行挂多个标签（副歌重复）时，
+        # 后面每一遍都按 t - times[0] 整体平移，否则第二遍的逐字会全挤在第一句位置。
+        # offset 是整条时间轴的全局平移，逐字时间必须跟着一起动，否则行高亮到了、
+        # 字还停在原地（表现为扫光比高亮晚/早一个 offset）。
+        base = times[0]
+        lines.extend(
+            LyricLine(t + offset_ms, body,
+                      words=_shift_words(words, t - base + offset_ms))
+            for t in times
+        )
     lines.sort(key=lambda line: line.time_ms)
     return lines
 
@@ -315,6 +406,10 @@ def merge_translations(lines: list[LyricLine]) -> list[LyricLine]:
 
     双语 LRC 的标准写法就是同一时间戳写两行。行文本相同（副歌里同句重复）不合并，
     避免把两句一样的歌词吞掉一句。
+
+    逐字时间轴（v3.0.0）只保留**原文那一行**的 `words`：译文行的逐字标签直接丢弃——
+    数据模型里没有「译文词元」字段，硬塞进 `words` 会破坏「字元拼接 == 行文本」的
+    对位前提，渲染层会错位。译文照旧跟原文按比例同步扫光（v2.9.2 口径）。
     """
     out: list[LyricLine] = []
     for line in lines or []:
@@ -325,7 +420,7 @@ def merge_translations(lines: list[LyricLine]) -> list[LyricLine]:
                 and prev.text != line.text):
             prev.translation = line.text
             continue
-        out.append(LyricLine(line.time_ms, line.text, line.translation))
+        out.append(LyricLine(line.time_ms, line.text, line.translation, line.words))
     return out
 
 
