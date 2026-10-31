@@ -730,3 +730,122 @@ env -u PYTHONPATH .venv/Scripts/python.exe run_tests.py
 env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .
 env -u PYTHONPATH .venv/Scripts/python.exe build.py
 ```
+
+## v2.9.0 任务（歌词自定义颜色覆盖：动态渐变 + 逐句取色）
+
+> 设计见 DESIGN.md §37。基线：当前工作区（v2.8.3/v2.8.4 改动尚未提交）。
+> 分支：`feat/lyrics-color-v2_9_0`。原则：`enabled=False` 必须是旧行为的完全等价路径。
+
+### A. 后端纯逻辑（无 Qt 依赖，先行）
+
+- [x] **A1** `app/models.py`：新增 `LyricsColorConfig`（enabled/trigger/gradient/color_a/color_b/direction/speed/transition）
+      与 `COLOR_TRIGGERS/COLOR_DIRECTIONS`；`Settings.lyrics_color` + `to_dict/from_dict`（`_as_*` 钳位、非法枚举回默认）
+  - 验收：round-trip、脏数据回默认、缺字段无损
+- [x] **A2** `app/paths.py`：`lyrics_colors_dir()`（与 covers/bgs 同级，`_subdir`），并入 `DATA_SUBDIRS` 以便整套迁移
+  - 验收：目录随数据根走；迁移清单含它
+- [x] **A3** 新模块 `app/lyrics_colors.py`：`load/save/set/clear`，键=时间戳，`base_dir` 可注入；坏 JSON/非法色值跳过；空映射删文件
+  - 验收：单测覆盖 round-trip、损坏容错、清除、原子写
+- [x] **A4** 单测 `tests/test_lyrics_colors.py` + `tests/test_store.py`（Settings 新字段）
+  - 验收：隔离重跑全绿
+
+### B. 渲染（依赖 A）
+
+- [x] **B1** `ui/lyrics_panel.py`：`_draw_line` 支持 `(a,b)` 双色 + 方向 + transition；`enabled=False` 走原分支
+- [x] **B2** panel：`set_color_config` / `set_line_colors`；逐行颜色解析与缓存
+- [x] **B3** 时间模式：`QTimer(33ms)` 仅 `enabled && trigger=="time" && visible && synced` 启动；每 tick 只 `_update_row(当前行)`；`hideEvent/showEvent` 停启
+- [x] **B4** 与 4 种 effect 正交：none/zoom/typewriter/karaoke 组合自测；译文用次级色不参与强扫光
+- [x] **B5** `tests/test_widgets.py`：颜色解析、进度/时间两模式、timer 启停条件、effect 组合不崩
+  - 验收：隔离重跑全绿
+
+### C. 接线（依赖 B）
+
+- [x] **C1** `ui/settings_dialog.py`：歌词页「歌词颜色覆盖」区（启用/触发/方向/A/B/速度/过渡），发 `lyrics_color_changed(object)`
+- [x] **C2** `ui/main_window.py`：切歌加载 sidecar 并下发；`_on_settings_lyrics_color`；`line_color_requested`→`QColorDialog`→保存重下发
+- [x] **C3** panel 右键菜单（仅 synced）：这一句设置颜色 / 清除这一句 / 清除本曲；接新信号
+- [x] **C4** `tests/test_e2e.py` 新类 `TestE2ELyricsColor`（独立进程）：启用→下发→面板生效；逐句色持久化；清除
+  - 验收：patch `QColorDialog` 后跑通
+
+### D. 验收与交付
+
+- [x] **D1** `run_tests.py` 全量回归（后台，独立进程）→ **32/32 模块全绿 15m44s**
+- [x] **D2** `ruff check .` 干净
+- [x] **D3** `build.py` 双产物 + smoke + 真实平台；`tools/probe_lyrics_effect.py` 增 `--color` 出图复核
+  - onefile 56.8MB / onedir 2.9MB，两版 smoke + 真实平台 8s 通过；出图 `shots/lyrics_color_{progress,time,light}.png`
+- [x] **D4** `app/version.py → 2.9.0`；更新 DESIGN/TASK 勾选与记忆
+
+---
+
+## v2.9.1 任务（双语译文不跟着变色）
+
+- [x] **E1** 用探针复现：浅色主题 + 双语 + `karaoke` + 颜色覆盖 → 译文整行 `_dimmed` 单色
+- [x] **E2** `_paint_block`：译文复用原文 `pair`（去掉 alpha 205）；两行各算自己的 `band`；译文传 `sweep=False`
+- [x] **E3** `_draw_line` 增加 `band` / `sweep`；karaoke 分支 `sweep=False` 时整行铺完整渐变
+- [x] **E4** `_flow(rect → band)`：vertical / diagonal 用本行上下边界，修「译文只能取到下半段」
+- [x] **E5** `tests/test_widgets.py::TestLyricsColor` 补 2 项（译文同 pair + sweep=False / _flow band）
+- [x] **E6** 视觉复核：`shots/lyrics_color_bilingual_after.png`、三种 direction、浅色+深色
+- [ ] **E7** 全量回归 + ruff + 打包 smoke + `--check` 输出 v2.9.1
+
+---
+
+## v2.9.2 任务（译文行与主歌词同步扫光）
+
+- [x] **F1** `_typed_split(..., sync=False)`：karaoke 走同步口径（两行各按自身长度 × p）
+- [x] **F2** `_paint_block`：`sync=(effect=="karaoke")`；译文恢复参与扫光，保留 band；删 `sweep`
+- [x] **F3** `_dimmed()` alpha 90 → 110（未唱段仍认得出色系）
+- [x] **F4** 测试改写 + 新增：`test_bilingual_translation_shares_pair_and_scans_in_sync`、
+      `test_karaoke_sync_typewriter_staggered`
+- [x] **F5** 视觉复核：25% / 50% / 75% 三档，两行明暗分界按各自比例对齐
+- [ ] **F6** 全量回归 + ruff + 打包 smoke + `--check` 输出 v2.9.2
+
+---
+
+## v3.0.0 任务（本地 AI 强制对齐：逐字时间轴）
+
+> 依赖顺序严格自上而下。**Phase 0 不过关就停在 Phase 0，不改方案硬上。**
+
+### P0. 可行性关卡（阻塞后续全部）
+
+- [x] **P0-1** `pip install faster-whisper`（含 ctranslate2 4.8.4 / av / onnxruntime）装进 venv
+- [x] **P0-2** 合成音频跑 `transcribe(word_timestamps=True)`，确认输出词级时间戳结构
+- [x] **P0-3** PyInstaller 最小探针 exe：能 import ctranslate2 + 跑一次推理
+      （**必须 ctranslate2==4.6.0 + setuptools<81**；4.8.4 在 frozen 环境加载模型必 segfault）
+- [x] **P0-4** 实测体积增量，回填 DESIGN 40.7；确定分发策略（B：运行时内置 + 模型首下）
+  - 验收：4 条全过；任一失败 → 停下来向用户报告并给替代方案
+  - 结果：AI 增量 **164MB**、模型 **142MB**；onnxruntime(45.6MB) 与 hf_xet(9MB) 可排除
+
+### A. 数据模型与解析
+
+- [ ] **A1** `app/lyrics.py`：新增 `WordSpan`，`LyricLine` 增 `words` 字段（默认空，零回归）
+- [ ] **A2** 增强 LRC 逐字标签解析：`[mm:ss.xx]<mm:ss.xx>字` → 填 `words`
+- [ ] **A3** `app/paths.py`：`lyrics_words_dir()`；`DATA_SUBDIRS` 增 `lyrics_words`
+- [ ] **A4** `app/lyrics_words.py`：sidecar 读写（键=行 time_ms），坏数据逐条跳过
+- [ ] **A5** 单测：`tests/test_lyrics_words.py`（roundtrip / 坏 JSON / 键漂移防护）
+
+### B. 对齐引擎（依赖 P0）
+
+- [ ] **B1** `app/lyrics_asr.py`：L1 声道 mid 提取 + L2 faster-whisper 推理（延迟导入）
+- [ ] **B2** L3 `map_words_to_chars()`：difflib 序列比对，识别词 → 原文字级窗口
+- [ ] **B3** L4 能量谷吸附：复用 `rms_envelope` 微调字边界
+- [ ] **B4** L5 置信度自检：`matched_ratio` + 覆盖率，低于阈值返回 `low_confidence`
+- [ ] **B5** 单测：用**构造的**词时间戳验证 L3/L4/L5 纯逻辑（不依赖模型）
+
+### C. 渲染接入
+
+- [ ] **C1** `ui/lyrics_panel.py`：`_typed_from_words()` 按字窗口求 `typed`；无 words 走原路径
+- [ ] **C2** 确保 karaoke 同步口径、颜色覆盖、band 逻辑在有 words 时仍正确
+- [ ] **C3** 单测：有/无 words 两条路径各自断言，且无 words 时输出与 v2.9.2 完全一致
+
+### D. 界面与批量
+
+- [ ] **D1** 歌词右键「AI 对齐歌词（逐字）」，与「本地近似·免 Key」并列并标注精度
+- [ ] **D2** 设置→歌词页「AI 对齐」区：模型档位、批量入口、清空字级数据
+- [ ] **D3** 批量对齐对话框：逐首进度、可中断、失败清单不影响整体
+- [ ] **D4** 模型缺失/未下载时的引导与置灰（不允许静默失败）
+
+### E. 打包与验收
+
+- [ ] **E1** `build.py`：解禁 numpy、加 ctranslate2/av/onnxruntime 的 collect 规则
+- [ ] **E2** 模型分发落地（按 P0-4 结论）
+- [ ] **E3** 全量回归（后台、独立进程）
+- [ ] **E4** `tools/eval_align.py` 量化对比：行级中位误差 6.04s → 目标 < 0.5s
+- [ ] **E5** 双产物 smoke + 真实平台；`--check` 输出 v3.0.0

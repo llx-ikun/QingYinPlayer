@@ -570,9 +570,22 @@ class BackgroundLayer(QWidget):
         if self._config.type != "image":
             return None
         if self._pixmap is None:
-            self._pixmap = prepare_pixmap(self._config.image, self.width(),
+            self._pixmap = prepare_pixmap(self._image_path(), self.width(),
                                           self.height(), self._config.blur)
         return self._pixmap
+
+    def _image_path(self) -> str:
+        """背景图实际路径：内置预设现解 resource_path，否则用用户图片路径。
+
+        预设不能把 `_MEIPASS` 临时路径写进 data.json（下次启动失效），所以
+        只存预设 id，画的时候才解成当前进程的绝对路径。
+        """
+        if self._config.preset:
+            from ui.theme import preset_image_path
+            path = preset_image_path(self._config.preset)
+            if path:
+                return path
+        return self._config.image
 
     def paintEvent(self, event) -> None:  # noqa: N802
         cfg = self._config

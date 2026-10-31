@@ -488,12 +488,12 @@ class TestE2EV2(unittest.TestCase):
         from ui.theme import THEME_NEXT
         self._import()
         fb = self.window.float_bar
-        # 两态循环：浅色 ↔ 深色。按钮图标/提示指向「点下去会切到哪个」，
-        # 初始（当前=浅色）目标是深色（月亮）。
+        # 两态循环：深色 ↔ 浅色。按钮图标/提示指向「点下去会切到哪个」，
+        # 初始（当前=浅色）目标是深色（月亮图标，切到深色夜空）。
         self.assertEqual(self.store.settings.theme, "light")
         self.assertEqual(fb.theme_toggle._kind, "moon")
         self.assertIn("切换到深色主题", fb.theme_toggle.toolTip())
-        self.assertTrue(fb.theme_toggle.isChecked())   # 浅色主题 = 开关打开
+        self.assertTrue(fb.theme_toggle.isChecked())   # 当前浅色 = 开关打开
 
         self.window._toggle_theme()
         self.assertEqual(self.store.settings.theme, "columbina")
@@ -721,6 +721,47 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(w._qt_edges(_EDGE_LEFT), Qt.Edge.LeftEdge)
         self.assertEqual(w._qt_edges(_EDGE_LEFT | _EDGE_TOP), Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
         self.assertEqual(w._qt_edges(_EDGE_RIGHT | _EDGE_BOTTOM), Qt.Edge.RightEdge | Qt.Edge.BottomEdge)
+
+    def test_hit_test_codes_match_winuser(self):
+        """v2.7.9：原生边缘缩放的 HT* 码必须与 winuser.h 一致。
+
+        这几个数字写错的后果不是报错，而是**缩错方向**（拖右边变成拖左边）：
+        HTLEFT=10 HTRIGHT=11 HTTOP=12 HTBOTTOM=15
+        HTTOPLEFT=13 HTTOPRIGHT=14 HTBOTTOMLEFT=16 HTBOTTOMRIGHT=17
+        """
+        from PySide6.QtCore import QPoint
+
+        w = self.window
+        w._root.resize(1000, 700)
+        rw, rh = w._root.width(), w._root.height()
+        m = 3                                   # 落在 6px 判定以内
+        cases = {
+            QPoint(m, rh // 2): 10,
+            QPoint(rw - m, rh // 2): 11,
+            QPoint(rw // 2, m): 12,
+            QPoint(rw // 2, rh - m): 15,
+            QPoint(m, m): 13,
+            QPoint(rw - m, m): 14,
+            QPoint(m, rh - m): 16,
+            QPoint(rw - m, rh - m): 17,
+            QPoint(rw // 2, rh // 2): 0,         # 客户区：不许插手
+        }
+        for pos, expected in cases.items():
+            self.assertEqual(w._hit_test_code(pos), expected, f"位置 {pos} 的 HT 码不对")
+
+    def test_hit_test_is_disabled_when_maximized(self):
+        """最大化后四边不能还算缩放热区，否则标题栏/播放栏边缘的按钮点不动。"""
+        from PySide6.QtCore import QPoint
+
+        w = self.window
+        w._root.resize(1000, 700)
+        w.showMaximized()
+        try:
+            self.assertTrue(w.isMaximized())
+            for pos in (QPoint(2, 2), QPoint(w._root.width() - 2, 300)):
+                self.assertEqual(w._hit_test_code(pos), 0)
+        finally:
+            w.showNormal()
 
     # ---------- 鼠标指针（v2.7.2） ----------
 
@@ -1055,15 +1096,43 @@ class TestE2ELyricsOnline(unittest.TestCase):
         self.assertEqual(self.window.now_playing.lyrics.list.item(0).text(), "故事的小黄花")
 
     def test_progress_slot_matches_worker_signal(self):
-        """v2.7.2 修：槽签名比 `MultiSourceWorker.progress = Signal(int, int)` 多一个
-        track_id，导致每次上报都抛 TypeError，「正在联网匹配歌词…（2/3）」从未显示过。
+        """v2.7.2 修：槽签名比信号少一个参数，每次上报都抛 TypeError，
+        「正在联网匹配歌词…」从未显示过。
+
+        v2.7.7 起信号是 `Signal(int, int, str)`，第三个参数是已返回的平台名，
+        文案要同时体现「进度」和「查了哪些平台」。
         """
         track = self._bare_track()
         self.window.player._current = track
         self.window._lyrics_cache.pop(track.id, None)
-        self.window._on_online_lyrics_progress(2, 3)
+
+        self.window._on_online_lyrics_progress(2, 3, "LRCLIB、网易云")
         self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
-                         "正在联网匹配歌词…（2/3）")
+                         "联网匹配 2/3 · LRCLIB、网易云")
+
+        # 只发两个参数的老调用/桩对象也不能炸（第三参数有默认值）
+        self.window._on_online_lyrics_progress(1, 3)
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(),
+                         "联网匹配 1/3")
+
+    def test_start_shows_platform_list_immediately(self):
+        """v2.7.7：一发起检索就把「要查哪几个平台」写出来，别让人对着空白干等。
+
+        并行模式下这些请求是同时发出的，所以这是「清单」而不是「正在查某一个」。
+        """
+        import ui.main_window as mw
+        from app.lyrics_multi import DEFAULT_SOURCES
+
+        starts = []
+        track = self._bare_track()
+        self.window.player._current = track
+        self.window._lyrics_cache.pop(track.id, None)
+        with mock.patch.object(mw, "MultiSourceWorker", self._fake_worker(starts)):
+            self.assertTrue(self.window._start_online_lyrics(track, force=True))
+
+        expected = "联网匹配：" + "、".join(name for name, _ in DEFAULT_SOURCES)
+        self.assertEqual(self.window.now_playing.lyrics.empty_label.text(), expected)
+        self.assertIn("网易云", expected)      # 平台名真的在文案里，不是一个泛泛的提示
 
     def test_online_result_ignored_for_other_track(self):
         """异步结果回来时用户已切歌：不能把歌词串到当前这首上。"""
@@ -1211,14 +1280,16 @@ class TestE2EAppearance(unittest.TestCase):
         self.assertEqual(current_theme().ACCENT, "#22c55e")
 
     def test_font_scale_rebuilds_qss_and_keeps_layout(self):
-        """字号放大后 QSS 要真变，且播放栏最小宽度不得突破 1100（窗口最小宽）。"""
+        """字号放大后 QSS 要真变，且播放栏最小宽度不得突破窗口最小宽。"""
         from PySide6.QtWidgets import QApplication
+        from ui.main_window import WINDOW_MIN_WIDTH
 
         self._import()
         self.window._on_settings_font_scale(1.28)
         sheet = QApplication.instance().styleSheet()
         self.assertIn("font-size: 17px", sheet)     # 基础 13px × 1.28 ≈ 17
-        self.assertLessEqual(self.window.player_bar.minimumSizeHint().width(), 1100)
+        self.assertLessEqual(self.window.player_bar.minimumSizeHint().width(),
+                             WINDOW_MIN_WIDTH)
         geom = self.window.float_bar.geometry()
         self.assertLessEqual(geom.x() + geom.width(), 236,
                              "字号变大后浮动条不能越进内容区")
@@ -1550,6 +1621,214 @@ class TestE2ELyricsTap(unittest.TestCase):
         self._enter()
         self.assertEqual([main for main, _ in self.window._tap_rows],
                          ["第一句", "我追着光"])
+
+
+class TestE2EThemeBackground(unittest.TestCase):
+    """v2.8.3 内置背景预设：星空 / 云海选了就画，且与主题彻底解耦。
+
+    单独成类 + 独立进程：每建一次 MainWindow 就多一个 QMediaPlayer，
+    offscreen 下累积到 ~15-20 个会在 C++ 层死锁（见 run_tests.py 的说明）。
+    """
+
+    def setUp(self):
+        _fresh_appdata()
+        from ui.main_window import MainWindow
+        self.window = MainWindow()
+        self.window.show()
+        self.store = self.window.store
+
+    def tearDown(self):
+        self.window.player.stop()
+        self.window.close()
+
+    def _apply_preset(self, preset_id: str):
+        from ui.theme import background_preset_config
+        self.window._on_settings_background("all", background_preset_config(preset_id))
+
+    def test_preset_brings_builtin_background(self):
+        from ui.theme import BG_SCRIM
+
+        for pid in ("starry", "clouds"):
+            self._apply_preset(pid)
+            cfg = self.window.background.config()
+            self.assertEqual(cfg.type, "image", pid)
+            self.assertEqual(cfg.preset, pid)
+            self.assertTrue(os.path.isfile(self.window.background._image_path()),
+                            f"{pid} 的背景图不存在")
+            self.assertTrue(self.window.background.is_active())
+            self.assertAlmostEqual(self.window._bg_scrim, BG_SCRIM,
+                                   msg="有图时面板必须半透明，否则图被盖住")
+
+    def test_preset_independent_of_theme(self):
+        """预设跟主题解耦：切主题不碰背景，选预设不碰主题。"""
+        self._apply_preset("starry")
+        self.window._apply_theme("light")
+        self.assertEqual(self.window.background.config().preset, "starry")
+        self.assertEqual(self.store.settings.theme, "light")
+
+    def test_preset_background_is_saved_as_background_not_theme(self):
+        """落盘的 preset 在背景里，主题字段保持不变。"""
+        from app.paths import data_file
+        from app.store import LibraryStore
+
+        self._apply_preset("clouds")
+        self.window.store.save()
+        saved = LibraryStore(data_file()).settings
+        self.assertEqual(saved.theme, "light")
+        self.assertEqual(saved.bg_all.type, "image")
+        self.assertEqual(saved.bg_all.preset, "clouds")
+
+    def test_preset_does_not_paint_vector_decor(self):
+        """照片背景上不该再叠一层矢量装饰（月牙星点会变成两套背景打架）。"""
+        from app.models import BackgroundConfig
+
+        self._apply_preset("starry")
+        self.assertEqual(self.window.background._decor, "")
+        self.window._on_settings_background("all", BackgroundConfig(type="none"))
+        self.assertEqual(self.window.background._decor, "light")
+
+    def test_settings_bg_tab_has_preset_cards(self):
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store), self.window)
+        # 主题单选只剩浅色/深色两套
+        self.assertEqual(list(dialog.theme_radios), ["columbina", "light"])
+        # 背景页有星空/云海两张内置卡片
+        self.assertEqual(set(dialog.preset_buttons), {"starry", "clouds"})
+        dialog.deleteLater()
+
+    def test_per_page_preset_marks_custom(self):
+        """分页面点内置预设：必须自动「本页单独设置」，否则会被 bg_all 静默吞掉。
+
+        复现根因：切到「列表页/正在播放页」设背景时 inherit 仍是默认 True（跟随
+        「全部页面」），Settings.bg_config() 退回 bg_all，表现就是「设了没反应」。
+        """
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store), self.window,
+                                bg_scope="library")
+        self.assertTrue(dialog._current_bg().inherit, "初始应跟随「全部页面」")
+
+        emitted = []
+        dialog.background_changed.connect(lambda scope, cfg: emitted.append((scope, cfg)))
+        dialog._apply_preset("starry")
+
+        self.assertFalse(dialog._current_bg().inherit, "分页面设背景要自动「本页单独设置」")
+        self.assertTrue(dialog.bg_inherit_box.isChecked())
+        scope, cfg = emitted[-1]
+        self.assertEqual(scope, "library")
+        self.assertFalse(cfg.inherit)
+
+        # 写进主窗口后，当前页（列表页）真的画上了预设图
+        self.window._on_settings_background(scope, cfg)
+        self.assertEqual(self.window.background.config().preset, "starry")
+        dialog.deleteLater()
+
+
+class TestE2ELyricsColor(unittest.TestCase):
+    """v2.9.0 歌词颜色覆盖：设置持久化 / 面板下发 / 逐句色落盘与恢复。
+
+    独立成类 + 独立进程：每建一次 MainWindow 就多一个 QMediaPlayer，offscreen 下
+    累积到 ~15-20 个会在 C++ 层死锁（见 run_tests.py 说明）。
+    """
+
+    def setUp(self):
+        _fresh_appdata()
+        from ui.main_window import MainWindow
+        self.window = MainWindow()
+        self.window.show()
+        self.store = self.window.store
+
+    def tearDown(self):
+        self.window.player.stop()
+        self.window.close()
+
+    def _cfg(self, **kw):
+        from app.models import LyricsColorConfig
+        return LyricsColorConfig(enabled=True, color_a="#ff6b9d", **kw)
+
+    def test_enable_persists_and_applies(self):
+        from app.models import LyricsColorConfig
+        from app.paths import data_file
+        from app.store import LibraryStore
+
+        self.window._on_settings_lyrics_color(self._cfg())
+        self.assertTrue(self.store.settings.lyrics_color.enabled)
+        self.assertIsNotNone(self.window.now_playing.lyrics._active_color_cfg())
+        saved = LibraryStore(data_file()).settings.lyrics_color
+        self.assertTrue(saved.enabled, "歌词颜色配置要落盘")
+        self.assertEqual(saved.color_a, "#ff6b9d")
+        # 关闭后必须回到旧渲染路径
+        self.window._on_settings_lyrics_color(LyricsColorConfig(enabled=False))
+        self.assertIsNone(self.window.now_playing.lyrics._active_color_cfg())
+
+    def test_per_line_color_roundtrip_and_clear(self):
+        from app.lyrics import LyricLine
+        from app.lyrics_colors import load_line_colors, set_line_color
+        from app.models import Track
+
+        track = Track(id="color-track", path="/no/such.mp3", title="t")
+        self.window.player._current = track     # current_track 只读，直接改内部字段
+        panel = self.window.now_playing.lyrics
+        panel.set_synced([LyricLine(1000, "第一句"), LyricLine(5000, "第二句")])
+
+        mapping = set_line_color(track.id, panel.line_time(1), "#00ff00")
+        panel.set_line_colors(mapping)
+        a, _b = panel._row_colors(1)
+        self.assertEqual(a.name(), "#00ff00")
+        self.assertEqual(load_line_colors(track.id), {5000: "#00ff00"})
+
+        self.window._on_lyric_song_colors_clear()
+        self.assertEqual(load_line_colors(track.id), {}, "清除本曲要清空 sidecar")
+        self.assertEqual(panel._line_color_map, {})
+
+    def test_pick_line_color_writes_sidecar(self):
+        from unittest import mock
+
+        import ui.main_window as mw
+        from PySide6.QtGui import QColor
+        from app.lyrics import LyricLine
+        from app.lyrics_colors import load_line_colors
+        from app.models import Track
+
+        class FakeColorDialog:
+            @staticmethod
+            def getColor(*_a, **_k):
+                return QColor("#123456")
+
+        track = Track(id="pick-track", path="/no/such.mp3", title="t")
+        self.window.player._current = track
+        panel = self.window.now_playing.lyrics
+        panel.set_synced([LyricLine(1000, "第一句")])
+
+        with mock.patch.object(mw, "QColorDialog", FakeColorDialog):
+            self.window._on_lyric_line_color(0)
+
+        self.assertEqual(load_line_colors(track.id), {1000: "#123456"})
+        a, _b = panel._row_colors(0)
+        self.assertEqual(a.name(), "#123456")
+
+    def test_settings_dialog_color_signal(self):
+        from app.models import LyricsColorConfig
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store),
+                                self.window,
+                                lyrics_color=LyricsColorConfig(enabled=False))
+        got = []
+        dialog.lyrics_color_changed.connect(got.append)
+        dialog.color_enabled_box.setChecked(True)
+        self.assertTrue(got and got[-1].enabled)
+        dialog.color_trigger_combo.setCurrentIndex(
+            max(0, dialog.color_trigger_combo.findData("time")))
+        self.assertEqual(got[-1].trigger, "time")
+        dialog.color_direction_combo.setCurrentIndex(
+            max(0, dialog.color_direction_combo.findData("diagonal")))
+        self.assertEqual(got[-1].direction, "diagonal")
+        dialog._reset_lyric_colors()
+        self.assertEqual(got[-1].color_a, "")
+        self.assertEqual(got[-1].color_b, "")
+        dialog.deleteLater()
 
 
 if __name__ == "__main__":

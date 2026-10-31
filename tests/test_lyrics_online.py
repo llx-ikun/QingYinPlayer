@@ -21,6 +21,7 @@ from app.lyrics_online import (
     FetchOutcome,
     LyricsFetchWorker,
     RateLimited,
+    ServerBusy,
     as_hits,
     build_get_url,
     build_keyword_url,
@@ -494,6 +495,45 @@ class TestScoringStricter(unittest.TestCase):
         self.assertGreaterEqual(score, 6.5)
 
 
+class TestAlbumBridge(unittest.TestCase):
+    """v2.8.2：本地中文标题 ↔ LRCLIB 英文 trackName 语言不一致时，专辑名是唯一桥梁。
+
+    真实案例：本地《痴人说梦》（HOYO-MiX），LRCLIB id=34711120 的 trackName 是英文
+    `Ravings`，中文只出现在专辑名「崩坏星穹铁道-痴人说梦 Ravings」里。标题零交集、
+    时长又拿不到时，专辑相等 + 艺人相符就是唯一能把两者对上号的信号。
+    """
+
+    ALBUM = "崩坏星穹铁道-痴人说梦 Ravings"
+
+    def _ravings(self, **kwargs):
+        item = {
+            "trackName": "Ravings",
+            "artistName": "HOYO-MiX",
+            "albumName": self.ALBUM,
+            "duration": 115,
+            "instrumental": False,
+            "syncedLyrics": "[00:06.58] She got candy",
+        }
+        item.update(kwargs)
+        return [item]
+
+    def test_chinese_title_matches_english_trackname_via_album(self):
+        hits = parse_hits(self._ravings())
+        best = pick_best(hits, "痴人说梦", "HOYO-MiX", 115_000, self.ALBUM)
+        self.assertIsNotNone(best)
+        self.assertEqual(best.track_name, "Ravings")
+
+    def test_album_plus_artist_matches_without_duration(self):
+        """没有时长信息时，专辑相等 + 艺人相符仍要能用。"""
+        best = pick_best(parse_hits(self._ravings()), "痴人说梦", "HOYO-MiX", 0, self.ALBUM)
+        self.assertIsNotNone(best)
+
+    def test_album_match_without_artist_is_rejected(self):
+        """专辑相同但艺人不同：不能靠专辑一条就配词（同一张多曲专辑会配错）。"""
+        hits = parse_hits(self._ravings(artistName="别的艺人"))
+        self.assertIsNone(pick_best(hits, "痴人说梦", "HOYO-MiX", 0, self.ALBUM))
+
+
 class TestFetchStrategy(unittest.TestCase):
     def test_stops_after_good_hit(self):
         """高信任度命中后不再往下打查询——LRCLIB 有速率限制。"""
@@ -528,6 +568,43 @@ class TestFetchStrategy(unittest.TestCase):
         self.assertIsNone(outcome.text)
         self.assertTrue(outcome.aborted, "限流必须标记为中止，不能当成「没有歌词」")
         self.assertEqual(len(calls), 1)
+
+    def test_server_busy_skips_to_next_query_and_finds_hit(self):
+        """503 是瞬时过载而非限流：跳过这条，让后面的查询命中（v2.8.2）。
+
+        真实案例：`痴人说梦` 的 get 端点间歇 503，但 `q=痴人说梦` 稳定返回命中。
+        以前 503 被当成限流立即中止，整首歌就判死了。
+        """
+        calls = []
+
+        def fake_fetch(url, timeout):
+            calls.append(url)
+            if "api/get" in url:
+                raise ServerBusy("HTTP 503")
+            # keyword 查询返回命中（靠专辑桥接：标题中文 vs trackName 英文）
+            if "q=" in url:
+                return [{
+                    "trackName": "Ravings", "artistName": "HOYO-MiX",
+                    "albumName": "崩坏星穹铁道-痴人说梦 Ravings",
+                    "duration": 115, "instrumental": False,
+                    "syncedLyrics": "[00:06.58] She got candy",
+                }]
+            return []
+
+        outcome = fetch_outcome("痴人说梦", "HOYO-MiX", 115_000,
+                                fetch=fake_fetch, album="崩坏星穹铁道-痴人说梦 Ravings")
+        self.assertIsNotNone(outcome.text)
+        self.assertFalse(outcome.aborted)
+        self.assertGreater(len(calls), 1, "503 后应继续发下一条查询")
+
+    def test_server_busy_all_aborted_not_missed(self):
+        """每条都 503：报 aborted 而不是 missed，绝不写负缓存（v2.8.2）。"""
+        def fake_fetch(url, timeout):
+            raise ServerBusy("HTTP 503")
+
+        outcome = fetch_outcome("晴天", "周杰伦", 269_000, fetch=fake_fetch)
+        self.assertIsNone(outcome.text)
+        self.assertTrue(outcome.aborted)
 
     def test_exhausted_search_is_not_aborted(self):
         """把查询跑完仍然没命中 = 真的没有这首歌的歌词，可以记负缓存。"""

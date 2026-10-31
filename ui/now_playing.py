@@ -30,6 +30,30 @@ from ui.widgets import ClickableCover
 MODE_AUDIO = "audio"
 MODE_VIDEO = "video"
 
+# ---- 封面边长与左列宽度（v2.8.1）----
+# 原来封面写死 280×280，左列又是一串普通 QLabel：长标题的 minimumSizeHint
+# （「唯有追赶风的方向 (Only By Chasing the Wind)」实测 444px）把左列顶住，
+# 封面再大也压不过文字。两头一夹，1044 宽的窗口里歌词面板只剩 268px ——
+# 而歌词是居中绘制、不折行不省略的，长句直接被裁掉一半。
+# 用户原话：「左边显示太大，右边歌词显示不全」。
+#
+# 现在：封面边长随视图缩放，**左列宽度 = 封面边长**（标签在框内折行），
+# 剩下的宽度全部给歌词。两个比例都是「矮/窄窗口下封面先让位」的意思。
+_COVER_MAX = 220
+_COVER_MIN = 140
+_COVER_W_RATIO = 0.26      # 视图宽 × 0.26
+_COVER_H_RATIO = 0.44      # 视图高 × 0.44
+
+
+def cover_side_for(view_w: int, view_h: int) -> int:
+    """正在播放页封面边长（v2.8.1）。纯函数，单测直接喂尺寸验边界。
+
+    夹取顺序：先取宽/高比例里较小的那个（两个方向都不能顶破），再夹上限，
+    最后托底 —— 窗口再小也不让封面缩成缩略图。
+    """
+    side = min(_COVER_MAX, int(view_w * _COVER_W_RATIO), int(view_h * _COVER_H_RATIO))
+    return max(_COVER_MIN, side)
+
 
 class _AudioView(QWidget):
     """音频模式：大封面 + 曲目信息 + 歌词面板。"""
@@ -40,26 +64,34 @@ class _AudioView(QWidget):
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(28)
 
-        # 左：封面 + 信息
-        left = QVBoxLayout()
+        # 左：封面 + 信息。装进一个**定宽**容器：宽度 = 封面边长，
+        # 这样左列绝不会被长标题的 minimumSizeHint 撑开去挤歌词。
+        self.left_box = QWidget()
+        left = QVBoxLayout(self.left_box)
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(16)
         left.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.cover = ClickableCover()
-        self.cover.setFixedSize(280, 280)
         self.cover.setScaledContents(True)
         left.addWidget(self.cover)
 
+        # setWordWrap：左列定宽之后，长标题必须在框内折行。不折行的话 QLabel
+        # 仍会拿着「全文宽度」当 minimumSizeHint 去挤歌词 —— 那正是原来
+        # 歌词显示不全的成因（不是歌词自己太宽，是左边不肯让）。
         self.title = QLabel("未在播放")
         self.title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        self.title.setWordWrap(True)
         left.addWidget(self.title)
 
         self.artist = QLabel("")
         self.artist.setObjectName("Dim")
+        self.artist.setWordWrap(True)
         left.addWidget(self.artist)
 
         self.meta = QLabel("")
         self.meta.setObjectName("Dim")
+        self.meta.setWordWrap(True)
         left.addWidget(self.meta)
 
         # 视频曲目在音频模式下提供「看画面」入口
@@ -72,11 +104,32 @@ class _AudioView(QWidget):
         left.addWidget(self.video_btn)
 
         left.addStretch(1)
-        root.addLayout(left, 4)
+        root.addWidget(self.left_box)
 
-        # 右：歌词
+        # 右：歌词。stretch=1 吃掉左列之外的全部宽度
         self.lyrics = LyricsPanel()
-        root.addWidget(self.lyrics, 5)
+        root.addWidget(self.lyrics, 1)
+
+        self._cover_side = 0
+        self._fit_cover()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_cover()
+
+    def _fit_cover(self) -> None:
+        """按当前视图尺寸重算封面与左列宽度。
+
+        尺寸没变就直接返回：`setFixedWidth` 会触发一次 LayoutRequest，
+        不设这道闸的话 resize → 布局 → resize 会来回抖。
+        """
+        side = cover_side_for(self.width(), self.height())
+        if side == self._cover_side:
+            return
+        self._cover_side = side
+        self.cover.setFixedSize(side, side)
+        self.left_box.setFixedWidth(side)
+
 
 
 class _VideoView(QWidget):

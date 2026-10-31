@@ -301,6 +301,26 @@ class TestFetchOutcomeMulti(unittest.TestCase):
         self.assertIsNone(text)
         self.assertTrue(aborted)                # 限流中止 ≠ 没歌词，不写负缓存
 
+    def test_album_bridges_language_mismatch_across_sources(self):
+        """中文标题 ↔ 英文 trackName：LRCLIB 命中靠专辑桥接（v2.8.2）。
+
+        本地《痴人说梦》对 LRCLIB 的 `Ravings`，标题零交集；专辑名同时含两种写法
+        是唯一桥梁。多源统一打分也要把 album 传下去，否则这条会漏。
+        """
+        lrclib = [{
+            "trackName": "Ravings", "artistName": "HOYO-MiX",
+            "albumName": "崩坏星穹铁道-痴人说梦 Ravings", "duration": 115,
+            "instrumental": False,
+            "syncedLyrics": "[00:06.58] She got candy", "plainLyrics": None,
+        }]
+        text, source, aborted = fetch_outcome_multi(
+            "痴人说梦", "HOYO-MiX", 115_000, parallel=False,
+            album="崩坏星穹铁道-痴人说梦 Ravings",
+            fetches=self._fetches(lrclib=lrclib, netease=False, qq=False))
+        self.assertEqual(source, "LRCLIB")
+        self.assertEqual(text, "[00:06.58] She got candy")
+        self.assertFalse(aborted)
+
     def test_empty_input_returns_nothing(self):
         text, _source, aborted = fetch_outcome_multi("", "", 0, parallel=False,
                                                     fetches=self._fetches())
@@ -308,12 +328,25 @@ class TestFetchOutcomeMulti(unittest.TestCase):
         self.assertFalse(aborted)
 
     def test_progress_reports_each_source(self):
+        """v2.7.7：进度除了数字，还要带上「刚返回的是哪个平台」。"""
         seen = []
         fetch_outcome_multi("晴天", "周杰伦", 269_000, parallel=False,
                             fetches=self._fetches(lrclib=False, netease=False, qq=False),
-                            progress=lambda cur, total: seen.append((cur, total)))
-        self.assertEqual([c for c, _ in seen], [1, 2, 3])
-        self.assertTrue(all(t == 3 for _, t in seen))
+                            progress=lambda done, total, name: seen.append((done, total, name)))
+        self.assertEqual([d for d, _, _ in seen], [1, 2, 3])
+        self.assertTrue(all(t == 3 for _, t, _ in seen))
+        # 串行执行，顺序就是 DEFAULT_SOURCES 的顺序
+        self.assertEqual([n for _, _, n in seen], ["LRCLIB", "网易云", "QQ音乐"])
+
+    def test_progress_source_name_is_never_empty(self):
+        """源名不能为空：并行时每个完成的 future 都必须带上自己的名字。"""
+        seen = []
+        fetch_outcome_multi("晴天", "周杰伦", 269_000, parallel=True,
+                            fetches=self._fetches(lrclib=False, netease=False, qq=False),
+                            progress=lambda done, total, name: seen.append(name))
+        self.assertEqual(len(seen), 3)
+        self.assertTrue(all(name for name in seen), f"出现了空源名: {seen}")
+        self.assertEqual(sorted(seen), sorted(["LRCLIB", "网易云", "QQ音乐"]))
 
 
 class TestMultiSourceWorker(unittest.TestCase):

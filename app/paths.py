@@ -29,7 +29,7 @@ PORTABLE_MARKER = "data"            # 软件目录下这个文件夹存在 = 便
 POINTER_NAME = "location.txt"       # 默认目录里的「数据实际位置」指针
 
 # 由迁移逻辑负责搬运的子项（供 storage.migrate 使用）
-DATA_SUBDIRS = ("covers", "library", "lyrics_cache", "bgs")
+DATA_SUBDIRS = ("covers", "library", "lyrics_cache", "bgs", "lyrics_colors")
 
 
 def _frozen() -> bool:
@@ -48,6 +48,21 @@ def exe_dir() -> str:
     if _frozen():
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def resource_path(*parts: str) -> str:
+    """只读**内置资源**（随程序分发的图片/图标）的绝对路径（v2.7.8）。
+
+    区别于 `exe_dir()`：onefile 打包后 `sys.executable` 仍指向 dist/ 里的 exe，
+    而资源被解压到临时目录 —— 只有 `sys._MEIPASS` 指向那里。所以这里必须
+    优先用 `_MEIPASS`，开发态才回退到仓库根。
+
+    只用于「跟着程序走、永不修改」的文件；用户数据一律走 `app_data_dir()`。
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if not base:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
 
 
 def portable_root() -> str | None:
@@ -183,3 +198,13 @@ def bgs_dir() -> str:
     而且换盘路径漂移会导致设置里存着一个失效路径。
     """
     return _subdir("bgs")
+
+
+def lyrics_colors_dir() -> str:
+    """逐曲「歌词自定义颜色」sidecar 目录（v2.9.0）。
+
+    每首歌一个 `<track_id>.json`，存「行时间戳 -> 颜色」的映射。放数据目录而不是
+    写进歌词文件：.lrc 是通用格式，不该被本应用的私有字段污染；换歌词文件时
+    这些颜色仍留在原曲名下。
+    """
+    return _subdir("lyrics_colors")

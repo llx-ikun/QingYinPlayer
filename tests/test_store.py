@@ -212,6 +212,41 @@ class TestStore(unittest.TestCase):
         s.save()
         self.assertEqual(LibraryStore(self.db).settings.lyrics_effect, "karaoke")
 
+    def test_lyrics_color_roundtrip(self):
+        """v2.9.0 歌词颜色覆盖要能存能读，默认关闭。"""
+        from app.models import LyricsColorConfig
+
+        s = self._store()
+        self.assertFalse(s.settings.lyrics_color.enabled)
+        s.settings.lyrics_color = LyricsColorConfig(
+            enabled=True, trigger="time", color_a="#FF6B9D",
+            color_b="#7f7bff", direction="diagonal", speed=0.5, transition=0.12)
+        s.save()
+        got = LibraryStore(self.db).settings.lyrics_color
+        self.assertTrue(got.enabled)
+        self.assertEqual(got.trigger, "time")
+        self.assertEqual(got.color_a, "#ff6b9d")
+        self.assertEqual(got.direction, "diagonal")
+        self.assertAlmostEqual(got.speed, 0.5)
+        self.assertAlmostEqual(got.transition, 0.12)
+
+    def test_bad_lyrics_color_falls_back(self):
+        """脏歌词颜色配置：非法枚举/色值/数值回默认，不让加载失败。"""
+        from app.models import Settings
+
+        lc = Settings.from_dict({"lyrics_color": {
+            "enabled": True, "trigger": "warp", "direction": "up",
+            "color_a": "red", "color_b": "#ABCDEF",
+            "speed": "fast", "transition": 99,
+        }}).lyrics_color
+        self.assertTrue(lc.enabled)
+        self.assertEqual(lc.trigger, "progress")
+        self.assertEqual(lc.direction, "horizontal")
+        self.assertEqual(lc.color_a, "")
+        self.assertEqual(lc.color_b, "#abcdef")
+        self.assertAlmostEqual(lc.speed, 0.25)
+        self.assertAlmostEqual(lc.transition, 0.3, msg="超界过渡宽度要钳到上限")
+
     def test_bad_lyrics_effect_in_json_falls_back(self):
         import json
 
@@ -223,6 +258,26 @@ class TestStore(unittest.TestCase):
         with open(self.db, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         self.assertEqual(LibraryStore(self.db).settings.lyrics_effect, "none")
+
+    def test_per_page_bg_without_inherit_flag_is_self_healed(self):
+        """v2.8.4 自愈：v2.8.3 存下的「分页面设了背景却没翻 inherit」的矛盾状态，
+        升级后要按「本页单独设置」纠正，否则配置被 bg_all 吞掉、表现设了没反应。"""
+        from app.models import Settings
+
+        s = Settings.from_dict({
+            "bg": {
+                "all": {"type": "none"},
+                # 用户设了渐变却没勾「本页单独设置」→ inherit 缺省 True
+                "library": {"type": "gradient", "color": "#000000",
+                            "color2": "#885cf6", "inherit": True},
+                "now_playing": {"type": "none", "inherit": True},
+            }
+        })
+        self.assertFalse(s.bg_library.inherit, "分页面有背景就必须自愈为「单独设置」")
+        self.assertEqual(s.bg_config("library").type, "gradient")
+        # 真正的空配置仍跟随「全部页面」，不被误伤
+        self.assertTrue(s.bg_now.inherit)
+        self.assertIs(s.bg_config("now_playing"), s.bg_all)
 
 
 class TestDamagedData(unittest.TestCase):

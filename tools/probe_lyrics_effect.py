@@ -30,10 +30,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="shots/lyrics_effect.png")
     ap.add_argument("--theme", default="columbina", choices=["columbina", "light"])
+    # v2.9.0 歌词颜色覆盖：启用后 4 格都叠加自定义双色渐变
+    ap.add_argument("--color", action="store_true", help="启用歌词颜色覆盖")
+    ap.add_argument("--trigger", default="progress", choices=["progress", "time"])
+    ap.add_argument("--direction", default="horizontal",
+                    choices=["horizontal", "vertical", "diagonal"])
+    ap.add_argument("--color-a", default="#ff6b9d")
+    ap.add_argument("--color-b", default="#7f7bff")
+    ap.add_argument("--line-color", default="", help="给第二句单独指定颜色（如 #00e0a0）")
+    ap.add_argument("--bilingual", action="store_true", help="使用带译文的双语歌词")
     args = ap.parse_args()
 
     app = QApplication(sys.argv[:1])
     from app.lyrics import LyricLine
+    from app.models import LyricsColorConfig
     from ui import theme as ui_theme
     from ui.lyrics_panel import LyricsPanel
 
@@ -46,6 +56,13 @@ def main() -> int:
         LyricLine(4000, "童年的荡秋千"),
         LyricLine(6000, "随记忆一直晃到现在"),
     ]
+    if args.bilingual:
+        lines = [
+            LyricLine(0, "故事的小黄花", "The little yellow flower of the story"),
+            LyricLine(2000, "从出生那年就飘着", "It has been drifting since the year I was born"),
+            LyricLine(4000, "童年的荡秋千", "The swing of my childhood"),
+            LyricLine(6000, "随记忆一直晃到现在", "Sways in my memory to this day"),
+        ]
     effects = [
         ("none", "无特效"),
         ("zoom", "放大"),
@@ -60,6 +77,7 @@ def main() -> int:
     row.setContentsMargins(PAD, PAD, PAD, PAD)
     row.setSpacing(PAD)
 
+    panels = []
     for effect, label in effects:
         cell = QWidget()
         col = QVBoxLayout(cell)
@@ -72,14 +90,28 @@ def main() -> int:
         panel = LyricsPanel()
         panel.setFixedSize(PANEL_W, PANEL_H)
         panel.set_effect(effect)
+        if args.color:
+            panel.set_color_config(LyricsColorConfig(
+                enabled=True, trigger=args.trigger, color_a=args.color_a,
+                color_b=args.color_b, direction=args.direction, speed=0.6))
+            if args.line_color:
+                panel.set_line_colors({2000: args.line_color})
         panel.set_synced(lines)
         panel.update_position(3000)  # 第二句 2000~4000ms 正中间 → 行内进度 0.5
         col.addWidget(panel)
         row.addWidget(cell)
+        panels.append(panel)
 
     host.show()
     for _ in range(4):
         app.processEvents()
+    # 时间模式在静态截图里也要能看到色带：直接给一个中间相位
+    if args.color and args.trigger == "time":
+        for panel in panels:
+            panel._anim_phase = 0.45
+            panel.list.viewport().update()
+        for _ in range(3):
+            app.processEvents()
 
     out = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)

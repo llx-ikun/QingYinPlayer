@@ -325,14 +325,19 @@ def _overlap(a: str, b: str, floor: float = 0.5) -> bool:
 
 
 def score_hit(hit: LyricHit, title: str, artist: str,
-              want: float) -> tuple[float, bool]:
-    """返回 (得分, 是否通过身份门槛)。`title`/`artist` 需已归一化，`want` 是秒。
+              want: float, album: str = "") -> tuple[float, bool]:
+    """返回 (得分, 是否通过身份门槛)。`title`/`artist`/`album` 需已归一化，`want` 是秒。
 
-    门槛只有两条路：**标题对得上**，或**时长差 ≤2 秒**。曾经允许「只有艺人对得上」，
-    但同名不同曲（不同歌手唱同一首）正好落在这个口子上，配错歌词比没歌词更糟。
+    门槛有三条路：**标题对得上**，或**时长差 ≤2 秒**，或**专辑相等且艺人相符**。
+    曾经只有前两条，但本地中文标题与 LRCLIB 英文 trackName 语言不一致时（例如
+    「痴人说梦」对 `Ravings`），标题零交集、时长又恰好拿不到，两条都走不通——
+    而专辑名「崩坏星穹铁道-痴人说梦 Ravings」同时含两种写法，是唯一的桥梁
+    （v2.8.2）。专辑这条要求「艺人同时相符」，避免同一张多曲专辑里配错曲。
     """
     score = 0.0
     hit_title, hit_artist = _norm(hit.track_name), _norm(hit.artist_name)
+    hit_album = _norm(hit.album_name)
+    album = _norm(album)
 
     title_ok = False
     if title and hit_title:
@@ -366,18 +371,27 @@ def score_hit(hit: LyricHit, title: str, artist: str,
             # 歌名对上、但艺人和时长双双不符：多半是同名翻唱，压一压。
             score -= 1.5
 
+    album_ok = False
+    if album and hit_album:
+        if album == hit_album:
+            score += 2.0
+            album_ok = True
+        elif _overlap(album, hit_album, floor=0.6):
+            score += 1.2
+            album_ok = True
+
     if hit.synced and usable_text(hit.synced):
         score += 0.5                       # 同步稿严格优于纯文本稿
 
-    return score, (title_ok or duration_ok)
+    return score, (title_ok or duration_ok or (album_ok and artist_ok))
 
 
 def _best_of(candidates: list[LyricHit], title: str, artist: str,
-             want: float) -> LyricHit | None:
+             want: float, album: str = "") -> LyricHit | None:
     best: LyricHit | None = None
     best_score = float("-inf")
     for hit in candidates:
-        score, gate = score_hit(hit, title, artist, want)
+        score, gate = score_hit(hit, title, artist, want, album)
         if not gate:
             continue
         if score > best_score:
@@ -386,25 +400,37 @@ def _best_of(candidates: list[LyricHit], title: str, artist: str,
 
 
 def pick_best(hits: list[LyricHit], title: str, artist: str,
-              duration_ms: int = 0) -> LyricHit | None:
+              duration_ms: int = 0, album: str = "") -> LyricHit | None:
     """在候选里选最可信的一条；没有「对得上」的信号就不猜。
 
     先只在**带同步时间轴**的候选里选，一条都没通过才退到纯文本稿：
     不能滚动的高亮歌词体验差得多，只要同一首歌有同步稿就绝不用纯文本。
+
+    `album` 参与身份判定（v2.8.2）：中文标题 ↔ 英文 trackName 语言不一致时，
+    专辑名是唯一能把两者对上号的桥梁，见 `score_hit`。
     """
     normalized_title, normalized_artist = _norm(title), _norm(artist)
     want = duration_ms / 1000.0 if duration_ms else 0.0
     usable = [h for h in hits if not h.instrumental and usable_text(h.text)]
     synced_only = [h for h in usable if h.synced and usable_text(h.synced)]
-    return (_best_of(synced_only, normalized_title, normalized_artist, want)
-            or _best_of(usable, normalized_title, normalized_artist, want))
+    return (_best_of(synced_only, normalized_title, normalized_artist, want, album)
+            or _best_of(usable, normalized_title, normalized_artist, want, album))
 
 
 # ---------- 网络 ----------
 
 
 class RateLimited(Exception):
-    """LRCLIB 返回 429/503：本轮立刻收手，不要连发（否则可能被临时封禁）。"""
+    """LRCLIB 返回 429（请求过频）：本轮立刻收手，不要连发（否则可能被临时封禁）。"""
+
+
+class ServerBusy(Exception):
+    """LRCLIB 返回 503（ServerOverloaded）：**瞬时的服务过载，不是限流**。
+
+    v2.8.2 从 `RateLimited` 里拆出来。以前 503 与 429 混在一起，第一个
+    `get` 查询一旦撞上 503 就整轮中止，永远到不了那个真正能命中的 `q=` 关键词
+    查询（实测：`痴人说梦` 的 `get` 端点间歇 503，但 `q=痴人说梦` 稳定返回命中）。
+    503 应当「跳过这条、试下一条」，而不是把整首歌判死。"""
 
 
 @dataclass(frozen=True)
@@ -439,7 +465,8 @@ def _http_get_json(url: str, timeout: float):
     """GET 并解析 JSON。
 
     返回 None 表示「这个查询没有结果」（404、非 JSON 的校验错误、空响应）；
-    抛出 `RateLimited` 表示限流/服务过载；其它异常原样抛给上层降级。
+    抛出 `RateLimited` 表示 429 限流（立即收手）；抛出 `ServerBusy` 表示 503
+    服务过载（瞬时，可跳过这条改试下一条）；其它异常原样抛给上层降级。
     """
     request = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
@@ -452,8 +479,10 @@ def _http_get_json(url: str, timeout: float):
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
-        if exc.code in (429, 503):
+        if exc.code == 429:
             raise RateLimited(f"HTTP {exc.code}") from exc
+        if exc.code == 503:
+            raise ServerBusy(f"HTTP {exc.code}") from exc
         raise
     try:
         return json.loads(raw.decode("utf-8", "replace"))
@@ -484,6 +513,7 @@ def fetch_outcome(title: str, artist: str, duration_ms: int = 0,
 
     best: LyricHit | None = None
     best_score = float("-inf")
+    saw_busy = False
     for i, query in enumerate(plan):
         if progress is not None:
             progress(i + 1, len(plan))
@@ -494,18 +524,24 @@ def fetch_outcome(title: str, artist: str, duration_ms: int = 0,
         except RateLimited:
             # 限流立即停手，不再发下一条；已有结果照常返回，但没有就报 aborted
             return FetchOutcome(best.text if best else None, aborted=True)
+        except ServerBusy:
+            # v2.8.2：503 是瞬时过载，跳过这条改试下一条，别把整首歌判死。
+            # 记一笔：若最终一条都没中，要报 aborted 而不是 missed（不写负缓存）。
+            saw_busy = True
+            continue
         except Exception:  # noqa: BLE001  单条查询失败不该影响后续查询
             continue
-        hit = pick_best(as_hits(payload), title, artist, duration_ms)
+        hit = pick_best(as_hits(payload), title, artist, duration_ms, album)
         if hit is None:
             continue
-        score, _ = score_hit(hit, normalized_title, normalized_artist, want)
+        score, _ = score_hit(hit, normalized_title, normalized_artist, want, album)
         if score > best_score:
             best, best_score = hit, score
         if best_score >= threshold:
             break
 
-    return FetchOutcome(best.text if best else None)
+    return FetchOutcome(best.text if best else None,
+                        aborted=(best is None and saw_busy))
 
 
 def fetch_lyrics(title: str, artist: str, duration_ms: int = 0,
@@ -537,6 +573,7 @@ def fetch_best_hit(title: str, artist: str, duration_ms: int = 0,
 
     best: LyricHit | None = None
     best_score = float("-inf")
+    saw_busy = False
     for query in plan:
         if time.monotonic() > deadline:
             return best, True
@@ -544,18 +581,22 @@ def fetch_best_hit(title: str, artist: str, duration_ms: int = 0,
             payload = fetch(query.url, timeout)
         except RateLimited:
             return best, True
+        except ServerBusy:
+            # v2.8.2：503 瞬时过载，跳过这条试下一条；全都没中时按 aborted 返回。
+            saw_busy = True
+            continue
         except Exception:  # noqa: BLE001  单条查询失败不该影响后续查询
             continue
-        hit = pick_best(as_hits(payload), title, artist, duration_ms)
+        hit = pick_best(as_hits(payload), title, artist, duration_ms, album)
         if hit is None:
             continue
-        score, _ = score_hit(hit, normalized_title, normalized_artist, want)
+        score, _ = score_hit(hit, normalized_title, normalized_artist, want, album)
         if score > best_score:
             best, best_score = hit, score
         if best_score >= threshold:
             break
 
-    return best, False
+    return best, (best is None and saw_busy)
 
 
 # ---------- 缓存（命中即离线可用） ----------

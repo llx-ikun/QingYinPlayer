@@ -18,20 +18,25 @@ v2.1 变更（本地视频导入与画面播放）：
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import os
+from ctypes import wintypes
 
 from PySide6.QtCore import (
     QEvent,
     QPoint,
     QRect,
     QRectF,
+    QSize,
     QTimer,
     QUrl,
     Qt,
 )
-from PySide6.QtGui import QDesktopServices, QKeySequence, QPainterPath, QRegion, QShortcut
+from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QKeySequence,
+                           QPainterPath, QRegion, QShortcut)
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -49,9 +54,11 @@ from app.filesize import file_size
 from app.lyrics import (LyricLine, format_lrc, is_structure_marker, lyrics_from_text,
                         pair_bilingual, parse_plain, shift_lrc, strip_meta_lines)
 from app.lyrics_align import sidecar_lrc_path, write_sidecar_lrc
+from app.lyrics_colors import (clear_line_color, clear_song_colors,
+                               load_line_colors, set_line_color)
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
-from app.lyrics_multi import MultiSourceWorker
+from app.lyrics_multi import DEFAULT_SOURCES, MultiSourceWorker
 from app.lyrics_online import (build_web_search_url, clear_miss,
                                read_cache, read_miss, write_cache, write_miss)
 from app.metadata import read_track
@@ -89,6 +96,56 @@ _RESIZE_MARGIN = 6
 _EDGE_LEFT, _EDGE_RIGHT, _EDGE_TOP, _EDGE_BOTTOM = 1, 2, 4, 8
 _CORNER_RADIUS = 10
 
+# ---- Windows 原生命中测试（v2.7.9）----
+# 让系统自己接管无边框窗口的边缘缩放。数字是 winuser.h 里的 HT* 常量：
+# 10=左 11=右 12=上 15=下 13=左上 14=右上 16=左下 17=右下。
+_WM_NCHITTEST = 0x0084
+_HT_FOR_EDGE = {
+    _EDGE_LEFT: 10,
+    _EDGE_RIGHT: 11,
+    _EDGE_TOP: 12,
+    _EDGE_BOTTOM: 15,
+    _EDGE_LEFT | _EDGE_TOP: 13,
+    _EDGE_RIGHT | _EDGE_TOP: 14,
+    _EDGE_LEFT | _EDGE_BOTTOM: 16,
+    _EDGE_RIGHT | _EDGE_BOTTOM: 17,
+}
+
+# ---- 窗口尺寸（v2.8.0）----
+# 之前是写死的 resize(1280, 800) / setMinimumSize(1100, 720)，完全不看屏幕。
+# 在 1920×1080@125% 的机器上逻辑可用区只有 1536×864：窗口一开就占宽 83%、
+# 高 93%，最小高的 720 更是毫无依据 —— 布局 minimumSizeHint() 实测只要 564，
+# 多出来的 156px 纯粹是「拍脑袋」，代价是用户想把窗口拉小都拉不动。
+#
+# 现在改成：初始尺寸按屏幕可用区比例算（小屏自动小、大屏有上限），最小尺寸
+# 取布局真实下限再加一点余量。数值来自 tools/probe_window_size.py 实测。
+WINDOW_MIN_WIDTH = 1010      # 不是布局下限（PlayerBar 实测 920），而是「标题还能读」下限
+WINDOW_MIN_HEIGHT = 580      # 窗口 minimumSizeHint 实测 566 + 14 余量
+WINDOW_MAX_WIDTH = 1440      # 初始尺寸上限：大屏也别一开就糊满整块屏
+WINDOW_MAX_HEIGHT = 900
+WINDOW_W_RATIO = 0.68        # 初始宽 = 可用宽 × 0.68（1536 → 1044，占 68%）
+WINDOW_H_RATIO = 0.74        # 初始高 = 可用高 × 0.74（864 → 639，占 74%）
+
+
+def initial_window_size(available: QSize) -> QSize:
+    """按屏幕可用区算出初始窗口尺寸（v2.8.0）。
+
+    纯函数，不读全局 screen —— 单测可以随便喂尺寸验边界。
+
+    夹取顺序有讲究，不能换：
+      1. 先按比例算；
+      2. 再夹上限（大屏不许开成一堵墙）；
+      3. 再夹可用区（小屏不许溢出屏幕）；
+      4. **最后**托底到最小尺寸。
+    托底放最后，才能保证任何输入下返回值都 ≥ 最小尺寸——否则 1024×600 的
+    小屏会先被可用区夹到 696，再被最小尺寸顶回 1010，白算一遍。
+    """
+    w = min(int(available.width() * WINDOW_W_RATIO), WINDOW_MAX_WIDTH)
+    h = min(int(available.height() * WINDOW_H_RATIO), WINDOW_MAX_HEIGHT)
+    w = max(min(w, available.width()), WINDOW_MIN_WIDTH)
+    h = max(min(h, available.height()), WINDOW_MIN_HEIGHT)
+    return QSize(w, h)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -96,8 +153,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("轻音播放器")
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(1280, 800)
-        self.setMinimumSize(1100, 720)
+        self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self._apply_initial_geometry()
         self.setAcceptDrops(True)
 
         # ---- 核心对象 ----
@@ -131,6 +188,10 @@ class MainWindow(QMainWindow):
         self._history: list[str] = [self._view_id]
         self._history_pos = 0
         self._resize_edge = 0
+        # v2.7.9：Windows 原生边缘缩放是否已经接管（nativeEvent 收到过 WM_NCHITTEST
+        # 并返回了 HT* 码）。一旦为 True，eventFilter 就不再调 startSystemResize ——
+        # 两套机制同时生效会互相打断，表现为「按下后拖动没反应」。
+        self._native_resize = False
         self._resizing = False
         self._resize_start_geo: QRect | None = None
         self._resize_start_pos: QPoint | None = None
@@ -157,6 +218,25 @@ class MainWindow(QMainWindow):
         self._save_watch.setInterval(4000)
         self._save_watch.timeout.connect(self._check_save_error)
         self._save_watch.start()
+
+    def _apply_initial_geometry(self) -> None:
+        """按屏幕可用区定初始尺寸，并在可用区内居中（v2.8.0）。
+
+        无边框窗口系统不会替你居中、也不会替你挑一个「合适的」大小 —— 之前
+        写死 1280×800 时靠「差不多能看」蒙混过去，尺寸一变小，位置不对就很显眼。
+
+        只按主屏算：多屏时窗口若开在副屏，用户可以自己拖过去（没做记忆功能，
+        见 MEMORY「窗口尺寸不做持久化」的取舍）。
+        """
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:  # 无屏环境（极少数远程/服务场景）：退回最小尺寸
+            self.resize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+            return
+        avail = screen.availableGeometry()
+        size = initial_window_size(avail.size())
+        self.resize(size)
+        self.move(avail.x() + (avail.width() - size.width()) // 2,
+                  avail.y() + (avail.height() - size.height()) // 2)
 
     def _warn_load_skipped(self) -> None:
         """启动时跳过过损坏数据 —— 必须明确告知，不能装没事。"""
@@ -328,6 +408,12 @@ class MainWindow(QMainWindow):
             self._shift_current_lyrics)
         # 歌词区右键「逐句打轴」（v2.7.4）：播放中按空格逐句盖时间戳
         self.now_playing.lyrics.tap_requested.connect(self._start_tap)
+        # 歌词区右键「逐句设置颜色 / 清除本曲颜色」（v2.9.0）
+        self.now_playing.lyrics.line_color_requested.connect(self._on_lyric_line_color)
+        self.now_playing.lyrics.line_color_clear_requested.connect(
+            self._on_lyric_line_color_clear)
+        self.now_playing.lyrics.song_colors_clear_requested.connect(
+            self._on_lyric_song_colors_clear)
 
         # 视频页交互（v2.1）
         self.now_playing.back_to_list_requested.connect(lambda: self._show_page(0))
@@ -372,6 +458,8 @@ class MainWindow(QMainWindow):
         self.sidebar.refresh_playlists(self.store.user_playlists(), self._playlist_cover)
         # 歌词播放动效（v2.6.4）：启动即按持久化设置渲染
         self.now_playing.lyrics.set_effect(self.store.settings.lyrics_effect)
+        # 歌词颜色覆盖（v2.9.0）：启动即按持久化配置渲染
+        self.now_playing.lyrics.set_color_config(self.store.settings.lyrics_color)
         self.set_view(self._view_id)
         self.player_bar.set_mode(self.player.mode)
         self.player_bar.update_volume(self.player.volume, self.player.muted)
@@ -510,6 +598,8 @@ class MainWindow(QMainWindow):
         self.player_bar.set_format(track.fmt)
         self._toast(f"正在播放：{track.display_title} - {track.display_artist}", 3000)
         self._load_lyrics(track)
+        # 逐曲逐句颜色（v2.9.0）：换歌即换配色表
+        self.now_playing.lyrics.set_line_colors(load_line_colors(track.id))
 
     def _on_position(self, position_ms: int) -> None:
         duration = self.player.duration_ms or (
@@ -665,6 +755,11 @@ class MainWindow(QMainWindow):
         if not (track.display_title or track.artist):
             return False
         self._online_attempted.add(track.id)
+        # v2.7.7：先把「要查哪几个平台」讲清楚，别让用户对着空白歌词区干等。
+        # 并行模式下这些请求是同时发出的，所以这是清单而不是"正在查某一个"。
+        platforms = "、".join(name for name, _ in DEFAULT_SOURCES)
+        if self.player.current_track is not None and self.player.current_track.id == track.id:
+            self.now_playing.set_empty(f"联网匹配：{platforms}")
         worker = MultiSourceWorker(track.id, track.display_title, track.artist,
                                    track.duration_ms, track.album, self)
         worker.found.connect(self._on_online_lyrics)
@@ -676,19 +771,25 @@ class MainWindow(QMainWindow):
         worker.start()
         return True
 
-    def _on_online_lyrics_progress(self, cur: int = 0, total: int = 0) -> None:
-        """联网匹配进度：只更新「正在找」的空状态文案，不打断已有歌词。
+    def _on_online_lyrics_progress(self, cur: int = 0, total: int = 0, names: str = "") -> None:
+        """联网匹配进度：更新「正在找」的空状态文案，不打断已有歌词。
 
-        签名与 `MultiSourceWorker.progress = Signal(int, int)` 一致——别再塞
+        签名与 `MultiSourceWorker.progress = Signal(int, int, str)` 一致——别再塞
         track_id：多一个参数会让每次 emit 都抛 TypeError，进度文案永远不更新
         （v2.7.2 修）。进度只服务于「当前曲目」，直接看 current_track 即可。
+
+        v2.7.7：第三个参数是已返回的源名（"LRCLIB、网易云"）。并行抓取时几个
+        平台是同时发出的，所以只报「谁回来了」，不谎报「正在查谁」。
         """
         current = self.player.current_track
         if current is None:
             return
         if self._lyrics_cache.get(current.id) is not None:
             return                      # 已经拿到歌词了，别再覆盖
-        self.now_playing.set_empty(f"正在联网匹配歌词…（{cur}/{total}）")
+        text = f"联网匹配 {cur}/{total}"
+        if names:
+            text += f" · {names}"
+        self.now_playing.set_empty(text)
 
     def _on_online_lyrics(self, track_id: str, text: str, source: str = "LRCLIB") -> None:
         synced, plain = lyrics_from_text(text)
@@ -1333,7 +1434,7 @@ class MainWindow(QMainWindow):
         某个角落还是旧的"。
         """
         s = self.store.settings
-        config = s.bg_config(self._current_bg_page())
+        config = self._effective_bg_config()
         # 背景开着时面板必须半透明，否则自定义背景被完全盖住（"设了没反应"）
         self._bg_scrim = ui_theme.BG_SCRIM if config.type != "none" else None
         ui_theme.set_appearance(QApplication.instance() or self, s.theme,
@@ -1377,6 +1478,48 @@ class MainWindow(QMainWindow):
                   "typewriter": "打字机", "karaoke": "颜色覆盖"}
         self._toast(f"歌词动效：{labels.get(effect, effect)}", 2000)
 
+    # ---------- 歌词颜色覆盖（v2.9.0） ----------
+
+    def _on_settings_lyrics_color(self, cfg) -> None:
+        """设置页改了颜色覆盖：存盘 + 立即应用（不弹 toast，避免拖动滑块刷屏）。"""
+        self.store.settings.lyrics_color = cfg
+        self.store.save()
+        self.now_playing.lyrics.set_color_config(cfg)
+
+    def _on_lyric_line_color(self, row: int) -> None:
+        """右键「这一句设置颜色」：取色后写进该曲 sidecar 并重新下发。"""
+        track = self.player.current_track
+        panel = self.now_playing.lyrics
+        time_ms = panel.line_time(row)
+        if track is None or time_ms is None:
+            return
+        current = (load_line_colors(track.id).get(time_ms)
+                   or self.store.settings.lyrics_color.color_a
+                   or ui_theme.current_theme().ACCENT)
+        color = QColorDialog.getColor(QColor(current), self, "选择这一句的颜色")
+        if not color.isValid():
+            return
+        mapping = set_line_color(track.id, time_ms, color.name())
+        panel.set_line_colors(mapping)
+        self._toast("已更新这一句的颜色", 1600)
+
+    def _on_lyric_line_color_clear(self, row: int) -> None:
+        track = self.player.current_track
+        panel = self.now_playing.lyrics
+        time_ms = panel.line_time(row)
+        if track is None or time_ms is None:
+            return
+        panel.set_line_colors(clear_line_color(track.id, time_ms))
+        self._toast("已清除这一句的颜色", 1600)
+
+    def _on_lyric_song_colors_clear(self) -> None:
+        track = self.player.current_track
+        if track is None:
+            return
+        clear_song_colors(track.id)
+        self.now_playing.lyrics.set_line_colors({})
+        self._toast("已清除本曲的全部歌词颜色", 2000)
+
     def _toggle_theme(self) -> None:
         # 两态循环：深色 ↔ 浅色
         order = ui_theme.THEME_ORDER
@@ -1399,13 +1542,15 @@ class MainWindow(QMainWindow):
                                 bg_configs={"all": s.bg_all, "library": s.bg_library,
                                             "now_playing": s.bg_now},
                                 bg_scope=self._current_bg_page(),
-                                lyrics_effect=s.lyrics_effect)
+                                lyrics_effect=s.lyrics_effect,
+                                lyrics_color=s.lyrics_color)
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
         dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
         dialog.accent_changed.connect(self._on_settings_accent)
         dialog.font_scale_changed.connect(self._on_settings_font_scale)
         dialog.lyrics_effect_changed.connect(self._on_settings_lyrics_effect)
+        dialog.lyrics_color_changed.connect(self._on_settings_lyrics_color)
         dialog.background_changed.connect(self._on_settings_background)
         dialog.storage_changed.connect(self._on_storage_changed)
         dialog.exec()
@@ -1627,6 +1772,16 @@ class MainWindow(QMainWindow):
         """当前页的作用域名：列表页 / 正在播放页各自可以有一套背景。"""
         return "now_playing" if self.stack.currentIndex() == 1 else "library"
 
+    def _effective_bg_config(self):
+        """当前真正要画的背景（v2.8.3）：就是用户对当前页的设置。
+
+        主题与背景已彻底拆开 —— 主题只管配色，背景是独立维度（纯色/渐变/图片/
+        内置预设）。不再有「主题 > 用户」的优先级：内置背景（星空/云海）现在是
+        背景页里可选的预设，选了就写进当前页的 BackgroundConfig（preset 字段），
+        跟主题互不联动。
+        """
+        return self.store.settings.bg_config(self._current_bg_page())
+
     def _layout_background(self) -> None:
         """背景层铺满窗口根容器；内缩 1px，让 QSS 的圆角描边不被盖掉。"""
         rect = self._root.rect()
@@ -1636,7 +1791,7 @@ class MainWindow(QMainWindow):
     def _apply_background_config(self, config) -> None:
         self.background.set_config(config)
         # 「深色」与「浅色」主题自带底层装饰（月牙星点 / 羽饰 / 四角星）；
-        # 用户一旦设了自定义背景就让位，免得两套背景打架。
+        # 用户一旦设了背景（纯色/渐变/图片/内置预设）就让位，免得两套背景打架。
         theme = ui_theme.current_theme()
         self.background.set_decor(
             theme.name if config.type == "none" and theme.name in ("columbina", "light") else "",
@@ -1651,7 +1806,7 @@ class MainWindow(QMainWindow):
         背景「有没有开」会决定面板是否半透明，而那是整张 QSS 的事 ——
         只在开关状态真的翻转时才重建样式表，避免每次切页都重刷全身。
         """
-        config = self.store.settings.bg_config(self._current_bg_page())
+        config = self._effective_bg_config()
         want_scrim = ui_theme.BG_SCRIM if config.type != "none" else None
         if want_scrim != self._bg_scrim:
             self._apply_appearance()      # 会顺带把 config 应用上
@@ -1718,6 +1873,51 @@ class MainWindow(QMainWindow):
             edges |= Qt.Edge.BottomEdge
         return edges
 
+    def _hit_test_code(self, local: QPoint) -> int:
+        """逻辑坐标 → Windows 原生命中测试码；0 表示"这里是客户区，别插手"（v2.7.9）。
+
+        抽成纯函数是为了可测：`nativeEvent` 只负责解 MSG 再转发到这里，
+        判定逻辑不需要真窗口消息就能验（`test_hit_test_codes`）。
+        最大化/全屏时不返回任何缩放码 —— 那样四边都变成缩放热区，标题栏和
+        播放栏的边缘按钮就点不动了。
+        """
+        if self.isMaximized() or self.isFullScreen():
+            return 0
+        return _HT_FOR_EDGE.get(self._edge_at(local), 0)
+
+    def nativeEvent(self, eventType, message):  # noqa: N802
+        """让 Windows 原生接管边缘缩放（v2.7.9）。
+
+        为什么不用 `QWindow.startSystemResize`：它在 **frameless + 半透明背景**
+        的窗口上会返回 False，然后我们的 eventFilter 就静默退回「手动 setGeometry」。
+        手动路径的现场表现是三个症状一起出现：
+        ① 拖动时整窗移位（左/上边缘要同时改位置和尺寸）；
+        ② 窗口追不上鼠标（每帧重排重绘 ~50ms，中间帧全部丢失）；
+        ③ 中途露白（背景层还没跟上新尺寸，先露出 WindowRoot 底色）。
+        `WM_NCHITTEST` 是 Windows 无边框窗口缩放的标准做法：系统拿到 HTLEFT/
+        HTBOTTOMRIGHT 后会自己进 modal 缩放循环，跟手、没有中间帧，还能吃到
+        Aero 贴靠/分屏。代价是要自己解 MSG，并把物理像素换算成逻辑坐标。
+        """
+        try:
+            if eventType not in (b"windows_generic_MSG", "windows_generic_MSG"):
+                return super().nativeEvent(eventType, message)
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message != _WM_NCHITTEST:
+                return super().nativeEvent(eventType, message)
+            # lParam：低 16 位 x、高 16 位 y，屏幕坐标，**物理像素**
+            x = ctypes.c_short(msg.lParam & 0xFFFF).value
+            y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+            dpr = self.devicePixelRatioF() or 1.0
+            local = self._root.mapFromGlobal(QPoint(round(x / dpr), round(y / dpr)))
+            code = self._hit_test_code(local)
+            if not code:
+                return super().nativeEvent(eventType, message)
+            # 原生缩放已经接管：让 eventFilter 别再调 startSystemResize（双触发会互相打架）
+            self._native_resize = True
+            return True, code
+        except Exception:                      # 解 MSG 出错也不能让整个窗口炸掉
+            return super().nativeEvent(eventType, message)
+
     def _set_edge_cursor(self, widget: QWidget, cursor) -> None:
         """把边缘缩放光标临时挂到 widget 上，并记住它原来的样子。
 
@@ -1768,9 +1968,11 @@ class MainWindow(QMainWindow):
             else:
                 self._restore_edge_cursor()
         elif etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-            if self._resize_edge:
+            if self._resize_edge and not self._native_resize:
                 # 用系统原生缩放：无边框窗口手动 setGeometry 累加会造成整体移位，
                 # 且吃不到 Windows 的磁性贴靠/分屏；原生缩放两者都稳。
+                # v2.7.9：`_native_resize` 为真说明 WM_NCHITTEST 已经让系统接管了，
+                # 这里再调 startSystemResize 会打断系统的缩放循环。
                 handle = self.windowHandle()
                 started = handle is not None and handle.startSystemResize(self._qt_edges(self._resize_edge))
                 if not started:  # 兜底：没有原生窗口句柄时退回手动跟踪

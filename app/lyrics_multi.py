@@ -221,7 +221,8 @@ def _search_keyword(title: str, artist: str) -> str:
 
 
 def _pick_lyric(candidates: list[dict], title: str, artist: str, duration_ms: int,
-                timeout: float, fetch, lyric_url_fn, lyric_parse_fn) -> LyricHit | None:
+                timeout: float, fetch, lyric_url_fn, lyric_parse_fn,
+                album: str = "") -> LyricHit | None:
     """对前 N 个候选逐个拉歌词，选「通过身份门槛」的最佳。
 
     网易云伴奏版常排第一且无歌词，只试第一个会漏掉正版，所以遍历候选，
@@ -246,7 +247,7 @@ def _pick_lyric(candidates: list[dict], title: str, artist: str, duration_ms: in
             plain=None,
             instrumental=False,
         ))
-    return pick_best(hits, title, artist, duration_ms)
+    return pick_best(hits, title, artist, duration_ms, album)
 
 
 # ---------- 各源入口 ----------
@@ -265,7 +266,8 @@ def fetch_netease(title: str, artist: str, duration_ms: int = 0,
     except Exception:  # noqa: BLE001  断网/被拒 → 该源降级，还有别的源兜底
         return None, False
     hit = _pick_lyric(parse_netease_search(payload), title, artist, duration_ms,
-                      timeout, fetch, build_netease_lyric_url, parse_netease_lyric)
+                      timeout, fetch, build_netease_lyric_url, parse_netease_lyric,
+                      album)
     return hit, False
 
 
@@ -282,7 +284,7 @@ def fetch_qq(title: str, artist: str, duration_ms: int = 0,
     except Exception:  # noqa: BLE001
         return None, False
     hit = _pick_lyric(parse_qq_search(payload), title, artist, duration_ms,
-                      timeout, fetch, build_qq_lyric_url, parse_qq_lyric)
+                      timeout, fetch, build_qq_lyric_url, parse_qq_lyric, album)
     return hit, False
 
 
@@ -304,9 +306,9 @@ DEFAULT_SOURCES: list[tuple[str, object]] = [
 
 
 def _best_with_source(pairs: list[tuple[str, LyricHit]], title: str, artist: str,
-                      duration_ms: int) -> tuple[LyricHit | None, str]:
+                      duration_ms: int, album: str = "") -> tuple[LyricHit | None, str]:
     """在 `(来源, hit)` 列表里统一打分选最优，返回 `(hit, 来源)`。"""
-    best = pick_best([hit for _, hit in pairs], title, artist, duration_ms)
+    best = pick_best([hit for _, hit in pairs], title, artist, duration_ms, album)
     if best is None:
         return None, ""
     for source, hit in pairs:
@@ -322,7 +324,8 @@ def fetch_outcome_multi(title: str, artist: str, duration_ms: int = 0,
     """多源并行检索歌词，返回 `(歌词原文, 来源名, 是否中止)`。
 
     `fetches` 可按来源名注入 fetch（`{"LRCLIB": fn, "网易云": fn, ...}`），
-    测试不联网；`progress(cur, total)` 按「源」逐步上报（1..源数）；
+    测试不联网；`progress(done, total, source_name)` 每返回一个源上报一次，
+    第三个参数是**刚返回的那个源名**（v2.7.7）。
     `parallel=False` 串行执行（测试用，结果与并行一致但无线程）。
     `aborted=True` 表示「至少一个源被限流/超时且全都没命中」，此时调用方
     绝不能写负缓存——一次网络抖动不等于这首歌没有歌词。
@@ -347,21 +350,25 @@ def fetch_outcome_multi(title: str, artist: str, duration_ms: int = 0,
         with ThreadPoolExecutor(max_workers=total) as pool:
             futures = [pool.submit(_run_one, name, fn) for name, fn in sources]
             for future in as_completed(futures):
-                results.append(future.result())
+                # v2.7.7：把「刚返回的源名」一并报上去。并行模式下三个源是同时
+                # 发出的，所以只能说「谁回来了」，不能说「正在查谁」—— 进度文案
+                # 必须如实反映这一点，否则界面显示的就是一句假话。
+                source_name, hit, aborted = future.result()
+                results.append((source_name, hit, aborted))
                 done += 1
                 if progress is not None:
-                    progress(done, total)
+                    progress(done, total, source_name)
     else:
         for name, fn in sources:
             results.append(_run_one(name, fn))
             done += 1
             if progress is not None:
-                progress(done, total)
+                progress(done, total, name)
 
     pairs = [(name, hit) for name, hit, _ in results if hit is not None]
     any_aborted = any(aborted for _, _, aborted in results)
     if pairs:
-        best, source = _best_with_source(pairs, title, artist, duration_ms)
+        best, source = _best_with_source(pairs, title, artist, duration_ms, album)
         if best is not None:
             return best.text, source, False
     return None, "", any_aborted
@@ -376,13 +383,16 @@ class MultiSourceWorker(QThread):
 
     与 `lyrics_online.LyricsFetchWorker` 的区别只在两点：跑多源而非单源，
     `found` 多带一个来源名（"LRCLIB" / "网易云" / "QQ音乐"）供界面显示。
-    `progress(cur, total)` 按源上报（如 2/3），界面据此显示「正在匹配 2/3」。
+    `progress(done, total, names)` 按源上报，`names` 是「到目前为已返回的平台」，
+    形如 `"LRCLIB、网易云"`，界面据此显示「正在匹配 2/3（LRCLIB、网易云 已返回）」。
     """
 
     found = Signal(str, str, str)
     missed = Signal(str)
     aborted = Signal(str)
-    progress = Signal(int, int)
+    # v2.7.7：(已完成源数, 源总数, 已返回的源名，用「、」连接)
+    # 第三个参数让人能看见"到底查了哪些平台"，不再只有一个 1/3 的数字。
+    progress = Signal(int, int, str)
 
     def __init__(self, track_id: str, title: str, artist: str,
                  duration_ms: int = 0, album: str = "", parent=None) -> None:
@@ -394,8 +404,14 @@ class MultiSourceWorker(QThread):
         self._album = album
 
     def run(self) -> None:
-        def _report(cur: int, total: int) -> None:
-            self.progress.emit(cur, total)
+        # v2.7.7：累积已返回的源名。并行模式下各源回来的顺序不固定，
+        # 所以每次上报都带上"到目前为止谁回来了"，而不是只报"正在查谁"。
+        returned: list[str] = []
+
+        def _report(done: int, total: int, source_name: str = "") -> None:
+            if source_name and source_name not in returned:
+                returned.append(source_name)
+            self.progress.emit(done, total, "、".join(returned))
 
         text, source, aborted = fetch_outcome_multi(
             self._title, self._artist, self._duration_ms,

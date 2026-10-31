@@ -683,9 +683,9 @@ def _paint_theme_decor(painter, rect, color):
 > 内部 id 与持久化值不动。
 
 ```python
-THEME_ORDER = ("columbina", "light")
-THEME_NEXT  = {"columbina": "light", "light": "columbina"}
-THEME_ICON  = {"columbina": "feather", "light": "sun"}
+THEME_ORDER = ("columbina", "light")                # v2.8.3 两态
+THEME_NEXT  = {…按 THEME_ORDER 环形生成…}
+THEME_ICON  = {"columbina": "moon", "light": "sun"}
 THEME_LABEL = {"columbina": "深色", "light": "浅色"}
 DEFAULT_THEME = "light"
 ```
@@ -696,14 +696,36 @@ DEFAULT_THEME = "light"
   `gear` 不同形：实心块 vs 细横线 vs 锯齿环，16px 下不会混
 - 设置对话框按 `THEME_ORDER` 生成 radio；`light_radio` 保留为别名不破坏旧引用
   （原「深色」主题已删除，`dark_radio` 一并移除）
-- toast 文案改由 `THEME_LABEL` 生成：两态循环，别写死「浅色 else 深色」
+- toast 文案改由 `THEME_LABEL` 生成：循环表驱动，别写死「浅色 else 深色」
+
+### 15.4b 主题与背景拆开 + 内置背景预设（v2.8.3）
+
+把「主题 = 配色」与「背景 = 图片」彻底拆开：主题只留「浅色 / 深色」两套配色，
+原来的「深色2 / 浅色2」两张内置图（星空 / 云海）从主题里挪到「背景」页，成为
+**内置背景预设**（`BACKGROUND_PRESETS`，id `starry` / `clouds`）。任何主题都能配
+任何背景，互不联动。
+
+- 数据模型：`BackgroundConfig` 新增 `preset` 字段（预设 id）；`background_preset_config(id)`
+  翻成 `BackgroundConfig`（type=image、preset=id、带预设默认 opacity/dim/blur）。
+- **图片路径现解**：预设只存相对路径 `assets/theme_dark.jpg`，渲染时经
+  `preset_image_path()` → `app/paths.resource_path()` 解成绝对路径。不能把 `_MEIPASS`
+  临时路径写进 data.json（onefile 每次启动临时目录都变）。
+- **不写用户设置里的主题**：选预设只改当前页的 `BackgroundConfig`，`Settings.theme`
+  一个字不动；切主题也不碰背景。老数据 `columbina2/light2` 在 `Settings.from_dict`
+  归一成 `columbina/light`。
+- 打包：`build.data_args()` 统一出 `--add-data`（`BUNDLED_ASSETS` 与
+  `BACKGROUND_PRESETS` 的 image 逐字一致，`test_bundled_paths_match_preset_definition` 钉住）
+- 暗化值不是拍的：`tools/probe_theme_bg.py` 可复现对比图（现按 `--preset` 选图）。
+  星空的月亮正好压在「大小 / 时长」列下，其 p90 亮度 0.347 ≈ `TEXT_DIM` 亮度 ——
+  暗化 0.3 时对比度只有 0.84（字比背景还暗）。0.5 + 不透明度 0.9 后月亮主体回到
+  3.2:1；月亮中心的镜面高光（纯白像素）仍压不住，这是「照片当背景」的固有上限。
 
 ### 15.5 验收标准（v2.3 增量）
 
 - [x] 默认主题是「浅色」（v2.3 时曾为 `columbina`，后续按用户要求改为 `light`），新装与旧数据都落到 `light`。
   - 证据：`test_default_is_light`、`test_legacy_data_without_new_settings`
-- [x] 主题两态循环闭环、每个主题都有图标与中文名。
-  - 证据：`TestThemeCycle` 4 项（含「循环覆盖全部且闭环」「循环表不写反」）
+- [x] 主题循环闭环、每个主题都有图标与中文名。
+  - 证据：`TestThemeCycle` 5 项（含「循环覆盖全部且闭环」「同族相邻」「循环表不写反」）
 - [x] 装饰该画时画了、不该画时一个像素都不画；装饰不算自定义背景。
   - 证据：`TestThemeDecor` 3 项（`render(QImage)` 采样，**不用 `grab()`** —— 它先铺
     不透明白底，测不出「透明」与「极淡」）
@@ -1183,7 +1205,7 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
 ### 22.2 宽度算术（这是本版唯一真正的约束）
 
 侧栏 248 − 左右各 12 = **224** 是整条的硬上限（右缘必须停在 x=236，不能跨进内容区；
-也不能超过播放栏 312 的左缩进，否则压封面）。四个控件塞进这一行：
+也不能超过播放栏的左缩进，否则压封面）。四个控件塞进这一行：
 
 ```
 [主题 38] 4 [设置 38] 4 [导入音乐 68] 4 [数据目录 68] = 224
@@ -1201,6 +1223,11 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
 
 回归 `test_single_row_layout_is_exactly_sidebar_width` 锁死「总宽 224、高 38、四控件不重叠、
 最后一个控件顶到右缘」；`test_float_bar_fits_player_bar_indent` 守文字按钮宽度下限。
+
+> **v2.8.0 补充：播放栏左缩进 312 → 248。** 312 是更早「竖排两列」浮动条
+> （宽约 294，右缘 x≈310）时代留下的数，单行化后一直没人回头改 —— 等于在播放栏
+> 左侧白扔 76px，还顺手把 `PlayerBar.minimumSizeHint().width()` 顶到 1064，
+> 进而把窗口最小宽锁死。可见「改布局时没清理配套数字」的代价会延后很久才爆发。
 
 ### 22.3 高度与竖直定位
 
@@ -1541,3 +1568,765 @@ UI 侧迁移跑在 `QThread` 里（`StorageMoveWorker`），逐文件回调进�
      未配 Key 时提示「联网精确对齐需要 API Key」。
 - 新增验收工具：`tools/probe_align_intro.py`（每秒能量条形图 + 段结构）、
   `tools/eval_align.py`（联网歌词当真值的逐句误差评估，真值缓存到 `shots/eval_cache/`）。
+
+## 34. v2.8.0 窗口尺寸自适应屏幕（2026-10-30）
+
+### 34.1 需求：一句话，但根因有三层
+
+用户原话：「屏幕这个占比太大了」。没有数值，只能自己量。
+
+先把现象量化（用户机器 1920×1080 @125%，`availableGeometry` 实测 **1536×864**）：
+
+| | 旧值 | 占可用区 | 问题 |
+|---|---|---|---|
+| 初始尺寸 | 1280×800 | 83% 宽 / **93% 高** | 一开就像「最大化」，桌面只剩一条边 |
+| 最小尺寸 | 1100×720 | 72% 宽 / **83% 高** | 用户想拉小，**拉不动** |
+
+三层根因，一层比一层深：
+
+1. **写死，完全不看屏幕**：`self.resize(1280, 800)`。同一份二进制在 4K 屏上
+   显得小、在 1366×768 上直接溢出 —— 尺寸本应由「在什么屏上跑」决定。
+2. **最小尺寸没有依据**：`setMinimumSize(1100, 720)`。而窗口
+   `minimumSizeHint()` 实测只有 **1042×564** —— 高的 720 是纯拍脑袋，
+   多出来的 156px 换来的是「拉不小」。
+3. **最隐蔽的一层**：宽度 1100 之所以降不下来，是因为
+   `PlayerBar.minimumSizeHint().width()` = **1064**。而它的左缩进是 **312**，
+   浮动条右缘却在 **236** —— 中间 **76px 是纯空白**，是 v2.6.1 把浮动条
+   从竖排两列（宽约 294）改成单行之后**忘了回收的旧数字**。
+
+> 教训：布局里「为某控件预留的空间」必须跟那个控件绑在一起算，否则控件瘦身了，
+> 预留值还留在原地，两年后会以「窗口最小宽降不下来」的形式重新出现。
+
+### 34.2 方案对比
+
+| 方案 | 做法 | 取舍 |
+|---|---|---|
+| A 只改初始尺寸 | 1280×800 → 1200×760 之类 | ❌ 治不了「拉不小」，用户照样卡在 1100×720 |
+| **B 比例自适应 + 最小尺寸取实测**（采用） | 初始 = 可用区 × 系数并夹上下限；最小 = layout hint + 余量 | ✅ 一改解决前两层；任何屏幕都合适 |
+| C 记住上次窗口尺寸 | `Settings` 加 `window_w/h`，关窗写、启动读 | ⏸ 本轮不做：改数据 schema + `closeEvent`（那里已有 worker 收尾逻辑，动它风险高），而 B 已经能解决当下的抱怨 |
+
+B 内部还有一个取舍：**系数取多少**。没有客观答案，只能定原则——
+「不占满屏、但内容区不至于挤成一条缝」：
+
+- 宽 0.68 → 1536 上 1044（内容区 796，三列弹性列仍能显示标题）
+- 高 0.74 → 864 上 639（内容区 515 ≈ 列头 + 9 行）
+- 上限 1440×900：4K 屏也不许开成一堵墙
+- 下限直接取布局实测值，不再人为抬高
+
+### 34.3 改完才发现的问题：播放栏没有余量
+
+尺寸一缩就暴露了隐藏假设 —— **播放栏在 1044 宽时横向已经没有任何余量**，
+被压缩的全是那条弹性最大的列，也就是标题/艺人。实测：
+
+| 窗口宽 | 标题列（固定 200 进度条） | 标题列（弹性 120~200） |
+|---|---|---|
+| 1010 | **10px**（只剩一个字） | **76px** |
+| 1044 | **44px**（「周杰伦…」） | **84px** |
+| 1105 | 99px | 99px |
+| 1280 | 143px | 143px |
+
+改法是让**进度条先让位**：`setFixedWidth(200)` → `最小 120 / 最大 200 / Expanding`。
+理由很直白——「进度条短一截」是审美问题，「歌名只显示一个字」是功能问题。
+而且 ≥1105 宽时进度条仍是满宽 200，大尺寸下观感与改动前完全一致。
+
+> 这一条如果没查，交付出去就是「窗口变小了，但歌名变成一个点」——
+> 用户的下一句投诉已经在路上了。
+
+### 34.4 实现
+
+`ui/player_bar.py` 两处：
+
+1. 左缩进 312 → **248**。248 = 浮动条右缘 236 + 12 呼吸，同时**正好等于侧栏宽**
+   —— 封面左缘与列表左边界落在同一条竖线上。
+2. 进度条 200 固定 → 120~200 弹性（见 34.3）。
+
+`ui/main_window.py`：尺寸收成一组模块常量 + 一个纯函数。
+
+```python
+WINDOW_MIN_WIDTH = 1010      # 不是布局下限（PlayerBar 实测 898），而是「标题还能读」的下限
+WINDOW_MIN_HEIGHT = 580      # 窗口 minimumSizeHint 实测 566 + 14
+WINDOW_MAX_WIDTH = 1440
+WINDOW_MAX_HEIGHT = 900
+WINDOW_W_RATIO = 0.68
+WINDOW_H_RATIO = 0.74
+
+
+def initial_window_size(available: QSize) -> QSize:
+    w = min(int(available.width() * WINDOW_W_RATIO), WINDOW_MAX_WIDTH)
+    h = min(int(available.height() * WINDOW_H_RATIO), WINDOW_MAX_HEIGHT)
+    w = max(min(w, available.width()), WINDOW_MIN_WIDTH)   # 夹可用区 → 再托底
+    h = max(min(h, available.height()), WINDOW_MIN_HEIGHT)
+    return QSize(w, h)
+```
+
+**夹取顺序不能换**：先上限（大屏不许溢出）→ 再可用区（小屏不许超出屏幕）
+→ **最后托底到最小尺寸**。托底放最后，才能保证任意输入下结果都 ≥ 最小尺寸；
+放前面的话 1024×600 的小屏会先被可用区夹到 696、再被最小尺寸顶回去，白算一遍。
+
+`_apply_initial_geometry()` 负责取 `primaryScreen().availableGeometry()`、
+调纯函数、**并在可用区内居中**。无边框窗口系统不会替你居中 —— 之前尺寸写死
+1280×800 时靠「差不多能看」蒙混过去，尺寸一变小位置不对就很显眼。
+
+> `WINDOW_MIN_WIDTH` 故意比 `PlayerBar.minimumSizeHint().width()`(898) 大 112px：
+> 前者保「不崩」，后者保「能读」。两个数字含义不同，不要合并。
+
+### 34.4 验收
+
+`tools/probe_window_size.py`（真实平台，不是 offscreen —— offscreen 字体库是空的，
+`minimumSizeHint` 会给出完全不同的数字）：
+
+```
+屏幕：可用区 1536×864（DPR 1.25）
+计划初始尺寸 1044×639  = 可用区 68% 宽 / 74% 高
+字号 ×1.00  实际窗口 1044×639 | 最小提示 898×566 | setMinimum 1010×580 | 播放栏最小宽 898
+字号 ×1.30  实际窗口 1044×639 | 最小提示 898×576 | setMinimum 1010×580 | 播放栏最小宽 898
+尺寸约束全部成立
+```
+
+四条断言：播放栏最小宽 ≤ 窗口最小宽、`setMinimum` ≥ `minimumSizeHint`、
+浮动条右缘 ≤ 播放栏左缩进、初始尺寸 ≥ 最小尺寸。
+
+单测（`tests/test_widgets.py`）：
+
+- `TestWindowSize` 5 条：常见屏比例、小屏托底、不溢出屏幕、4K 撞上限、中间尺寸走比例
+- `test_title_keeps_readable_width_at_min_window`：最小窗口下标题列 ≥ 60px
+  （34.3 那个坑的守门员 —— 光测「窗口能缩到 1010」是不够的，还得测「缩到 1010 之后还能看」）
+
+截图（`tools/shot.py` 新增 `--size` 参数，留空 = 用应用自身初始尺寸，
+否则截的永远是工具里写死的那个尺寸、验不到真东西）：`shots/*-v280*.png`。
+
+### 34.5 连带影响
+
+- **断言去硬编码**：`test_widgets.py` / `test_e2e.py` 里 6 处写死的 `1100` 全部改成
+  引用 `WINDOW_MIN_WIDTH`。窗口尺寸与播放栏最小宽必须**同源**，否则就是 v2.7.6
+  「界面版本号自己写死」的翻版。
+- **offscreen 下窗口变小**：测试环境的虚拟屏只有 800×800，`initial_window_size`
+  会算出 1010×592（而不是原来的 1280×800）。E2E 全套已回归通过 —— 说明现有断言
+  都不依赖窗口绝对尺寸（对齐类断言比的是相对位置）。
+- **多显示器**：只按主屏算初始尺寸。窗口开在副屏时用户自己拖过去即可；
+  没做记忆功能，见 34.2 方案 C。
+
+## 35. v2.8.1 正在播放页分栏：封面让位给歌词（2026-10-30）
+
+### 35.1 需求：v2.8.0 的直接后遗症
+
+用户截图 + 一句话：「左边显示太大，右边歌词显示不全」。
+
+这是 v2.8.0 把窗口调到 1044×639 之后立刻暴露的隐藏假设 —— 之前窗口固定 1280，
+正在播放页的分栏**从来没被测过窄窗**。窗口 1044 时实测（真实平台）：
+
+| 元素 | 实测 | 说明 |
+|---|---|---|
+| 内容区 | 796×507 | 1044 − 侧栏 248，高 − 标题栏 − 播放栏 |
+| 封面 | **280×280 写死** | 占内容区高度的 **55%** |
+| 左列宽 | **444** | 封面 280 反而更窄 —— 撑开它的是标题 |
+| 歌词面板 | **268** | viewport 258 |
+| 单行歌词需要 | 原文 242px + 译文 | 实际更长 |
+
+两个独立成因，缺一不可：
+
+1. **封面写死 280×280**：窗口一矮，它就独占半屏高度，「左边太大」。
+2. **左列宽度由文字的 minimumSizeHint 决定**：标题是普通 `QLabel`，
+   「唯有追赶风的方向 (Only By Chasing the Wind)」的 `minimumSizeHint()` = **444px**，
+   于是左列 444 > 封面 280 —— **画面上的大封面其实还不是元凶，文字才是**。
+   左列吃掉 444，歌词只剩 268。
+
+3. 而歌词 `_draw_line` 是**居中 `drawText`，不折行也不省略** —— 一行 300px 的
+   歌词塞进 258px 的视口，超出的部分被硬裁，看起来就是「少半句」。
+
+### 35.2 方案
+
+| 方案 | 做法 | 取舍 |
+|---|---|---|
+| A 把封面改小到 220 | 只改一个数字 | ❌ 治不了「歌词只剩 268」——左列仍被标题撑到 444 |
+| **B 左列定宽 = 封面边长 + 封面自适应**（采用） | 左列装进定宽容器；标题/艺人/专辑开 `wordWrap` | ✅ 一次解决两个成因，且歌词拿到「剩余全部宽度」 |
+| C 歌词改折行 | 按面板宽 `QTextLayout` 折行 | ❌ 逐字动效（typewriter / karaoke）按字符分段绘制，折行后要重写整套坐标计算；风险远大于收益。改成「超宽省略」兜底 |
+
+B 的关键不是「封面变小」，而是**把左列的宽度从「文字说了算」反转成「封面说了算」**：
+
+```python
+_COVER_MAX = 220      # 上限：别让封面重新变成主角
+_COVER_MIN = 140      # 下限：窗口再小也不缩成缩略图
+_COVER_W_RATIO = 0.26
+_COVER_H_RATIO = 0.44   # 矮窗口下封面先让位
+
+
+def cover_side_for(view_w: int, view_h: int) -> int:
+    side = min(_COVER_MAX, int(view_w * _COVER_W_RATIO), int(view_h * _COVER_H_RATIO))
+    return max(_COVER_MIN, side)
+```
+
+```python
+# 左列：定宽容器，宽度 = 封面边长；标签在框内折行
+root.addWidget(self.left_box)
+self.lyrics = LyricsPanel()
+root.addWidget(self.lyrics, 1)      # 吃掉左列之外的全部宽度
+```
+
+`resizeEvent` 里调 `_fit_cover()` 重算，**尺寸没变直接 return**——
+`setFixedWidth` 会触发一次 LayoutRequest，不设这道闸 resize → 布局 → resize 会抖。
+
+标题保留 `wordWrap` 而不是改 `ElidedLabel`：这个用户的库里同一首歌有
+「(英文版)」「(Only By Chasing the Wind)」多个版本，**括号里那截正是区分版本的唯一信息**，
+省略掉等于看不出来在放哪一版。宁可折成三行。
+
+歌词侧只加一层兜底：`_draw_line` 里先 `elidedText(ElideRight)` 再画，
+保证「宽到放不下」时是「…」而不是硬切。
+
+### 35.3 效果（实测）
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 封面 | 280 | **206**（1044 窗口）/ 220（1280 窗口） |
+| 左列 | 444 | **206 / 220**（= 封面边长） |
+| 歌词面板 | 268 | **506 / 728** |
+
+歌词可用宽从 268 → 506，用户截图里那几句（最长原文 255px、最长译文 182px）
+全部落在 494px 可用宽内，不再裁剪。
+
+### 35.4 验收
+
+新增探针 `tools/probe_now_playing.py`：喂「长标题 + 长双语歌词」，多个窗口尺寸各截一张，
+并打印封面/左列/歌词宽度与「最长行是否会省略」。
+
+```bash
+env -u PYTHONPATH .venv/Scripts/python.exe tools/probe_now_playing.py \
+    --out shots/np_v281 --size 1044x639 1280x800
+# 1044x639: 封面 206 / 左列 206 / 歌词 506（视口 506）/ 最长原文 255px → 完整
+# 1280x800: 封面 220 / 左列 220 / 歌词 728（视口 728）/ 最长原文 255px → 完整
+```
+
+单测（`tests/test_widgets.py`）：
+
+- `TestNowPlayingLayout` 4 条：封面有上限且正方、**左列宽度 == 封面边长**、
+  796 宽视图里歌词 ≥ 480px、**长标题不许把歌词挤窄**
+- `TestCoverSide` 5 条（纯函数）：常规视图走比例、大视图撞上限、小视图托底、
+  矮窗口让位、随视图尺寸单调不减
+
+> 为什么用 `shot.py` 截不出这个问题：仓库夹具曲目的歌词都很短，怎么排都不会超宽。
+> 必须专门喂长句 —— **「验收数据不代表用户数据」是这一类视觉 bug 的共同成因**。
+
+
+
+## 36. v2.8.2 联网歌词：503 不再判死 + 专辑参与身份匹配（2026-10-30）
+
+### 36.1 问题
+
+用户报「https://lrclib.net/tracks/34711120 有歌词但匹配不到」。本地曲目：
+
+- `title="痴人说梦"`、`artist="HOYO-MiX"`、`album="崩坏星穹铁道-痴人说梦 Ravings"`、`duration_ms=115449`
+- LRCLIB id=34711120 的 `trackName="Ravings"`（**英文**）、`artistName="HOYO-MiX"`、
+  `albumName="崩坏星穹铁道-痴人说梦 Ravings"`、`duration=115.0`、有 `syncedLyrics`
+
+两层根因（都实测复现）：
+
+1. **503 被当成限流判死（主因）**。LRCLIB `/api/get`（应用发的第一个查询）间歇返回
+   **503 ServerOverloaded**（curl 连测 try1=503、try2/3=404）。旧代码把 503 与 429 混为
+   `RateLimited`，第一个 `get` 一撞 503 就 `return aborted`，整轮中止——根本走不到那个
+   真正能命中的 `q=痴人说梦` keyword 查询（该查询稳定返回 id=34711120）。
+2. **标题语言不一致**。`_norm("痴人说梦")` 与 `_norm("Ravings")` 零交集，`title_ok=False`；
+   `get`/`search` 两个标题端点都命中不了（`/api/get?track_name=痴人说梦` 直接 404）。
+   唯一桥梁是专辑名「崩坏星穹铁道-痴人说梦 Ravings」**同时含中英两种写法**，且与本地
+   专辑逐字一致——但旧代码的 `score_hit` 完全不看 album（只在 `build_get_url` 里拼 URL）。
+
+### 36.2 修复
+
+**A. 拆 503 / 429**（`app/lyrics_online.py`）
+
+- 新增 `ServerBusy`（503）与 `RateLimited`（429）两个异常。
+- `_http_get_json`：429 → `RateLimited`（立即收手）；503 → `ServerBusy`（跳过这条试下一条）。
+- `fetch_outcome` / `fetch_best_hit`：捕获 `ServerBusy` 记 `saw_busy=True` 后 `continue`；
+  最终若一条都没中且 `saw_busy`，返回 `aborted=True`（**不写负缓存**），而不是 `missed`。
+
+**B. 专辑参与身份打分**
+
+- `score_hit` 增加 `album` 参数：专辑相等 +2.0、`_overlap(floor=0.6)` +1.2；
+  门槛扩为 `title_ok or duration_ok or (album_ok and artist_ok)`——专辑这条**要求艺人同时相符**，
+  避免同一张多曲专辑里配错曲。
+- `album` 线程化进整条链：`score_hit / _best_of / pick_best / fetch_outcome / fetch_best_hit`
+  与多源层的 `_pick_lyric / fetch_netease / fetch_qq / _best_with_source / fetch_outcome_multi`。
+
+修复后该曲匹配得分：artist(1.5) + duration(3.0) + album(2.0) + synced(0.5) = **7.0 ≥ GOOD_ENOUGH(6.5)**，
+keyword 查询命中即早停，少打请求、少撞限流；无时长时 album+artist 也能过门槛（score 4.0）。
+
+### 36.3 单测
+
+- `tests/test_lyrics_online.py`：
+  - `TestAlbumBridge` 3 条（痴人说梦↔Ravings 靠专辑命中、无时长命中、专辑同艺人不同被拒）
+  - `TestFetchStrategy` 2 条（503 跳过继续命中、全 503 → aborted 不写负缓存）
+- `tests/test_lyrics_multi.py`：`test_album_bridges_language_mismatch_across_sources`（多源统一打分传 album）
+
+### 36.4 关键事实
+
+- `/api/search?q=痴人说梦` 返回 id=34711120（因为 album 含中文），而 `/api/get?track_name=痴人说梦` 404、
+  `/api/search?track_name=痴人说梦` 空——**标题端点对语言不一致的歌是盲区，`q=` 全文搜才兜得住**。
+- LRCLIB 服务端不稳是常态，`/api/get` 偶发 503；但 503 ≠ 没歌词，绝不能据此写 7 天负缓存。
+
+---
+
+## 37. v2.9.0 歌词自定义颜色覆盖：动态渐变 + 逐句取色（2026-10-31）
+
+### 37.1 需求确认（AskUserQuestion 结论）
+
+| 维度 | 选择 | 说明 |
+|---|---|---|
+| 颜色来源 | **逐句右键取色 + 自动动态渐变** | 两者都要；不支持 LRC 内嵌颜色标签 |
+| 触发节奏 | **可按进度 / 按时间切换** | 默认按歌词进度 |
+| 渐变形态 | **双色线性渐变** | 方向可调（横/竖/斜） |
+| 动效范围 | **仅当前句** | 其他句保持常态色，保性能 |
+
+### 37.2 现状（动手前的事实）
+
+- 歌词行是 `QListWidget + _LyricDelegate` 自绘（`ui/lyrics_panel.py`）。
+- 颜色**写死在代码里**：当前句 `ACCENT`、未唱 `TEXT_DIM@alpha90`、交界固定 6px 软过渡
+  （`_draw_line` 的 `blend = 6.0`）。**没有任何用户可配的颜色层。**
+- 动效是单选枚举 `LYRICS_EFFECTS = ("none","zoom","typewriter","karaoke")`，存
+  `Settings.lyrics_effect`。effect 只决定**遮罩/几何**：放大、逐字揭示、已唱/未唱切分。
+- 性能关键：`update_position` 每帧只 `_update_row(当前行)`，绝不整块重绘。新功能必须沿用这条。
+
+### 37.3 方案对比
+
+- **A. 只做全局动态渐变**：零配置好看，但满足不了「可指定每行/每句颜色」的硬需求。
+- **B. 只做逐句取色（静态）**：能精确指定，但没有「灵动流畅的动态变化」。
+- **C（采用）分层正交**：把「颜色」与「遮罩」拆成两个维度 ——
+  - **effect** 继续管遮罩/几何（放大 / 逐字揭示 / 已唱未唱切分），**不改**；
+  - 新增**颜色覆盖层**只回答「这段文字用什么颜色」；
+  - 颜色来源（逐句自定义 / 全局渐变）× 触发（进度 / 时间）× 形态（双色线性）= 可组合。
+  
+  理由：这样 4 种 effect 与颜色覆盖天然兼容（不是各写一套），旧逻辑在 `enabled=False`
+  时走原分支，零风险回滚。
+
+### 37.4 数据模型
+
+**全局**（`app/models.py`，存 `Settings`）：
+
+```python
+COLOR_TRIGGERS   = ("progress", "time")
+COLOR_DIRECTIONS = ("horizontal", "vertical", "diagonal")
+
+@dataclass
+class LyricsColorConfig:
+    enabled: bool = False          # 总开关；False 时完全走旧逻辑（零开销）
+    trigger: str = "progress"      # progress | time
+    gradient: bool = True          # True=双色渐变，False=单色
+    color_a: str = ""              # ""=跟随主题 ACCENT
+    color_b: str = ""              # ""=由 color_a 派生（提亮版）
+    direction: str = "horizontal"
+    speed: float = 0.25            # time 模式：每秒相位推进（0.05~2.0）
+    transition: float = 0.08       # 已唱/未唱交界软过渡宽度（占行宽 0~0.3）
+```
+
+`Settings.lyrics_color: LyricsColorConfig`，`to_dict/from_dict` + `_as_*` 钳位/校验；
+非法枚举回默认，不整块炸（沿用 v2.7.5 容错约定）。
+
+**每曲逐句颜色**（新纯逻辑模块 `app/lyrics_colors.py`）：
+
+- 存放：`paths.lyrics_colors_dir()/<track_id>.json`，形如
+  `{"version": 1, "lines": {"12340": "#ff6b9d", ...}}`，键是**行时间戳 time_ms**。
+- 为什么用 time_ms 而不是行号：插入/删除行不漂移；换歌词文件时可能对不上，提供「清除本曲颜色」。
+- 接口：`load_line_colors(track_id, base_dir=None) -> dict[int,str]` /
+  `save_line_colors(...)` / `set_line_color` / `clear_line_color` / `clear_song_colors`。
+- 容错：坏 JSON / 非法色值一律跳过，不抛；空映射删文件。
+
+### 37.5 渲染管线（`ui/lyrics_panel.py`）
+
+颜色解析（每行）：
+
+```
+line_color = sidecar.get(line.time_ms)        # 逐句优先
+a = line_color or cfg.color_a or theme.ACCENT
+b = cfg.color_b or derive_lighten(a)          # 未配则派生
+```
+
+- **进度模式（默认）**：已唱段用 `a→b` 渐变，交界处以 `transition*行宽` 软过渡到
+  未唱色（未唱 = `a` 压 alpha ~90，保可读）。行为等价于现有 karaoke，但颜色可配。
+- **时间模式**：整行用 `a→b` 渐变，渐变**相位** `phase=(t*speed)%1` 随时间平移
+  （一条高光带扫过），与唱到哪无关；仍受 effect 遮罩约束。
+- **与 effect 正交**：none/zoom=整行着色；typewriter=只给已揭示部分着色；karaoke=
+  已唱用 `a→b`、未唱用 dim。译文行用「a 提亮 + 降透明」的次级色，不参与强扫光。
+- 非当前行永远 `_normal_color()`，零动效。
+
+### 37.6 性能设计（硬约束）
+
+1. 动画只在 `enabled && trigger=="time" && visible && mode=="synced"` 时启动
+   `QTimer(33ms≈30fps)`；`hideEvent/showEvent` 停/启。
+2. 每 tick **只** `_update_row(当前行)`，绝不 `viewport().update()` 全量重绘。
+3. 复用 `_font_cache`；每行解析出的 `(a,b)` 缓存在 panel，配置/歌词变更才重算。
+4. `enabled=False` → 所有新分支第一行早退，开销≈0。
+5. `QLinearGradient` 每帧仅当前 1 行构建一次（可接受）。
+
+### 37.7 接口与接线
+
+- `LyricsPanel`：
+  - `set_color_config(cfg)`、`set_line_colors(mapping: dict[int,str])`（键=行下标）
+  - 新信号：`line_color_requested(int idx)`、`line_color_clear_requested(int idx)`、
+    `song_colors_clear_requested()`
+  - 右键菜单仅 `mode=="synced"` 时插入这三项
+- `SettingsDialog`：歌词页加「歌词颜色覆盖」区（启用开关 / 触发 / 方向 / A、B 颜色 /
+  速度 / 过渡），发 `lyrics_color_changed(object)`。
+- `MainWindow`：
+  - 切歌/加载歌词后 `load_line_colors(track_id)` → `panel.set_line_colors`
+  - `line_color_requested` → `QColorDialog` → 保存 sidecar → 重新下发
+  - `_on_settings_lyrics_color` → 存 Settings + `panel.set_color_config`
+
+### 37.8 验收标准
+
+- `enabled=False`：既有 646 项测试**零回归**，肉眼与现在完全一致。
+- 启用 + 进度：当前句已唱部分按 `a→b` 随进度扫过，交界软宽可调。
+- 启用 + 时间：渐变相位按 `speed` 流动，视觉连续；仅当前行。
+- 逐句取色：该句覆盖全局色；切歌再回来仍保留；「清除本曲」可复原。
+- 与 4 种 effect 组合均不崩、不糊：karaoke 仍分已唱/未唱，typewriter 仍逐字揭示，zoom 仍放大。
+- 性能：动画时只有当前行重绘（用计数断言之）；ruff 干净；全量回归全绿；打包 smoke + 真实平台通过。
+- 版本升 `2.9.0`。
+
+### 37.9 风险与回滚
+
+- **右键菜单冲突**：现有 6 个动作，新增 3 个；只 synced 模式插入并加分隔线。
+- **time_ms 键漂移**：换歌词文件后逐句色可能错位 → 提供「清除本曲歌词颜色」。
+- **测试里的模态框**：`QColorDialog` 必须 patch 模块级名字（见记忆：拦 Qt 模态框要 patch 模块级符号）。
+- **offscreen QMediaPlayer 累积死锁**：新 E2E 单独成类/独立进程。
+- **回滚**：`enabled=False` 即旧行为；如需彻底移除，只删新增文件与新分支，不动旧路径。
+
+---
+
+## 38. v2.9.1 双语译文「不跟着变色」修复（2026-10-31）
+
+### 38.1 现象与复现
+
+用户反馈（截图 + 一句「这种带翻译的歌词不会一起变色」）：双语歌词里**原文行**有粉→紫
+→粉的流动渐变，**紧跟其下的译文行**却是一整行均匀的淡紫灰，完全没有渐变。
+
+复现（浅色主题、`#ae5df3 → #f5d90a`、双语三句、当前句行内进度 0.7）：
+
+| 动效 | 原文 | 译文 |
+|---|---|---|
+| `karaoke`（颜色覆盖） | 已唱段紫→黄渐变，未唱尾段淡掉 | **整行 `_dimmed(pair[0])` 单色** |
+| `none` / `zoom` | 完整流动渐变 | 完整渐变，但压了 alpha 205，明显发灰 |
+
+### 38.2 根因（两个，叠在一起）
+
+1. **karaoke 的逐字进度按「两行字符总数」推进**。`_typed_split(35, 14, p)` 意味着
+   扫光要走完 35 个英文字符才开始碰到译文（p > 0.71）。在这之前 `sub_typed == 0`，
+   走的是 `if typed <= 0: painter.setPen(unsung)` —— 整行一个 `_dimmed(pair[0])`
+   （alpha 90 单色）。用户看到译文的那几秒，正好都落在这一段里。
+2. **译文还被额外压了 alpha 205 当「次级色」**（v2.9.0 的设计）。深色主题下不明显，
+   浅色主题下叠在淡色高亮底上，几乎被洗成灰。
+3. 顺带暴露的第三个问题：`_flow(rect, ...)` 用的是**整条 item 的 rect**。vertical /
+   diagonal 方向下，双语 item 高两行，译文行只能取到渐变的下半段 → 退化成单色。
+
+### 38.3 方案对比
+
+| 方案 | 做法 | 取舍 |
+|---|---|---|
+| A 只提透明度 | 205 → 255 | 修不了 karaoke 的 `typed<=0` 单色，主线问题仍在 |
+| B 译文不参与扫光（**采用**） | `_draw_line(sweep=False)`：译文整行直接铺完整渐变 | 一行改动，语义清楚：**扫光属于「正在被唱的那一行」**；译文是同一句的另一种文字，整句一起着色才对 |
+| C 按各自行字符数拆进度 | 原文一档、译文一档，各扫各的 | 与 v2.6.10「两行连着打出」的 typewriter 语义冲突，要改的地方多 |
+
+选 B，并同时去掉 alpha 205：层级改由**字号（-3px）**承担。颜色保持一致才有
+「整句一起流动」的观感 —— 这本来就是用户要的。
+
+### 38.4 改动清单
+
+- `ui/lyrics_panel.py`：
+  - `_paint_block`：`sub_pair` 删除，译文直接复用 `pair`；给两行各算一条 `band`
+    （`(top, top+main_h)` / `(top+main_h, top+main_h+sub_h)`）；译文传 `sweep=False`。
+  - `_draw_line`：新增 `band=None`、`sweep=True`；karaoke 分支在 `typed` 判断**之前**
+    加 `if not sweep and use_grad:` → 整行铺 `_flow()`。
+  - `_flow(band, ...)`：签名 `rect → band`，vertical/diagonal 用本行上下边界。
+- `tests/test_widgets.py::TestLyricsColor` 新增 2 项：
+  - `test_bilingual_translation_shares_pair_and_skips_sweep`（patch `_LyricDelegate._draw_line`
+    记录实参：译文必须拿到与原文同名同 alpha 的 pair，且 `sweep is False`）
+  - `test_flow_uses_each_line_band`（vertical 用给定 band，horizontal 轴必须是水平）
+- `app/version.py → 2.9.1`
+
+### 38.5 验收标准
+
+- 双语 + `karaoke`：译文行与原文同步呈现同一渐变（像素采样能在译文行找到 `#f5d90a`
+  级的 `color_b` 峰值）。
+- 双语 + `none/zoom/typewriter`：译文与原文同色；typewriter 仍按进度逐字揭示。
+- 三种 direction 下译文都有颜色；vertical/diagonal 各自在本行范围内渐变。
+- 非双语（单行）歌词零变化；`enabled=False` 完全走旧路径。
+- 全量回归全绿、ruff 干净、打包 smoke 通过、`--check` 输出 v2.9.1。
+
+### 38.6 风险
+
+- **译文比原文更亮**：karaoke 下原文未唱尾段是 `_dimmed` 单色，而译文整行满色，
+  可能显得译文更抢眼。可接受（译文更小、更短），若用户仍觉得跳，再把译文整体乘
+  0.85 亮度。
+- **多语言行数 > 2**：目前 `LyricLine` 只有原文 + 译文两层，`band` 按两层算；若将来
+  加第三行，需要改成按行循环分配 band。
+
+---
+
+## 39. v2.9.2 译文行与主歌词「同步扫光」（2026-10-31）
+
+### 39.1 为什么要改回扫光
+
+v2.9.1 的 38.3 选了「译文整行直接铺满渐变、不参与扫光」，理由是「扫光属于正在被唱的
+那一行」。交付后用户反馈：**「效果跟主歌词同步」** —— 译文整行满色、原文在扫，两条线的
+观感仍然是脱节的，只是从「译文太暗」变成了「译文太亮且不动」。
+
+第一性原理：karaoke 的扫光其实是「这一句唱到哪儿」的指示器。译文是**同一句**的另一种
+文字，它应该在同一个时刻表示同一个进度。所以正确做法不是把译文排除在外，而是让它
+**用同一个进度、各自按自身长度**推进。
+
+### 39.2 根因回顾（38.2 的补充）
+
+`_typed_split(35, 14, p)` 把两行拼成一个 49 字的总长度来算进度：
+
+| p | 合并口径 main / sub | 同步口径 main / sub |
+|---|---|---|
+| 0.25 | 12 / **0** | 9 / 4 |
+| 0.5 | 25 / **0** | 18 / 7 |
+| 0.75 | 37→35 / 2 | 26 / 11 |
+| 1.0 | 35 / 14 | 35 / 14 |
+
+合并口径下，译文要到 p>0.714 才开始亮 —— 那之前它在画面上就是一片暗色。
+「不同步」的根源在这里，不在颜色。
+
+### 39.3 方案
+
+| 方案 | 做法 | 取舍 |
+|---|---|---|
+| A 保持 38.3 的整行满色 | 不动 | 用户已明确否决 |
+| B 缩短合并分母 | 用 `max(main_len, sub_len)` 之类折中 | 还是错位，只是错得少一点 |
+| C 两行各按自身长度乘同一 p（**采用**） | `_typed_split(..., sync=True)` | 一行改动，语义最直白：同一时刻亮起的**比例**相同 |
+
+`sync` 只在 **karaoke** 打开。**typewriter 保持合并口径**（v2.6.10 的「原文打完再打译文，
+两行连着打出」是打字机应有的手感，且用户没有异议）—— 这也是本次唯一的破坏性规避点：
+不开 karaoke 就零变化。
+
+另外把 `_dimmed()` 的未唱 alpha 从 90 抬到 110：90 时未唱段几乎只剩一团灰，
+双语歌词里译文行经常整行处在未唱区，太暗会被误读成「没变色」。
+
+### 39.4 改动清单
+
+- `ui/lyrics_panel.py`
+  - `_typed_split(main_len, sub_len, progress, sync=False)`：新增 `sync` 分支
+    （`round(main_len*p)` / `round(sub_len*p)`，各自夹到自身长度）。
+  - `_paint_block`：`_typed_split(..., sync=(effect == "karaoke"))`；译文恢复参与扫光
+    （删掉 v2.9.1 的 `sweep=False`），保留 `band`。
+  - `_draw_line`：删除 `sweep` 参数（一次版本内就退休，避免留下第二个口径）。
+  - `_dimmed()`：alpha 90 → 110。
+- `tests/test_widgets.py::TestLyricsColor`
+  - `test_bilingual_translation_shares_pair_and_scans_in_sync`（24 字原文 / 8 字译文，p=0.5
+    → 12 / 4，并断言两行 band 不同）
+  - `test_karaoke_sync_typewriter_staggered`（karaoke 同步、typewriter 错位、单语一致）
+- `app/version.py → 2.9.2`
+
+### 39.5 验收标准
+
+- 双语 + karaoke：任一进度下，两行「已亮 / 未亮」的分界**按各自行内比例**对齐
+  （25% 时两行都只有前 1/4 亮）。
+- typewriter：行为与 v2.6.10 完全一致（原文打完才轮到译文）。
+- 单语歌词：`sync` 有无结果相同，零变化。
+- 全量回归全绿、ruff 干净、打包 smoke 通过、`--check` 输出 v2.9.2。
+
+### 39.6 已知遗留
+
+- karaoke 的「已唱 / 未唱」交界渐变目前恒为**水平**，不跟随 `direction` 设置。
+  `direction` 只作用于已唱段内的双色色带。极端情况下（vertical + 双语）交界仍是竖切，
+  视觉可接受，若要彻底一致得改成「clip + 两遍绘制」，会牺牲 `transition` 软边。
+
+---
+
+## 40. v3.0.0 本地 AI 强制对齐：逐字时间轴（2026-10-31，方案待确认）
+
+### 40.1 需求确认（AskUserQuestion 结论）
+
+| 维度 | 选择 | 说明 |
+|---|---|---|
+| 对齐引擎 | **内置 AI 模型** | faster-whisper + ctranslate2，本地推理，不上传音频 |
+| 精度目标 | **逐字卡准** | 每个字的时间戳来自声学对齐，不再靠行内插值 |
+| 触发方式 | **单曲右键 + 全库批量** | 单曲即时；批量挂机跑，带进度与中断 |
+
+### 40.2 为什么现在做、为什么必须用模型
+
+现状三个事实（都是本项目自己实测留下的记录）：
+
+1. **渲染层的「逐字」是假的**：`ui/lyrics_panel.py` 的 typewriter / karaoke 按
+   「行内进度 × 字数」线性推进。一句 4 秒 20 字 → 每 200ms 亮一个字，与人声无关。
+2. **行级对齐的天花板是 6 秒**：v2.6.12 记录《何者》按字数加权后中位误差 **6.04s**，
+   并明确写下 *「字数完全不解释时长，拖音和句内间奏在纯文本里没有任何信息……要逐句
+   卡准必须做音频-文本强制对齐」*。
+3. **强制对齐这条路走过一次，是云端方案**：v2.6.6 接了 LyricTimestamps（multipart
+   上传音频、自备 Key、免费 15 分钟/月），v2.7.0 因「上传音频 + 需 Key」移除。
+
+所以本次不是新增一个花哨功能，而是**把当年被砍掉的能力用本地方案补回来**，
+并且一路做到字级。
+
+### 40.3 技术选型
+
+| 候选 | 结论 | 理由 |
+|---|---|---|
+| faster-whisper + ctranslate2（**采用**） | 依赖 `ctranslate2 4.8.4`（**已验证有 cp313-win_amd64 wheel**）+ `faster-whisper 1.2.1`（纯 py） | 纯离线；int8 量化 CPU 可用；`word_timestamps=True` 直接给词级时间 |
+| openai-whisper（torch） | 否 | torch 单独 +200MB，启动与内存都不可接受 |
+| whisper.cpp（自编译） | 否 | 需 MSVC 工具链，跨平台维护成本高，打包不可控 |
+| wav2vec2 + torchaudio forced_align | 否 | 学术最优，但同样背 torch |
+| 纯信号处理升级到「字级」 | **兜底** | 不占体积、离线必成；但行级只能到 6 秒，字级更是估计值。作为 AI 失败时的回退 |
+
+### 40.4 算法：五层，每层都能独立降级
+
+```
+音频文件
+  │
+  ├─ L1 声道预处理：stereo → mid = (L+R)/2（人声通常居中，零成本压掉宽立体声伴奏）
+  │      失败/单声道 → 直接用原信号
+  ├─ L2 faster-whisper（int8）→ 词级时间戳 [(start, end, text), ...]
+  │      模型不可用/超时 → 直接跳到兜底
+  ├─ L3 difflib.SequenceMatcher：识别词序列 ↔ 原歌词字序列
+  │      逐字时间戳 = 匹配到的识别词时间窗内按字均分
+  ├─ L4 能量包络微调：用现有 rms_envelope 把字边界吸附到能量谷（换气/辅音起点）
+  └─ L5 置信度自检：matched_ratio < 阈值 → 丢弃结果，回退信号处理并提示用户
+```
+
+**为什么必须 L3**：Whisper 在**唱歌**上会听错词（尤其带伴奏的中文歌）。直接用识别的
+文本当歌词就是错的；我们要的是**时间戳**，文本用用户自己的。L3 把「识别时间轴」映射
+回「原文时间轴」，听错个别字不影响整体对齐。
+
+**为什么必须 L4**：Whisper 的词时间戳是「整词一个窗」，中文词往往 2~3 个字。窗口内
+按字均分仍是估计；用能量谷吸附能把误差从 ±150ms 压到 ±80ms 量级。
+
+**为什么必须 L5**：唱歌识别可能整段失败（纯乐器间奏被识别成歌词、或全程听不懂）。
+没有自检就会「静静地生成一份错歌词」，比不做还糟。
+
+### 40.5 数据模型
+
+```python
+@dataclass(frozen=True)
+class WordSpan:
+    start_ms: int
+    end_ms: int
+    text: str            # 该字/词对应原文里的片段
+
+@dataclass
+class LyricLine:
+    time_ms: int
+    text: str
+    translation: str = ""
+    words: tuple[WordSpan, ...] = ()   # v3.0.0：空 = 没有字级数据，回到线性插值
+```
+
+`words` 为空时**渲染路径与现在完全一致**，这是零回归的保证。
+
+持久化：`%APPDATA%/轻音播放器/lyrics_words/<track_id>.json`
+```json
+{"version": 1, "model": "base-int8", "confidence": 0.87,
+ "lines": {"12345": [[12500, 12680, "故"], [12680, 12820, "事"]]}}
+```
+键是行时间戳（与 `lyrics_colors` 同构，换歌词文件也不会错位到别的行）。
+
+### 40.6 渲染接入
+
+`_paint_block` 取 `line.words`：
+- 有 words → `typed` 由「当前播放位置落在第几个字的窗口内」决定（逐字真同步）
+- 无 words → 现有 `_typed_split` 线性插值（karaoke 同步口径保持 v2.9.2 行为）
+
+颜色覆盖（v2.9.x）不动，两条路径正交。
+
+### 40.7 体积与模型分发（**需二次确认**）
+
+依赖体积（估）：
+
+| 组件 | 体积 |
+|---|---|
+| ctranslate2（含 DLL） | ~40 MB |
+| av（PyAV，含 FFmpeg） | ~40 MB |
+| onnxruntime（VAD） | ~15 MB |
+| numpy（ctranslate2 硬依赖，当前被 build.py 排除） | ~15 MB |
+| tokenizers / huggingface_hub 等 | ~5 MB |
+| Whisper base int8 模型 | ~74 MB |
+| **合计** | **≈ +190 MB** |
+
+三档分发策略：
+
+| 策略 | onefile 体积 | 首次使用 | 取舍 |
+|---|---|---|---|
+| A 全内置 | ~245 MB | 开箱即用 | **onefile 每次启动要解包 245MB，启动会明显变慢** |
+| B 运行时内置 + 模型首下（**推荐**） | ~170 MB | 需联网下 74MB | 启动影响可控；模型可换可删 |
+| C 全首下 | ~57 MB | 需联网下 ~145MB | 包体不变，但首次体验差、离线用户不可用 |
+
+### 40.8 界面
+
+- 歌词右键新增：「AI 对齐歌词（逐字）」——排在「本地近似·免 Key」上方，标注精度差异
+- 设置 → 歌词页新增「AI 对齐」区：模型档位（base / small）、批量对齐入口、清空字级数据
+- 批量对齐：独立进度对话框（可中断），逐首处理，失败的列出来但不中断整体
+
+### 40.9 验收标准（量化，不靠肉眼）
+
+1. **精度**：用 `tools/eval_align.py`（以联网歌词为真值）对同一批歌对比，
+   行级误差中位数 6.04s → **< 0.5s**；这是硬指标。
+2. **字级**：抽 3 首人工核对，逐字亮起时刻与人声起点偏差 **< 200ms**。
+3. **零回归**：`words` 为空的歌，渲染/滚动/颜色覆盖全部与 v2.9.2 逐字节一致。
+4. **兜底可用**：拔掉模型目录 → AI 对齐项置灰并提示，其余功能不受影响。
+5. 全量回归全绿、ruff 干净、打包 smoke 通过、`--check` 输出 v3.0.0。
+
+### 40.10 风险与回退
+
+| 风险 | 概率 | 应对 |
+|---|---|---|
+| **打包 ctranslate2 / av 失败**（C++ 扩展 + FFmpeg DLL） | 中 | Phase 0 先验证；失败则退到「外部依赖 + 设置里指定路径」 |
+| **唱歌识别率低** | **高** | L1 声道增强 + L3 文本比对 + L5 自检回退；实在不行只用 L4 能量切分 |
+| numpy 解禁影响现有构建 | 中 | build.py 只放行 numpy，其余排除项不动；跑全量回归 |
+| 内存峰值（模型加载 ~500MB） | 中 | 批量模式复用同一个 session，不逐首重建 |
+| onefile 启动变慢 | 高（若选策略 A） | 推荐策略 B |
+
+**回退**：所有新功能都在 `words` 为空时失效，删掉 `app/lyrics_asr.py` + 右键项即回到 v2.9.2。
+
+### 40.11 Phase 0：可行性关卡（先验证再写业务代码）
+
+动手前必须先跑通这 4 条，任何一条失败就改方案而不是硬着头皮写：
+
+1. `pip install faster-whisper` 在 venv 里装成功（含 ctranslate2 / av / onnxruntime）。
+2. 用合成音频跑一次 `transcribe(word_timestamps=True)`，确认能出词级时间戳。
+3. PyInstaller 打一个最小探针 exe，确认能加载 ctranslate2 并完成推理。
+4. 记录真实体积增量，回填 40.7 的数字。
+
+> ⚠️ 本地没有真人演唱样本（fixtures 全是合成音），**唱歌对齐质量只能由用户在自己的
+> 歌上验证**。所以 L5 自检 + 一键回退不是可选装饰，是交付前提。
+
+### 40.12 Phase 0 实测结果（2026-10-31，已验证）
+
+| 关卡 | 结果 | 关键结论 |
+|---|---|---|
+| P0-1 依赖安装 | ✅ | 21 个包，1m55s。`ctranslate2` 有 cp313-win_amd64 wheel |
+| P0-2 推理 | ✅ | 模型加载 0.9s、2 秒音频推理 1.25s、词级时间戳结构正确 |
+| P0-3 打包 | ✅ **但需锁版本** | PyInstaller 产物能加载模型并完成推理 |
+| P0-4 体积 | ✅ | 见下表，**比预估大 65MB** |
+
+**实测体积（onedir，不含 PySide6）**
+
+| 组件 | 体积 |
+|---|---|
+| ctranslate2（含 61MB DLL） | 62 MB |
+| **av + av.libs（PyAV 自带 FFmpeg）** | **68 MB** |
+| numpy + numpy.libs | 27 MB |
+| tokenizers | 7.5 MB |
+| 小包（huggingface_hub / tqdm / click …） | ~5 MB |
+| **AI 增量合计** | **≈ 164 MB** |
+| Whisper base 模型（`model.bin`） | **142 MB**（不是估的 74MB：int8 只是推理时量化，磁盘仍是 fp16） |
+
+按策略 B（运行时内置 + 模型首下）：安装包 **≈ 220 MB**，首次用 AI 再下 **142 MB**。
+若砍掉 av（见下），安装包可降到 **≈ 152 MB**。
+
+### 40.13 Phase 0 踩到的坑（全部实测，别再踩）
+
+1. **ctranslate2 4.8.4 在 PyInstaller 产物里加载模型必 segfault**（exit 139，零输出、
+   无异常）。onedir / onefile 都一样，补 `libiomp5md.dll`、手动 `os.add_dll_directory`、
+   限制 `OMP_NUM_THREADS=1` 全都无效。**降到 4.6.0 立刻正常**。
+   代价：4.6.0 依赖 `pkg_resources`，需 `setuptools<81`（81 起移除）。
+   → 依赖必须锁死：`ctranslate2==4.6.0`、`setuptools<81`。
+2. **`--collect-binaries ctranslate2` 必须加**，否则 `libiomp5md.dll`（Intel OpenMP）
+   不会被打进去，缺失时同样是 segfault 而不是 ImportError，极难排查。
+3. **`av` 是 68MB 的隐形大头**，但我们根本不用它：faster-whisper 传**文件路径**时走
+   `av.open(...)`，而 `av 19` 删掉了 `metadata_errors` 参数，1.2.1 还在传 → 直接
+   `TypeError`。**必须自己用 miniaudio 解码成 numpy 数组传进去**（顺带做了 L1 声道提取）。
+   既然不用 av，打包可用一个 stub `av` 模块顶掉 `import av`，省 68MB（列为 P0 后续优化）。
+4. **HF 镜像不支持 Xet**：`hf-xet` 会去 `cas-server.xethub.hf.co` 取文件并拿到
+   `401 Unauthorized`。必须 `HF_HUB_DISABLE_XET=1`。顺带证明 `hf_xet`（9MB）可排除。
+5. **直接传 `"base"` 会联网查版本**，离线/网络不通时抛 `ProxyError`。必须走本地目录路径
+   `WhisperModel(<dir>)`，这也正是「首下后永远本地加载」的设计。
+6. **onnxruntime（45.6MB）可整个排除**：只被 VAD 用，`vad_filter=False` 时不需要。
+   打包验证通过。
+7. **幻觉置信度可自动识别**：合成音（无语音）测试里 whisper 仍"听"出 7 个字，
+   但 `probability` 只有 0.03~0.12。L5 自检用这个指标即可判「不可信」，无需人耳。

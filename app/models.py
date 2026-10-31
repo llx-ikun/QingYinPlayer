@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -25,6 +26,10 @@ MEDIA_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
 
 # 自定义背景的四种形态（v2.2）
 BG_TYPES = ("none", "color", "gradient", "image")
+
+# 歌词颜色覆盖（v2.9.0）：触发节奏 / 渐变方向
+COLOR_TRIGGERS = ("progress", "time")              # 按歌词进度 / 按播放时间
+COLOR_DIRECTIONS = ("horizontal", "vertical", "diagonal")
 
 # 视频扩展名（不带点），用于按 fmt 派生 is_video
 VIDEO_FORMATS = frozenset(ext.lstrip(".") for ext in VIDEO_EXTENSIONS)
@@ -93,6 +98,22 @@ def _as_int(value, default: int, low: int, high: int) -> int:
 def _as_str(value, default: str, *, allow_empty: bool = False) -> str:
     if isinstance(value, str) and (allow_empty or value.strip()):
         return value
+    return default
+
+
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def normalize_color(value, default: str = "") -> str:
+    """把任意值收敛成 `#rrggbb`；空串/非法值返回 default（v2.9.0）。
+
+    颜色从 JSON / 右键对话框进来，可能是 None、`#fff`、`red` 或脏字符串。
+    统一在这里挡掉，避免渲染层拿到非法值后 `QColor` 静默变黑。
+    """
+    if isinstance(value, str):
+        s = value.strip()
+        if _HEX_COLOR.match(s):
+            return s.lower()
     return default
 
 
@@ -214,6 +235,7 @@ class BackgroundConfig:
     color: str = "#3b82f6"      # 纯色 / 渐变起始色
     color2: str = "#8b5cf6"     # 渐变终止色
     image: str = ""             # 图片路径（导入时复制进数据目录 bgs/）
+    preset: str = ""            # v2.8.3：内置背景预设 id（如 "starry"/"clouds"），空=非预设
     opacity: float = 1.0        # 背景层不透明度 0.2~1.0
     blur: int = 0               # 高斯模糊半径 px（0 = 不模糊）
     dim: float = 0.0            # 暗化 0~0.7（把背景压暗，保证前景文字可读）
@@ -225,6 +247,7 @@ class BackgroundConfig:
             "color": self.color,
             "color2": self.color2,
             "image": self.image,
+            "preset": self.preset,
             "opacity": self.opacity,
             "blur": self.blur,
             "dim": self.dim,
@@ -243,6 +266,7 @@ class BackgroundConfig:
             if isinstance(value, str) and value:
                 setattr(cfg, key, value)
         cfg.image = str(d.get("image") or "")
+        cfg.preset = str(d.get("preset") or "")
         try:
             cfg.opacity = max(0.2, min(1.0, float(d.get("opacity", 1.0))))
         except (TypeError, ValueError):
@@ -260,6 +284,57 @@ class BackgroundConfig:
 
 
 @dataclass
+class LyricsColorConfig:
+    """歌词自定义颜色覆盖（v2.9.0）。
+
+    与「歌词动效」正交：`Settings.lyrics_effect` 决定遮罩/几何（放大 / 逐字揭示 /
+    已唱未唱切分），本配置只决定「这段文字用什么颜色」。`enabled=False` 时渲染层
+    完全走旧逻辑（零开销），因此这是一个可整体关闭的实验性外观项。
+
+    颜色留空（`color_a``color_b` 为 ""）表示跟随当前主题强调色，改主题时自动跟随，
+    不会把某个具体色值冻结进 data.json。
+    """
+
+    enabled: bool = False
+    trigger: str = "progress"       # progress（按歌词进度）| time（按播放时间）
+    gradient: bool = True           # True=双色渐变，False=单色
+    color_a: str = ""               # ""=跟随主题 ACCENT
+    color_b: str = ""               # ""=由 color_a 派生（提亮版）
+    direction: str = "horizontal"   # horizontal | vertical | diagonal
+    speed: float = 0.25             # time 模式每秒相位推进（0.05~2.0）
+    transition: float = 0.08        # 已唱/未唱交界软过渡宽度（占行宽 0~0.3）
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "trigger": self.trigger,
+            "gradient": self.gradient,
+            "color_a": self.color_a,
+            "color_b": self.color_b,
+            "direction": self.direction,
+            "speed": self.speed,
+            "transition": self.transition,
+        }
+
+    @classmethod
+    def from_dict(cls, d) -> "LyricsColorConfig":
+        cfg = cls()
+        if not isinstance(d, dict):
+            return cfg
+        cfg.enabled = bool(d.get("enabled", False))
+        trigger = d.get("trigger")
+        cfg.trigger = trigger if trigger in COLOR_TRIGGERS else "progress"
+        cfg.gradient = bool(d.get("gradient", True))
+        cfg.color_a = normalize_color(d.get("color_a"), "")
+        cfg.color_b = normalize_color(d.get("color_b"), "")
+        direction = d.get("direction")
+        cfg.direction = direction if direction in COLOR_DIRECTIONS else "horizontal"
+        cfg.speed = _as_float(d.get("speed"), 0.25, 0.05, 2.0)
+        cfg.transition = _as_float(d.get("transition"), 0.08, 0.0, 0.3)
+        return cfg
+
+
+@dataclass
 class Settings:
     volume: float = 0.7
     muted: bool = False
@@ -273,6 +348,7 @@ class Settings:
     accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
     font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
     lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/zoom/typewriter/karaoke）
+    lyrics_color: LyricsColorConfig = field(default_factory=LyricsColorConfig)  # v2.9.0
     # v2.2 自定义背景：三个作用域（全部 / 列表页 / 正在播放页）
     bg_all: BackgroundConfig = field(default_factory=BackgroundConfig)
     bg_library: BackgroundConfig = field(default_factory=BackgroundConfig)
@@ -308,6 +384,7 @@ class Settings:
             "accent_color": self.accent_color,
             "font_scale": self.font_scale,
             "lyrics_effect": self.lyrics_effect,
+            "lyrics_color": self.lyrics_color.to_dict(),
             "bg": {
                 "all": self.bg_all.to_dict(),
                 "library": self.bg_library.to_dict(),
@@ -331,16 +408,26 @@ class Settings:
         s.last_position_ms = _as_int(d.get("last_position_ms"), 0, 0, MAX_POSITION_MS)
         view = d.get("last_view")
         s.last_view = view if isinstance(view, str) and view else PLAYLIST_LIBRARY
-        s.theme = d.get("theme") or "light"
+        theme = d.get("theme") or "light"
+        # v2.8.3：主题从四套改成两套，「深色2 / 浅色2」并入「深色 / 浅色」，
+        # 老数据里的 columbina2/light2 在这里归一，避免界面读到一个不存在的主题。
+        s.theme = {"columbina2": "columbina", "light2": "light"}.get(theme, theme)
         s.nickname = _as_str(d.get("nickname"), "音乐爱好者")
         s.online_lyrics = bool(d.get("online_lyrics", True))
         s.accent_color = _as_str(d.get("accent_color"), "", allow_empty=True)
         s.font_scale = _as_float(d.get("font_scale"), 1.0, 0.5, 3.0)
         effect = d.get("lyrics_effect")
         s.lyrics_effect = effect if effect in LYRICS_EFFECTS else "none"
+        s.lyrics_color = LyricsColorConfig.from_dict(d.get("lyrics_color") or {})
         bg = d.get("bg") or {}
         if isinstance(bg, dict):
             s.bg_all = BackgroundConfig.from_dict(bg.get("all") or {})
             s.bg_library = BackgroundConfig.from_dict(bg.get("library") or {})
             s.bg_now = BackgroundConfig.from_dict(bg.get("now_playing") or {})
+        # v2.8.4 自愈：v2.8.3 里在分页面设了背景（type != none）却没翻 inherit，
+        # 是自相矛盾的状态 —— 保存时「本页单独设置」没勾，配置被 bg_all 静默吞掉，
+        # 表现「设了没反应」。这里按「本页单独设置」纠正，让已存的坏数据升级后生效。
+        for _cfg in (s.bg_library, s.bg_now):
+            if _cfg.type != "none" and _cfg.inherit:
+                _cfg.inherit = False
         return s

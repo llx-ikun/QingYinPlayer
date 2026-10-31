@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from app import paths as app_paths
 from app.library import import_background
-from app.models import BackgroundConfig, LYRICS_EFFECTS
+from app.models import BackgroundConfig, LYRICS_EFFECTS, LyricsColorConfig
 from app.paths import bgs_dir
 from app.version import APP_NAME, version_text
 from ui import theme as ui_theme
@@ -65,6 +65,18 @@ LYRICS_EFFECT_OPTIONS = [
     ("放大当前行", "zoom"),
     ("打字机", "typewriter"),
     ("颜色覆盖", "karaoke"),
+]
+
+# 歌词颜色覆盖（v2.9.0）
+COLOR_TRIGGER_OPTIONS = [
+    ("按歌词进度", "progress"),
+    ("按播放时间", "time"),
+]
+
+COLOR_DIRECTION_OPTIONS = [
+    ("横向", "horizontal"),
+    ("纵向", "vertical"),
+    ("斜向", "diagonal"),
 ]
 
 BG_TYPE_OPTIONS = [
@@ -129,13 +141,15 @@ class SettingsDialog(QDialog):
     accent_changed = Signal(str)         # "#rrggbb"，"" = 跟随主题默认
     font_scale_changed = Signal(float)
     lyrics_effect_changed = Signal(str)  # none / zoom / typewriter / karaoke
+    lyrics_color_changed = Signal(object)  # v2.9.0：LyricsColorConfig
     background_changed = Signal(str, object)   # (作用域, BackgroundConfig)
     storage_changed = Signal(str)        # 数据目录搬到的新位置（需重启生效）
 
     def __init__(self, theme_name: str, nickname: str, stats: dict, parent=None,
                  online_lyrics: bool = True, accent_color: str = "",
                  font_scale: float = 1.0, bg_configs: dict | None = None,
-                 bg_scope: str = "all", lyrics_effect: str = "none"):
+                 bg_scope: str = "all", lyrics_effect: str = "none",
+                 lyrics_color: LyricsColorConfig | None = None):
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
@@ -144,6 +158,8 @@ class SettingsDialog(QDialog):
         self._accent = (accent_color or "").lower()
         self._font_scale = font_scale
         self._lyrics_effect = lyrics_effect if lyrics_effect in LYRICS_EFFECTS else "none"
+        self._lyrics_color = LyricsColorConfig.from_dict(
+            lyrics_color.to_dict() if isinstance(lyrics_color, LyricsColorConfig) else {})
         self._loading = False
         self._bg_scope = bg_scope if bg_scope in ("all", "library", "now_playing") else "all"
         self._bg: dict[str, BackgroundConfig] = {}
@@ -253,6 +269,29 @@ class SettingsDialog(QDialog):
         page = QWidget()
         root = QVBoxLayout(page)
         root.setSpacing(10)
+
+        # v2.8.3：内置背景预设（星空 / 云海）—— 主题与背景已拆开，这两张图不再是
+        # 「主题2」，而是背景页里可选的两张卡片，任何主题都能配。
+        root.addWidget(QLabel("内置背景"))
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(8)
+        self.preset_buttons: dict[str, QPushButton] = {}
+        for preset in ui_theme.BACKGROUND_PRESETS:
+            btn = QPushButton(preset.label)
+            btn.setObjectName("Ghost")
+            btn.setToolTip(f"应用内置背景「{preset.label}」")
+            thumb = QPixmap(ui_theme.preset_image_path(preset.id) or "")
+            if not thumb.isNull():
+                thumb = thumb.scaled(96, 54,
+                                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                     Qt.TransformationMode.SmoothTransformation)
+                btn.setIcon(QIcon(thumb))
+                btn.setIconSize(thumb.size())
+            btn.clicked.connect(lambda _=False, pid=preset.id: self._apply_preset(pid))
+            preset_row.addWidget(btn)
+            self.preset_buttons[preset.id] = btn
+        preset_row.addStretch(1)
+        root.addLayout(preset_row)
 
         top = QHBoxLayout()
         top.setSpacing(10)
@@ -387,6 +426,72 @@ class SettingsDialog(QDialog):
         effect_hint.setObjectName("Dim")
         effect_hint.setWordWrap(True)
         root.addWidget(effect_hint)
+
+        # ---- 歌词颜色覆盖（v2.9.0）：只作用于正在播放页的当前这一句 ----
+        root.addSpacing(8)
+        root.addWidget(QLabel("歌词颜色覆盖"))
+
+        self.color_enabled_box = QCheckBox("启用（只作用于正在播放页当前这句）")
+        self.color_enabled_box.setChecked(self._lyrics_color.enabled)
+        self.color_enabled_box.toggled.connect(self._on_color_enabled)
+        root.addWidget(self.color_enabled_box)
+
+        color_top = QHBoxLayout()
+        color_top.setSpacing(8)
+        color_top.addWidget(QLabel("触发"))
+        self.color_trigger_combo = ChevronComboBox()
+        self.color_trigger_combo.setObjectName("FontScaleCombo")
+        for label, value in COLOR_TRIGGER_OPTIONS:
+            self.color_trigger_combo.addItem(label, value)
+        self.color_trigger_combo.setCurrentIndex(
+            max(0, self.color_trigger_combo.findData(self._lyrics_color.trigger)))
+        self.color_trigger_combo.currentIndexChanged.connect(self._on_color_trigger)
+        color_top.addWidget(self.color_trigger_combo)
+        color_top.addSpacing(8)
+        color_top.addWidget(QLabel("方向"))
+        self.color_direction_combo = ChevronComboBox()
+        self.color_direction_combo.setObjectName("FontScaleCombo")
+        for label, value in COLOR_DIRECTION_OPTIONS:
+            self.color_direction_combo.addItem(label, value)
+        self.color_direction_combo.setCurrentIndex(
+            max(0, self.color_direction_combo.findData(self._lyrics_color.direction)))
+        self.color_direction_combo.currentIndexChanged.connect(self._on_color_direction)
+        color_top.addWidget(self.color_direction_combo)
+        color_top.addStretch(1)
+        root.addLayout(color_top)
+
+        color_pick = QHBoxLayout()
+        color_pick.setSpacing(8)
+        color_pick.addWidget(QLabel("起色"))
+        self.color_a_btn = QPushButton()
+        self.color_a_btn.setFixedWidth(96)
+        self.color_a_btn.clicked.connect(lambda: self._pick_lyric_color("color_a"))
+        color_pick.addWidget(self.color_a_btn)
+        color_pick.addWidget(QLabel("止色"))
+        self.color_b_btn = QPushButton()
+        self.color_b_btn.setFixedWidth(96)
+        self.color_b_btn.clicked.connect(lambda: self._pick_lyric_color("color_b"))
+        color_pick.addWidget(self.color_b_btn)
+        self.color_reset_btn = QPushButton("随主题")
+        self.color_reset_btn.setObjectName("Ghost")
+        self.color_reset_btn.setToolTip("清除起色/止色，跟随当前主题强调色")
+        self.color_reset_btn.clicked.connect(self._reset_lyric_colors)
+        color_pick.addWidget(self.color_reset_btn)
+        color_pick.addStretch(1)
+        root.addLayout(color_pick)
+
+        self.color_speed_slider, self.color_speed_value = self._add_slider_row(
+            root, "速度", 5, 200, round(self._lyrics_color.speed * 100), "%")
+        self.color_speed_slider.valueChanged.connect(self._on_color_speed)
+        self.color_transition_slider, self.color_transition_value = self._add_slider_row(
+            root, "过渡", 0, 30, round(self._lyrics_color.transition * 100), "%")
+        self.color_transition_slider.valueChanged.connect(self._on_color_transition)
+
+        color_hint = QLabel("留空起色/止色即跟随主题；「按播放时间」时用速度控制流动快慢。")
+        color_hint.setObjectName("Dim")
+        color_hint.setWordWrap(True)
+        root.addWidget(color_hint)
+        self._sync_color_widgets()
 
         root.addSpacing(6)
         stats_text = (
@@ -588,6 +693,78 @@ class SettingsDialog(QDialog):
         if value is not None and not self._loading:
             self.lyrics_effect_changed.emit(value)
 
+    # ---------- 歌词颜色覆盖（v2.9.0） ----------
+
+    def _emit_lyrics_color(self) -> None:
+        """发一份副本：调用方后续改自己那份时不会串到对话框状态。"""
+        self.lyrics_color_changed.emit(
+            LyricsColorConfig.from_dict(self._lyrics_color.to_dict()))
+
+    def _on_color_enabled(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self._lyrics_color.enabled = bool(checked)
+        self._sync_color_widgets()
+        self._emit_lyrics_color()
+
+    def _on_color_trigger(self, index: int) -> None:
+        value = self.color_trigger_combo.itemData(index)
+        if self._loading or value is None:
+            return
+        self._lyrics_color.trigger = value
+        self._sync_color_widgets()
+        self._emit_lyrics_color()
+
+    def _on_color_direction(self, index: int) -> None:
+        value = self.color_direction_combo.itemData(index)
+        if self._loading or value is None:
+            return
+        self._lyrics_color.direction = value
+        self._emit_lyrics_color()
+
+    def _pick_lyric_color(self, field: str) -> None:
+        current = getattr(self._lyrics_color, field) or ui_theme.current_theme().ACCENT
+        color = QColorDialog.getColor(QColor(current), self, "选择歌词颜色")
+        if not color.isValid():
+            return
+        setattr(self._lyrics_color, field, color.name())
+        self._sync_color_widgets()
+        self._emit_lyrics_color()
+
+    def _reset_lyric_colors(self) -> None:
+        self._lyrics_color.color_a = ""
+        self._lyrics_color.color_b = ""
+        self._sync_color_widgets()
+        self._emit_lyrics_color()
+
+    def _on_color_speed(self, value: int) -> None:
+        if self._loading:
+            return
+        self._lyrics_color.speed = max(0.05, min(2.0, value / 100))
+        self.color_speed_value.setText(f"{value}%")
+        self._emit_lyrics_color()
+
+    def _on_color_transition(self, value: int) -> None:
+        if self._loading:
+            return
+        self._lyrics_color.transition = max(0.0, min(0.3, value / 100))
+        self.color_transition_value.setText(f"{value}%")
+        self._emit_lyrics_color()
+
+    def _sync_color_widgets(self) -> None:
+        """按当前配置刷新颜色按钮与「速度」可用状态（不发信号）。"""
+        cfg = self._lyrics_color
+        for btn, value in ((self.color_a_btn, cfg.color_a),
+                           (self.color_b_btn, cfg.color_b)):
+            if value:
+                btn.setText(value.upper())
+                btn.setStyleSheet(_color_button_style(value))
+            else:
+                btn.setText("随主题")
+                btn.setStyleSheet("")
+        is_time = cfg.trigger == "time"
+        self.color_speed_slider.setEnabled(is_time)
+
     # ---------- 背景 ----------
 
     def _current_bg(self) -> BackgroundConfig:
@@ -613,8 +790,11 @@ class SettingsDialog(QDialog):
             return
         cfg = self._current_bg()
         cfg.type = self.bg_type_combo.itemData(index) or "none"
+        if cfg.type != "image":
+            cfg.preset = ""          # 离开图片类型就不再是内置预设
         if cfg.type == "image" and cfg.dim <= 0:
             cfg.dim = 0.35          # 默认压暗一点：直接铺亮图文字会看不清
+        self._mark_page_custom()
         self._sync_bg_widgets()
         self._emit_background()
 
@@ -625,6 +805,7 @@ class SettingsDialog(QDialog):
         cfg.opacity = self.opacity_slider.value() / 100
         cfg.blur = self.blur_slider.value()
         cfg.dim = self.dim_slider.value() / 100
+        self._mark_page_custom()
         self._sync_bg_value_labels()
         self._emit_background()
 
@@ -635,6 +816,7 @@ class SettingsDialog(QDialog):
         if not color.isValid():
             return
         setattr(cfg, field, color.name())
+        self._mark_page_custom()
         self._sync_bg_widgets()
         self._emit_background()
 
@@ -651,17 +833,21 @@ class SettingsDialog(QDialog):
             return
         cfg = self._current_bg()
         cfg.image = stored
+        cfg.preset = ""             # 选了自定义图片就退出内置预设
         cfg.type = "image"
         if cfg.dim <= 0:
             cfg.dim = 0.35
+        self._mark_page_custom()
         self._sync_bg_widgets()
         self._emit_background()
 
     def _clear_bg_image(self) -> None:
         cfg = self._current_bg()
         cfg.image = ""
+        cfg.preset = ""
         if cfg.type == "image":
             cfg.type = "none"
+        self._mark_page_custom()
         self._sync_bg_widgets()
         self._emit_background()
 
@@ -684,6 +870,7 @@ class SettingsDialog(QDialog):
             self.dim_slider.setValue(round(cfg.dim * 100))
             self._sync_bg_value_labels()
             self._sync_bg_widgets()
+            self._sync_bg_presets()
         finally:
             self._loading = False
 
@@ -705,7 +892,11 @@ class SettingsDialog(QDialog):
         self.color_btn.setStyleSheet(_color_button_style(cfg.color))
         self.color2_btn.setText(cfg.color2.upper())
         self.color2_btn.setStyleSheet(_color_button_style(cfg.color2))
-        if cfg.image:
+        if cfg.preset:
+            preset = ui_theme.PRESET_BY_ID.get(cfg.preset)
+            self.image_label.setText(f"内置背景：{preset.label if preset else cfg.preset}")
+            self.image_label.setToolTip("随程序分发的内置背景图")
+        elif cfg.image:
             self.image_label.setText(os.path.basename(cfg.image))
             self.image_label.setToolTip(cfg.image)
         else:
@@ -715,6 +906,62 @@ class SettingsDialog(QDialog):
         for widget in (self.opacity_slider, self.blur_slider, self.dim_slider):
             widget.setEnabled(cfg.type != "none")
         self.bg_inherit_box.setVisible(self._bg_scope != "all")
+
+    def _apply_preset(self, preset_id: str) -> None:
+        """点内置背景卡片：把当前页背景设成这张图（带预设默认暗化/不透明度）。"""
+        preset_cfg = ui_theme.background_preset_config(preset_id)
+        if preset_cfg is None:
+            return
+        cfg = self._current_bg()
+        cfg.type = "image"
+        cfg.preset = preset_id
+        cfg.image = ""              # 预设不占用用户图片路径
+        cfg.opacity = preset_cfg.opacity
+        cfg.blur = preset_cfg.blur
+        cfg.dim = preset_cfg.dim
+        # 让控件同步（类型选到「图片」、三个滑块贴到预设默认值），期间不发信号
+        self._loading = True
+        try:
+            idx = self.bg_type_combo.findData("image")
+            self.bg_type_combo.setCurrentIndex(max(0, idx))
+            self.opacity_slider.setValue(round(cfg.opacity * 100))
+            self.blur_slider.setValue(int(cfg.blur))
+            self.dim_slider.setValue(round(cfg.dim * 100))
+            self._sync_bg_value_labels()
+        finally:
+            self._loading = False
+        self._sync_bg_widgets()
+        self._sync_bg_presets()
+        self._mark_page_custom()
+        self._emit_background()
+
+    def _sync_bg_presets(self) -> None:
+        """标出当前激活的内置预设卡片（用 active 属性 + repolish）。"""
+        cfg = self._current_bg()
+        for pid, btn in getattr(self, "preset_buttons", {}).items():
+            active = cfg.preset == pid
+            btn.setProperty("active", active)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _mark_page_custom(self) -> None:
+        """在分页面作用域上主动改背景，就自动「本页单独设置」（inherit=False）。
+
+        否则用户切到「列表页/正在播放页」设背景，inherit 仍是默认 True（跟随
+        「全部页面」），Settings.bg_config() 会静默退回 bg_all —— 表现为「设了
+        没反应」。勾选动作用 _loading 挡住 toggled 信号，避免重复处理。
+        """
+        if self._bg_scope == "all":
+            return
+        cfg = self._current_bg()
+        if not cfg.inherit:
+            return
+        cfg.inherit = False
+        self._loading = True
+        try:
+            self.bg_inherit_box.setChecked(True)
+        finally:
+            self._loading = False
 
     def _emit_background(self) -> None:
         cfg = self._current_bg()

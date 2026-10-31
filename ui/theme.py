@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
-"""双主题（默认浅色薰衣草 / 深色夜空）：调色板 + QSS + 主题应用。
+"""两套配色主题（深色「午夜」/ 浅色「晨雾」）：调色板 + QSS + 主题应用。
 
-- Theme 为不可变数据类；THEMES 注册全部主题；build_stylesheet(theme) 生成 QSS。
+- Theme 为不可变数据类；THEMES 注册两套配色；build_stylesheet(theme) 生成 QSS。
 - apply_theme(app, name)：切换主题 = 换 QSS + 重绘全部主题化图标 + 均衡器条换色。
 - 模块级 __getattr__ 让 `from ui.theme import ACCENT` 始终读到**当前主题**的值，
   兼容 v1 代码的常量引用习惯。
+
+v2.8.3：主题与背景彻底拆开 —— 主题只管「配色」（浅色 / 深色两套），背景是
+另一个独立维度。原来的「深色2 / 浅色2」两张内置图（星空 / 云海）不再是主题，
+而是「背景」页的**内置预设**（`BACKGROUND_PRESETS`）：任何主题都能搭配任何
+背景，互不联动。`background_preset_config(preset_id)` 把预设翻成 BackgroundConfig。
 
 v2.2 起支持「外观自定义」：
 - **强调色**：用户只给一个色值，`derive_accent()` 派生 hover/dim/soft/on_accent
@@ -30,7 +35,7 @@ class Theme:
     BORDER: str
     TEXT: str
     TEXT_DIM: str
-    ACCENT: str           # 强调色（深=蓝紫，浅=浅蓝）
+    ACCENT: str           # 强调色（深=长春花紫，浅=陶土橙）
     ACCENT_HOVER: str
     ACCENT_DIM: str
     ACCENT_SOFT: str      # 强调淡底（选中行/图标导航激活/徽章）
@@ -44,35 +49,61 @@ class Theme:
 
 LIGHT = Theme(
     name="light",
-    # 「浅色」主题：冷调月白（image 1）。底色取参考图采样值 #eef2fb —— 蓝通道最高、
-    # 带一点 periwinkle，不是粉紫也不是中性灰；面板只比底色亮极小一档（参考图里
-    # 侧栏/内容/播放栏几乎同色，层次靠细边框和文字，而不是白卡片压浅底）。
-    # 强调色比原 #7c83f0 更蓝更柔（参考图播放键 ~#7f97d6），但压深到 #7389cb：
-    # 白字对比 3.4:1、在面板上 3.2:1，两处都守住可读性下限（#7f97d6 只有 2.9 / 2.8）。
-    BG="#eef2fb", SURFACE="#f5f8fd", SURFACE_HOVER="#e6ecfa", SURFACE_ACTIVE="#dbe3f7",
-    BORDER="#d9e1f5", TEXT="#2c3552", TEXT_DIM="#6d7897",
-    ACCENT="#7389cb", ACCENT_HOVER="#6179be", ACCENT_DIM="#4f66a8",
-    ACCENT_SOFT="#e2e9fa", DANGER="#d9455a", HEART="#e8455c", ON_ACCENT="#ffffff",
+    # 「晨雾」浅色主题（v2.8.3 重做）：暖调米白。底色是接近纸张的暖白 #f7f5f1，
+    # 面板再亮一档 #fcfbf9，层次靠细边框和文字，而不是白卡片压浅底。
+    # 强调色用陶土橙 #c96f4a：暖而不刺眼，白字对比 3.59:1、在面板上 3.45:1，
+    # 两处都守住可读性下限。
+    BG="#f7f5f1", SURFACE="#fcfbf9", SURFACE_HOVER="#efebe4", SURFACE_ACTIVE="#e8e3d9",
+    BORDER="#e3ded3", TEXT="#3c362e", TEXT_DIM="#8a8276",
+    ACCENT="#c96f4a", ACCENT_HOVER="#ab5e3f", ACCENT_DIM="#8d4e34",
+    ACCENT_SOFT="#f5e9e2", DANGER="#d9455a", HEART="#e8455c", ON_ACCENT="#ffffff",
 )
 
 COLUMBINA = Theme(
     name="columbina",
-    # 「深色」主题（image 2）：午夜深蓝夜空。底色从深蓝紫斜向过渡到更深的墨蓝
-    # （BG_ALT），避免整屏糊成一块黑；面板比底色略亮一档，读成「半透明浮在夜空上」。
-    # 强调色用长春花蓝（periwinkle），与浅色主题同源，月牙 / 星点 / 羽饰都取这个色。
-    # ON_ACCENT 用近黑：长春花蓝较亮，白字对比仅 ~2.3:1，必须压深。
-    BG="#141c3e", SURFACE="#1e2648", SURFACE_HOVER="#29335c", SURFACE_ACTIVE="#333e70",
-    BORDER="#37426f", TEXT="#eef0ff", TEXT_DIM="#9aa1cc",
-    ACCENT="#8b9cf8", ACCENT_HOVER="#a6b2fb", ACCENT_DIM="#5d6ac2",
-    ACCENT_SOFT="#2c3560", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#0f1622",
-    BG_ALT="#0b1228",
+    # 「午夜」深色主题（v2.8.3 重做）：更接近深夜的墨黑蓝紫。底色 #181824 从
+    # 深蓝紫斜向过渡到更深的 #0f0f18（BG_ALT），避免整屏糊成一块黑；面板略亮一档。
+    # 强调色用长春花紫 #7f7bff，白字对比 3.40:1、在面板上 4.63:1。
+    BG="#181824", SURFACE="#22222e", SURFACE_HOVER="#2b2b39", SURFACE_ACTIVE="#343445",
+    BORDER="#3a3a4a", TEXT="#eceaf6", TEXT_DIM="#9b9aaf",
+    ACCENT="#7f7bff", ACCENT_HOVER="#9995ff", ACCENT_DIM="#5956b2",
+    ACCENT_SOFT="#2e2e49", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#ffffff",
+    BG_ALT="#0f0f18",
 )
+
+# ---------- 内置背景预设（v2.8.3） ----------
+# 原来的「深色2 / 浅色2」两张内置图（星空 / 云海）从主题里拆出来，变成「背景」页的
+# 预设。它们跟主题**不再联动**：任何主题都能配任何背景，选预设只是「把当前页的背景
+# 设成这张图」，用户还能接着调不透明度/暗化/模糊。
+#
+# 暗化/不透明度是**量出来的**，不是拍的（tools/probe_theme_bg.py 可复核）：
+# 深色图的月亮正好落在列表「大小 / 时长」列下面，暗化 0.5 + 不透明度 0.9 才能让
+# 灰字在月亮上保持 3:1 以上的对比；浅色图接近白、深色字天然够读，0.15 只把
+# 侧栏/播放栏从图里剥出来。
+
+
+@dataclass(frozen=True)
+class BackgroundPreset:
+    id: str
+    label: str
+    image: str            # 相对仓库根/打包目录的路径（如 "assets/theme_dark.jpg"）
+    opacity: float = 1.0  # 往主题底色掺一档，压亮部
+    dim: float = 0.0      # 暗化：亮部不压住前景文字
+    blur: int = 0         # 0 = 保持清晰
+
+
+BACKGROUND_PRESETS = (
+    BackgroundPreset("starry", "星空", "assets/theme_dark.jpg", opacity=0.90, dim=0.50),
+    BackgroundPreset("clouds", "云海", "assets/theme_light.jpg", dim=0.15),
+)
+PRESET_BY_ID = {p.id: p for p in BACKGROUND_PRESETS}
 
 THEMES = {"columbina": COLUMBINA, "light": LIGHT}
 
-# 主题钮的循环顺序（点一下切到下一个）——两态循环：深色 ↔ 浅色
+# 主题钮的循环顺序（点一下切到下一个）——两态循环：深色 ↔ 浅色。
 THEME_ORDER = ("columbina", "light")
-THEME_NEXT = {"columbina": "light", "light": "columbina"}
+THEME_NEXT = {cur: THEME_ORDER[(i + 1) % len(THEME_ORDER)]
+              for i, cur in enumerate(THEME_ORDER)}
 # 每个主题自己的代表图标；切换按钮显示的是「下一个主题」的图标
 THEME_ICON = {"columbina": "moon", "light": "sun"}
 THEME_LABEL = {"columbina": "深色", "light": "浅色"}
@@ -190,6 +221,40 @@ def current_theme() -> Theme:
 
 def current_font_scale() -> float:
     return _font_scale
+
+
+def preset_image_path(preset_id: str) -> str | None:
+    """内置背景预设的图片绝对路径；预设不存在返回 None（v2.8.3）。
+
+    路径走 `paths.resource_path` —— 打包后图在 `_MEIPASS/assets/` 下，开发态在
+    仓库根。预设存的是**相对路径**（稳定），这里才解成当前进程可用的绝对路径。
+    """
+    preset = PRESET_BY_ID.get(preset_id)
+    if preset is None:
+        return None
+    from app.paths import resource_path
+    return resource_path(*preset.image.split("/"))
+
+
+def background_preset_config(preset_id: str | None):
+    """内置背景预设 → BackgroundConfig；预设不存在返回 None（v2.8.3）。
+
+    每次调用都**新构造**一份配置，绝不返回 Settings 里的对象。返回的配置只带
+    `preset`（稳定身份）与预设的 opacity/dim/blur 默认值；图片路径由渲染层在
+    `_resolved_pixmap` 里经 `preset_image_path` 现解，避免把 `_MEIPASS` 临时路径
+    写进 data.json（下次启动就失效）。
+    """
+    preset = PRESET_BY_ID.get(preset_id)
+    if preset is None:
+        return None
+    from app.models import BackgroundConfig
+    return BackgroundConfig(
+        type="image",
+        preset=preset.id,
+        opacity=preset.opacity,
+        blur=preset.blur,
+        dim=preset.dim,
+    )
 
 
 def __getattr__(name: str):

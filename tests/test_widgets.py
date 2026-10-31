@@ -92,13 +92,17 @@ class TestPlayerBarLayout(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication(sys.argv[:1])
 
     def test_player_bar_fits_min_window(self):
+        from ui.main_window import WINDOW_MIN_WIDTH
         from ui.player_bar import PlayerBar
         pb = PlayerBar()
-        # MainWindow.setMinimumSize(1100, 720)：播放栏最小宽不得超过窗口最小宽，
-        # 否则信息列被挤到 0（副标题全成「…」）、布局在约束边界反复重算导致
-        # 窗口/播放栏抖动、进度手柄跟着乱跳。当前实测 ~1098。
-        self.assertLessEqual(pb.minimumSizeHint().width(), 1100,
-                             "PlayerBar 最小宽度不能超过窗口最小宽度 1100")
+        # MainWindow.setMinimumSize(WINDOW_MIN_WIDTH, ...)：播放栏最小宽不得超过
+        # 窗口最小宽，否则信息列被挤到 0（副标题全成「…」）、布局在约束边界反复
+        # 重算导致窗口/播放栏抖动、进度手柄跟着乱跳。
+        #
+        # v2.8.0：这里原本写死 1100。窗口最小宽改成按布局实测值定之后，两个数字
+        # 必须同源 —— 常量搬进 ui.main_window，测试直接引用，不再各自写死一遍。
+        self.assertLessEqual(pb.minimumSizeHint().width(), WINDOW_MIN_WIDTH,
+                             f"PlayerBar 最小宽度不能超过窗口最小宽度 {WINDOW_MIN_WIDTH}")
 
     def test_float_bar_not_overlap_cover(self):
         from ui.float_bar import FloatBar
@@ -121,20 +125,49 @@ class TestPlayerBarLayout(unittest.TestCase):
                          "整条高度应等于圆钮直径")
 
     def test_player_bar_fits_min_window_with_long_title(self):
-        """长标题/长艺人名不得把最小宽度顶爆（v2.1.5 复查发现 1185 > 1100）。
+        """长标题/长艺人名不得把最小宽度顶爆（v2.1.5 复查发现 1185 > 窗口最小宽）。
 
         根因：ElidedLabel 继承 QLabel 的 minimumSizeHint（按完整文本算宽度），
         一首「Blazing Heart (英文版)」+ 长艺人名就足以把播放栏撑到 1185px，
-        超过窗口最小宽 1100 → 信息列被挤空、布局反复重算导致抖动。
+        超过窗口最小宽 → 信息列被挤空、布局反复重算导致抖动。
         """
         from PySide6.QtGui import QPixmap
+        from ui.main_window import WINDOW_MIN_WIDTH
         from ui.player_bar import PlayerBar
         pb = PlayerBar()
         cover = QPixmap(48, 48)
         pb.update_track("Blazing Heart (英文版) - 原神-灼火之心 特别收录版",
                         "Chrissy Costanza/HOYO-MiX/上海爱乐乐团", cover)
-        self.assertLessEqual(pb.minimumSizeHint().width(), 1100,
-                             "长标题下 PlayerBar 最小宽度仍不得超过 1100")
+        self.assertLessEqual(pb.minimumSizeHint().width(), WINDOW_MIN_WIDTH,
+                             f"长标题下 PlayerBar 最小宽度仍不得超过 {WINDOW_MIN_WIDTH}")
+
+    def test_title_keeps_readable_width_at_min_window(self):
+        """窗口缩到最小时，播放栏标题列不能被挤成几个像素（v2.8.0）。
+
+        事故背景：把窗口默认尺寸调小之后，1044 宽下标题列只剩 44px ——
+        「周杰伦」都显示成了「周杰伦…」。根因是进度条固定 200 宽，窗口一窄，
+        被压缩的全是那条弹性最低的标题列。改成进度条弹性（120~200）后，
+        窄窗时它先让位，标题列回到 84px。
+        """
+        from PySide6.QtGui import QPixmap
+        from ui.main_window import WINDOW_MIN_WIDTH
+        from ui.player_bar import PLAYER_BAR_HEIGHT, PlayerBar
+
+        pb = PlayerBar()
+        pb.show()
+        pb.update_track("夜曲", "周杰伦", QPixmap(48, 48))
+        pb.resize(WINDOW_MIN_WIDTH, PLAYER_BAR_HEIGHT)
+        for _ in range(3):
+            self.app.processEvents()
+        try:
+            self.assertGreaterEqual(
+                pb.title.width(), 60,
+                f"最小窗口下标题列只剩 {pb.title.width()}px，歌名会被截成一个字")
+            # 进度条让位但不能塌：120 是它能收到的最小值
+            self.assertGreaterEqual(pb.seek_slider.width(), 120)
+            self.assertLessEqual(pb.seek_slider.width(), 200)
+        finally:
+            pb.close()
 
     def test_time_labels_snug_to_slider(self):
         """左端时间右对齐、右端时间左对齐，两侧留白才对称。"""
@@ -183,23 +216,28 @@ class TestSliderKnob(unittest.TestCase):
                 for y in range(0, img.height())]
 
     @staticmethod
-    def _is_saturated_blue(c) -> bool:
-        """蓝通道主导且明显发蓝（#3b82f6 / #2f74ea / #6c8cff / #829fff 都算）。"""
-        return c.blue() > 200 and (c.blue() - c.red()) > 60
+    def _is_saturated_accent(c) -> bool:
+        """强调色实心圆：颜色要有明显饱和度（红/蓝任一主导），不是白/灰/底色。
+
+        浅色主题的强调色是陶土橙、深色是长春花紫，两者都满足「主通道远高于
+        其他通道 + 足够亮」；底色/轨道/白心都是低饱和的灰白，会被排除。
+        """
+        r, g, b = c.red(), c.green(), c.blue()
+        return max(r, g, b) - min(r, g, b) > 40 and max(r, g, b) > 120
 
     def test_handle_visible_on_light(self):
         pixels = self._knob_pixels("light", "SeekSlider", 0)
-        self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
+        self.assertTrue(any(self._is_saturated_accent(c) for c in pixels),
                         "进度手柄应绘制为强调色实心圆，不能在浅色底上隐形")
 
     def test_handle_visible_on_columbina(self):
         pixels = self._knob_pixels("columbina", "SeekSlider", 0)
-        self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
+        self.assertTrue(any(self._is_saturated_accent(c) for c in pixels),
                         "深色主题下进度手柄同样必须是强调色实心圆")
 
     def test_volume_handle_visible_on_light(self):
         pixels = self._knob_pixels("light", "VolumeSlider", 0)
-        self.assertTrue(any(self._is_saturated_blue(c) for c in pixels),
+        self.assertTrue(any(self._is_saturated_accent(c) for c in pixels),
                         "音量手柄同样不能是白心白环（会隐形）")
 
     def test_handle_round_not_square(self):
@@ -224,7 +262,7 @@ class TestSliderKnob(unittest.TestCase):
 
         # 手柄外接框左上角 (1,1) 若为钮芯色 → 说明是方块
         corner = img.pixelColor(1, 1)
-        self.assertFalse(self._is_saturated_blue(corner),
+        self.assertFalse(self._is_saturated_accent(corner),
                          "手柄四角不应被钮芯色填满（否则是方块而非圆）")
 
 
@@ -732,6 +770,181 @@ class TestLyricsEffect(unittest.TestCase):
         self.assertEqual(panel._current_index, -1)
 
 
+class TestLyricsColor(unittest.TestCase):
+    """歌词颜色覆盖（v2.9.0）：配置下发 / 逐句色 / 相位 / 动画定时器门控。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def _panel(self, trigger="progress", **kw):
+        from app.lyrics import LyricLine
+        from app.models import LyricsColorConfig
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_synced([LyricLine(1000, "第一句"), LyricLine(5000, "第二句")])
+        cfg = LyricsColorConfig(enabled=True, trigger=trigger,
+                                color_a="#ff6b9d", color_b="#7f7bff", **kw)
+        panel.set_color_config(cfg)
+        return panel
+
+    def test_disabled_config_keeps_old_path(self):
+        from app.models import LyricsColorConfig
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_synced([])
+        panel.set_color_config(LyricsColorConfig(enabled=False))
+        self.assertIsNone(panel._active_color_cfg(), "关闭时必须走旧渲染分支")
+
+    def test_row_colors_use_configured_pair(self):
+        panel = self._panel()
+        a, b = panel._row_colors(0)
+        self.assertEqual(a.name(), "#ff6b9d")
+        self.assertEqual(b.name(), "#7f7bff")
+
+    def test_per_line_color_overrides_global(self):
+        panel = self._panel()
+        panel.set_line_colors({5000: "#00ff00"})
+        a, _b = panel._row_colors(1)
+        self.assertEqual(a.name(), "#00ff00", "逐句色应覆盖全局色")
+        a0, _ = panel._row_colors(0)
+        self.assertEqual(a0.name(), "#ff6b9d", "没设逐句色的行仍用全局色")
+
+    def test_single_color_mode_collapses_gradient(self):
+        panel = self._panel(gradient=False)
+        a, b = panel._row_colors(0)
+        self.assertEqual(a.name(), b.name(), "单色模式两端颜色应相同")
+
+    def test_empty_color_a_follows_theme_accent(self):
+        from PySide6.QtGui import QColor
+
+        from app.models import LyricsColorConfig
+
+        panel = self._panel()
+        panel.set_color_config(LyricsColorConfig(enabled=True, color_a="", color_b=""))
+        a, _b = panel._row_colors(0)
+        from ui.theme import ACCENT
+        self.assertEqual(a.name(), QColor(ACCENT).name(), "留空应跟随主题强调色")
+
+    def test_phase_depends_on_trigger(self):
+        panel = self._panel(trigger="progress")
+        self.assertAlmostEqual(panel._color_phase(0.4), 0.4, places=3)
+        panel._anim_phase = 0.7
+        panel.set_color_config(type(panel._color_cfg)(
+            enabled=True, trigger="time", color_a="#ff6b9d"))
+        self.assertAlmostEqual(panel._color_phase(0.4), panel._anim_phase, places=3)
+
+    def test_time_mode_timer_follows_visibility(self):
+        panel = self._panel(trigger="time")
+        self.assertFalse(panel._color_timer.isActive(), "未显示时不该空转")
+        panel.show()
+        self.assertTrue(panel._color_timer.isActive(), "时间模式显示后应启动动画")
+        panel.hide()
+        self.assertFalse(panel._color_timer.isActive(), "隐藏后必须停掉动画")
+
+    def test_progress_mode_never_starts_timer(self):
+        panel = self._panel(trigger="progress")
+        panel.show()
+        self.assertFalse(panel._color_timer.isActive(), "进度模式由播放位置驱动，不需定时器")
+        panel.hide()
+
+    def test_tick_stops_when_disabled(self):
+        from app.models import LyricsColorConfig
+
+        panel = self._panel(trigger="time")
+        panel.set_color_config(LyricsColorConfig(enabled=False))
+        panel._on_color_tick()
+        self.assertFalse(panel._color_timer.isActive())
+
+    def test_bilingual_translation_shares_pair_and_scans_in_sync(self):
+        """v2.9.1/v2.9.2：译文行与原文**同色**，且逐字扫光**同步**推进。
+
+        踩坑一（v2.9.1）：译文被压 alpha 205 当次级色，浅色主题下洗成灰紫 →
+        改为一律复用原文的 pair，层级只靠字号（-3px）。
+        踩坑二（v2.9.2）：karaoke 的逐字进度按「两行字符总数」推进，英文原句长、
+        中文译文短，扫光要走完全句七成以后才轮到译文；那之前译文整行都是
+        `_dimmed(pair[0])` 的暗色单色 → 用户看到的就是「带翻译的歌词不会一起变色」。
+        现在 karaoke 走 `sync=True`：两行各按自己的长度乘同一个进度，一起扫。
+        """
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QImage, QPainter
+
+        from app.lyrics import LyricLine
+        from ui.lyrics_panel import _LyricDelegate
+
+        main_text = "Let's go, hit that pedal"      # 24 字
+        sub_text = "出发，油门踩到底"                  # 8 字
+
+        panel = self._panel()
+        panel.set_synced([LyricLine(0, main_text, sub_text)])
+        panel.set_effect("karaoke")
+        panel._current_index = 0
+        panel._progress_in_line = 0.5
+
+        calls = []
+        original = _LyricDelegate._draw_line
+
+        def spy(self_, *args, **kwargs):
+            calls.append((args[2], args[6], kwargs))   # 文本 / 已显示字数 / 其余实参
+
+        _LyricDelegate._draw_line = spy
+        try:
+            img = QImage(400, 80, QImage.Format.Format_ARGB32)
+            painter = QPainter(img)
+            panel._delegate._paint_block(
+                painter, QRect(0, 0, 400, 72), main_text, sub_text,
+                panel.list.font(), True, 0)
+            painter.end()
+        finally:
+            _LyricDelegate._draw_line = original
+
+        self.assertEqual(len(calls), 2, "原文与译文各画一次")
+        _main_text, main_typed, main_kw = calls[0]
+        _sub_text, sub_typed, sub_kw = calls[1]
+
+        self.assertIsNotNone(main_kw.get("pair"), "当前句原文必须带颜色覆盖")
+        self.assertEqual([(c.name(), c.alpha()) for c in sub_kw["pair"]],
+                         [(c.name(), c.alpha()) for c in main_kw["pair"]],
+                         "译文必须与原文同色同透明度，不能再压成次级色")
+
+        self.assertEqual(main_typed, 12)
+        self.assertEqual(sub_typed, 4, "译文要按自身长度同步扫，不能还是 0")
+        self.assertGreater(sub_kw["band"][0], main_kw["band"][0],
+                           "两行各用自己的纵向 band 做渐变轴")
+
+    def test_karaoke_sync_typewriter_staggered(self):
+        """karaoke 同步推进，typewriter 保留「原文打完再打译文」的连打节奏。"""
+        from ui.lyrics_panel import _typed_split
+
+        self.assertEqual(_typed_split(24, 8, 0.5, sync=True), (12, 4))
+        self.assertEqual(_typed_split(24, 8, 0.5), (16, 0))
+        self.assertEqual(_typed_split(24, 8, 1.0, sync=True), (24, 8))
+        self.assertEqual(_typed_split(24, 0, 0.5, sync=True), (12, 0),
+                         "单语歌词两模式必须一致")
+
+    def test_flow_uses_each_line_band(self):
+        """v2.9.1：vertical/diagonal 的渐变轴要用**本行**上下边界。
+
+        原先传整条 item 的 rect，双语时译文行只能取到渐变的下半段，退化成单色。
+        """
+        from PySide6.QtGui import QColor
+
+        from ui.lyrics_panel import _LyricDelegate
+
+        pair = (QColor("#ff0000"), QColor("#00ff00"))
+        grad = _LyricDelegate._flow((100.0, 120.0), 10.0, 200.0, pair, "vertical", 0.5)
+        self.assertAlmostEqual(grad.start().y(), 100.0)
+        self.assertAlmostEqual(grad.finalStop().y(), 120.0)
+
+        flat = _LyricDelegate._flow((100.0, 120.0), 10.0, 200.0, pair, "horizontal", 0.5)
+        self.assertAlmostEqual(flat.start().x(), 10.0)
+        self.assertAlmostEqual(flat.finalStop().x(), 210.0)
+        self.assertAlmostEqual(flat.start().y(), flat.finalStop().y(),
+                               msg="horizontal 渐变轴必须水平")
+
+
 class TestBilingualLyricsPanel(unittest.TestCase):
     """双语歌词（v2.6.10）：一句 = 原文 + 译文，两行作为一个整体显示与动效。"""
 
@@ -1042,6 +1255,164 @@ class TestIconRendering(unittest.TestCase):
         # 实测（20/24/72/96 一致）：横向占 ~77~80%、纵向 ~85~90%（斜开口导致偏窄）
         self.assertGreaterEqual(max(xs) - min(xs), round(size * 0.72), "横向没占满")
         self.assertGreaterEqual(max(ys) - min(ys), round(size * 0.80), "纵向没占满")
+
+
+class TestNowPlayingLayout(unittest.TestCase):
+    """正在播放页分栏（v2.8.1）。
+
+    需求来源：「左边显示太大，右边歌词显示不全」。两个独立成因：
+    1. 封面写死 280×280，在 639 高的窗口里占掉内容区高度的 55%；
+    2. 左列是一串普通 QLabel，长标题的 minimumSizeHint（实测 444px）把左列顶住，
+       于是歌词只剩 268px —— 而歌词是居中绘制、不折行不省略的，长句直接被裁。
+
+    这里不碰 MainWindow：`_AudioView` 自己就能建，不产生 QMediaPlayer。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def _view(self, w=796, h=507):
+        from ui.now_playing import _AudioView
+
+        view = _AudioView()
+        view.resize(w, h)
+        view.show()
+        for _ in range(3):
+            self.app.processEvents()
+        return view
+
+    def test_cover_is_capped_and_shrinks_with_view(self):
+        from ui.now_playing import _COVER_MAX
+
+        view = self._view()
+        try:
+            self.assertLessEqual(view.cover.width(), _COVER_MAX,
+                                 "封面不能超过上限，否则窄窗下又是「左边太大」")
+            self.assertEqual(view.cover.width(), view.cover.height(), "封面必须是正方形")
+        finally:
+            view.close()
+
+    def test_left_column_is_exactly_cover_width(self):
+        """左列宽度必须等于封面边长 —— 这是「歌词拿剩余宽度」的结构保证。"""
+        view = self._view()
+        try:
+            self.assertEqual(view.left_box.width(), view.cover.width())
+        finally:
+            view.close()
+
+    def test_lyrics_gets_the_rest_of_the_width(self):
+        """796 宽视图里歌词至少要拿到 480px（修复前只有 268）。"""
+        view = self._view()
+        try:
+            self.assertGreaterEqual(view.lyrics.width(), 480,
+                                    f"歌词只分到 {view.lyrics.width()}px，右侧会被裁")
+        finally:
+            view.close()
+
+    def test_long_title_does_not_push_lyrics(self):
+        """长标题只许在自己的框里折行，不许把歌词挤窄（v2.8.1 的核心回归）。"""
+        view = self._view()
+        try:
+            before = view.lyrics.width()
+            view.title.setText("唯有追赶风的方向 (Only By Chasing the Wind)")
+            view.artist.setText("知更鸟/HOYO-MiX/Chevy")
+            for _ in range(3):
+                self.app.processEvents()
+            self.assertEqual(view.lyrics.width(), before,
+                             "长标题把歌词挤窄了 —— 左列没定宽或标题没开 wordWrap")
+            self.assertEqual(view.left_box.width(), view.cover.width())
+        finally:
+            view.close()
+
+
+class TestWindowSize(unittest.TestCase):
+    """窗口初始/最小尺寸（v2.8.0）。
+
+    需求来源：「屏幕这个占比太大了」—— 原来写死 resize(1280, 800)，
+    在 1920×1080@125%（逻辑可用区 1536×864）上一开就占 83%×93%。
+    `initial_window_size` 是纯函数，喂不同屏幕就能验全部边界。
+    """
+
+    def _calc(self, w, h):
+        from PySide6.QtCore import QSize
+        from ui.main_window import initial_window_size
+        return initial_window_size(QSize(w, h))
+
+    def test_common_screen_is_about_two_thirds(self):
+        """1536×864（1080p@125%）= 社区最常见的笔记本屏，应落在 65%~75%。"""
+        size = self._calc(1536, 864)
+        self.assertEqual((size.width(), size.height()), (1044, 639))
+        self.assertLessEqual(size.width() / 1536, 0.72)
+        self.assertLessEqual(size.height() / 864, 0.78)
+
+    def test_never_smaller_than_minimum(self):
+        """小屏（1024×600）也要托底到最小尺寸，不能算出比最小还小的窗口。"""
+        from ui.main_window import WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH
+        size = self._calc(1024, 600)
+        self.assertGreaterEqual(size.width(), WINDOW_MIN_WIDTH)
+        self.assertGreaterEqual(size.height(), WINDOW_MIN_HEIGHT)
+
+    def test_never_larger_than_available(self):
+        """可用区足够大时，结果不得溢出屏幕。"""
+        for w, h in ((1536, 864), (1920, 1040), (2560, 1400), (3840, 2100)):
+            size = self._calc(w, h)
+            self.assertLessEqual(size.width(), w)
+            self.assertLessEqual(size.height(), h)
+
+    def test_big_screen_is_capped(self):
+        """4K 屏不许开成一堵墙：宽高都要被上限截住。"""
+        from ui.main_window import WINDOW_MAX_HEIGHT, WINDOW_MAX_WIDTH
+        size = self._calc(3840, 2100)
+        self.assertEqual((size.width(), size.height()),
+                         (WINDOW_MAX_WIDTH, WINDOW_MAX_HEIGHT))
+
+    def test_ratio_applies_between_floor_and_ceiling(self):
+        """中间尺寸（1920 无缩放）走比例，而不是撞上下限。"""
+        from ui.main_window import (
+            WINDOW_H_RATIO, WINDOW_MAX_HEIGHT, WINDOW_MAX_WIDTH,
+            WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_W_RATIO,
+        )
+        size = self._calc(1920, 1040)
+        self.assertEqual(size.width(), int(1920 * WINDOW_W_RATIO))
+        self.assertEqual(size.height(), int(1040 * WINDOW_H_RATIO))
+        self.assertLess(size.width(), WINDOW_MAX_WIDTH)
+        self.assertGreater(size.width(), WINDOW_MIN_WIDTH)
+        self.assertLess(size.height(), WINDOW_MAX_HEIGHT)
+        self.assertGreater(size.height(), WINDOW_MIN_HEIGHT)
+
+
+class TestCoverSide(unittest.TestCase):
+    """正在播放页封面边长（v2.8.1，纯函数）。"""
+
+    def _side(self, w, h):
+        from ui.now_playing import cover_side_for
+        return cover_side_for(w, h)
+
+    def test_typical_view_uses_ratio(self):
+        # 1044 窗口 → 视图 796×507；实测封面 206（修复前写死 280）
+        self.assertEqual(self._side(796, 507), 206)
+
+    def test_capped_on_large_view(self):
+        from ui.now_playing import _COVER_MAX
+        self.assertEqual(self._side(1400, 900), _COVER_MAX)
+
+    def test_floor_keeps_cover_readable(self):
+        from ui.now_playing import _COVER_MIN
+        self.assertGreaterEqual(self._side(300, 200), _COVER_MIN)
+
+    def test_short_window_gives_way(self):
+        """矮窗口下封面必须先让位，否则标题/艺人被挤出可视区。"""
+        from ui.now_playing import _COVER_MIN
+        for h in (400, 480, 507, 620):
+            side = self._side(1200, h)
+            self.assertLessEqual(side, max(_COVER_MIN, int(h * 0.44)),
+                                 f"h={h} 时封面 {side} 超出高度预算")
+
+    def test_monotonic_with_view_size(self):
+        """视图变大，封面不该变小（防止比例写反）。"""
+        sides = [self._side(600 + 100 * i, 500 + 60 * i) for i in range(6)]
+        self.assertEqual(sides, sorted(sides))
 
 
 if __name__ == "__main__":

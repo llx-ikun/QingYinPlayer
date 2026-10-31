@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -67,11 +68,17 @@ class PlayerBar(QWidget):
         self._duration_ms = 0
 
         root = QHBoxLayout(self)
-        # 左侧 312px 缩进：给左下角浮动工具条留位（QQ 音乐同款布局；
-        # 浮动条「主题切换 + 图标文字按钮」实测约 294px，结束于 x≈310）。
+        # 左侧 248px 缩进：给左下角浮动工具条留位（QQ 音乐同款布局）。
+        # 浮动条占 x=12..236（12 + 224），缩进 248 留 12px 呼吸；而 248 正好
+        # 等于侧栏宽度 —— 封面左缘因此与列表左边界对齐，视觉上是同一条竖线。
         # 注意：缩进不能过大——否则播放栏最小宽度会超过窗口，信息列被挤空、
         # 布局在约束边界反复重算导致窗口抖动（曾把 330 撑到 1340px > 1280）。
-        root.setContentsMargins(312, 8, 14, 8)
+        #
+        # v2.8.0：312 → 248。312 是 v2.6.1 之前「竖排两列」浮动条（宽约 294，
+        # 右缘 x≈310）留下的数，单行化之后一直没人回头改，等于在播放栏左侧
+        # 白扔 76px。这段死空白直接顶高了 PlayerBar 最小宽度（实测 1064 含缩进），
+        # 进而把窗口最小宽锁死在 1100 —— 用户想把窗口拉窄一点都拉不动。
+        root.setContentsMargins(248, 8, 14, 8)
         root.setSpacing(10)
 
         # ---- 左：封面 + 信息 + 爱心/更多 ----
@@ -158,7 +165,15 @@ class PlayerBar(QWidget):
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setObjectName("SeekSlider")
-        self.seek_slider.setFixedWidth(200)
+        # v2.8.0：200 固定宽 → 120~200 弹性。窗口一窄，播放栏横向就没有任何余量，
+        # 而「进度条能不能看全」是可容忍的，「歌名被挤成一个字」不是 —— 让进度条
+        # 先让位。实测 1044 宽时：固定 200 → 标题列只剩 44px（「周杰伦…」）；
+        # 弹性后进度条收到 160，标题列回到 84px。窗口 ≥1105 时进度条仍是满宽 200，
+        # 大尺寸下的观感与改动前完全一致。
+        self.seek_slider.setMinimumWidth(120)
+        self.seek_slider.setMaximumWidth(200)
+        self.seek_slider.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                      QSizePolicy.Policy.Fixed)
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setTracking(False)  # 拖动中不触发 seek，release 时才跳转
         self.seek_slider.sliderPressed.connect(self._on_seek_pressed)

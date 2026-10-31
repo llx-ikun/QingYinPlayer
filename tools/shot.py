@@ -145,7 +145,8 @@ def _play_first_video(window) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="./shots")
-    parser.add_argument("--theme", default=None, choices=["columbina", "light"])
+    parser.add_argument("--theme", default=None,
+                        choices=["columbina", "light"])
     parser.add_argument("--accent", default="", help="自定义强调色，如 #ff7a45（默认跟随主题）")
     parser.add_argument("--font-scale", type=float, default=1.0, dest="font_scale")
     parser.add_argument("--tag", default="", help="文件名后缀，便于同主题多套外观对比")
@@ -157,6 +158,9 @@ def main() -> int:
     parser.add_argument("--state", default=None,
                         choices=["library", "playing", "lyrics", "queue", "settings", "empty",
                                  "maximized", "video", "video_fullscreen"])
+    parser.add_argument("--size", default="",
+                        help="窗口尺寸 WxH（如 1280x800）。留空 = 用应用自己的初始尺寸，"
+                             "v2.8.0 起它按屏幕可用区算，截图才代表用户真实看到的画面")
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -181,7 +185,9 @@ def main() -> int:
                       accent=args.accent, font_scale=args.font_scale,
                       bg_spec=args.bg)
         window = MainWindow()
-        window.resize(1280, 800)
+        if args.size:
+            _w, _h = (int(v) for v in args.size.lower().split("x", 1))
+            window.resize(_w, _h)
         window.show()
         # 走应用自己的外观入口：它会把「有没有背景 => 面板要不要半透明」一起算上。
         # 直接调 set_appearance 会漏掉 scrim，导致截图里背景被面板完全盖住。

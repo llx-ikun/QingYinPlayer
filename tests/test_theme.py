@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""主题调色板单测：浅色（薰衣草）主题的色相/对比度约束（纯逻辑，不依赖 Qt）。
+"""主题调色板单测：两套配色（深色「午夜」/ 浅色「晨雾」）+ 内置背景预设（纯逻辑）。
 
-背景：浅色主题原本是 QQ 绿（#31c27c），与深色主题的蓝紫强调色、应用图标的
-蓝紫渐变都不一致，用户要求改为冷调蓝/薰衣草。这里把「浅色 = 冷色系」固化成
-断言，避免以后被随手改回绿色或换成低对比色。
+v2.8.3 把主题从四套改成两套：主题只管配色，内置背景图（星空/云海）拆成「背景」
+页的预设，跟主题不再联动。这里把「浅色=暖色系、深色=冷色系」固化成断言，避免
+以后被随手改回绿色或换成低对比色。
 """
 import os
 import sys
@@ -47,21 +47,22 @@ class TestPaletteFormat(unittest.TestCase):
                 self.assertRegex(value, r"^#[0-9a-f]{6}$", f"{theme.name}.{field}={value}")
 
 
-class TestLightIsBlue(unittest.TestCase):
-    """浅色主题必须是浅冷色（薰衣草蓝，不能回到 QQ 绿）。"""
+class TestThemeHue(unittest.TestCase):
+    """v2.8.3 重做配色：浅色改暖（晨雾米白 + 陶土橙），深色偏冷（午夜墨蓝 + 长春花紫）。"""
 
-    def test_accent_is_blue_dominant(self):
-        for theme in (LIGHT, COLUMBINA):
-            r, g, b = _rgb(theme.ACCENT)
-            self.assertGreater(b, r, f"{theme.name} 强调色应偏蓝：{theme.ACCENT}")
-            self.assertGreater(b, g, f"{theme.name} 强调色应偏蓝：{theme.ACCENT}")
+    def test_light_is_warm_neutral(self):
+        """浅色底色带一点暖（米白），红通道不低于蓝，不再是冷调蓝灰。"""
+        for field in ("BG", "SURFACE", "SURFACE_HOVER", "SURFACE_ACTIVE", "BORDER"):
+            r, _g, b = _rgb(getattr(LIGHT, field))
+            self.assertGreaterEqual(r, b, f"LIGHT.{field} 红通道应不低于蓝：{getattr(LIGHT, field)}")
 
-    def test_light_surfaces_are_blue_tinted(self):
-        """底色带一点蓝，整体呈浅蓝灰而非中性灰/暖灰。"""
-        for field in ("BG", "SURFACE_HOVER", "SURFACE_ACTIVE", "BORDER"):
-            r, g, b = _rgb(getattr(LIGHT, field))
-            self.assertGreaterEqual(b, r, f"LIGHT.{field} 蓝通道应不低于红：{getattr(LIGHT, field)}")
-            self.assertGreaterEqual(b, g, f"LIGHT.{field} 蓝通道应不低于绿：{getattr(LIGHT, field)}")
+    def test_light_accent_is_warm(self):
+        r, _g, b = _rgb(LIGHT.ACCENT)
+        self.assertGreater(r, b, f"浅色强调色应偏暖（陶土橙）：{LIGHT.ACCENT}")
+
+    def test_dark_accent_is_cool(self):
+        r, _g, b = _rgb(COLUMBINA.ACCENT)
+        self.assertGreater(b, r, f"深色强调色应偏冷（长春花紫）：{COLUMBINA.ACCENT}")
 
     def test_legacy_green_is_gone(self):
         """旧 QQ 绿（#31c27c 及其深浅变体）不得残留在样式表里。"""
@@ -76,6 +77,10 @@ class TestContrast(unittest.TestCase):
     def test_light_is_actually_light(self):
         self.assertGreater(_luminance(LIGHT.BG), 0.7)
         self.assertLess(_luminance(LIGHT.TEXT), 0.2)
+
+    def test_dark_is_actually_dark(self):
+        self.assertLess(_luminance(COLUMBINA.BG), 0.2)
+        self.assertGreater(_luminance(COLUMBINA.TEXT), 0.7)
 
     def test_body_text_contrast(self):
         for theme in THEMES.values():
@@ -196,7 +201,7 @@ class TestFontScale(unittest.TestCase):
 
 
 class TestThemeCycle(unittest.TestCase):
-    """主题是**两态循环**（深色 ↔ 浅色），不是深浅二态也不是三态。
+    """主题是**两态循环**（深色 ↔ 浅色），不是四态。
 
     这里钉住三件容易改坏的事：默认主题、循环闭环、每个主题都有图标与中文名。
     改漏任何一个，主题钮都会出现「点了没反应」或「图标与目标主题对不上」。
@@ -222,7 +227,7 @@ class TestThemeCycle(unittest.TestCase):
         self.assertEqual(set(THEME_LABEL), set(THEMES))
 
     def test_theme_icons_are_moon_and_sun(self):
-        """主题钮画的是**下一个目标**：浅色→月亮（去深色夜空）、深色→太阳（去浅色）。
+        """主题钮画的是**下一个目标**：浅色→月亮（去深色）、深色→太阳（去浅色）。
 
         v2.5.1 之前深色目标用的是羽毛，16px 下糊成一团认不出来，用户圈图要求
         「画成月亮」。这两个图标也是彼此最好区分的组合（月牙 vs 圆点+细射线）。
@@ -235,8 +240,80 @@ class TestThemeCycle(unittest.TestCase):
         """渐变底只给深色主题；浅色主题必须仍是纯色（否则 QSS 里多出无谓渐变）。"""
         from ui.theme import THEMES, build_stylesheet
         self.assertIn("qlineargradient", build_stylesheet(THEMES["columbina"]))
-        for name in ("light",):
-            self.assertNotIn("qlineargradient", build_stylesheet(THEMES[name]), name)
+        self.assertNotIn("qlineargradient", build_stylesheet(THEMES["light"]))
+
+    def test_order_is_dark_then_light(self):
+        """两态循环顺序：深色 → 浅色。"""
+        from ui.theme import THEME_ORDER
+        self.assertEqual(THEME_ORDER, ("columbina", "light"))
+
+
+class TestBuiltinBackgroundPresets(unittest.TestCase):
+    """内置背景预设（v2.8.3）：星空 / 云海两张图，从主题里拆出来变成背景。
+
+    钉住三件事：① 预设不再是主题（主题只有配色两套）；② 预设能翻成 image 配置、
+    图真的存在且能解码 —— 路径写错在开发态表现正常，打包后却是一块空底；③ 深色
+    预设的暗化明显、浅色预设只轻度暗化。
+    """
+
+    def test_presets_registered(self):
+        from ui.theme import BACKGROUND_PRESETS, PRESET_BY_ID
+        self.assertEqual({p.id for p in BACKGROUND_PRESETS}, {"starry", "clouds"})
+        self.assertEqual(set(PRESET_BY_ID), {"starry", "clouds"})
+
+    def test_theme_has_no_builtin_image_field(self):
+        """主题已不再自带背景图：Theme 不该还有 BG_IMAGE 字段。"""
+        self.assertFalse(hasattr(COLUMBINA, "BG_IMAGE"))
+        self.assertFalse(hasattr(LIGHT, "BG_IMAGE"))
+
+    def test_preset_config_is_image(self):
+        from ui.theme import background_preset_config
+        for pid in ("starry", "clouds"):
+            cfg = background_preset_config(pid)
+            self.assertIsNotNone(cfg, pid)
+            self.assertEqual(cfg.type, "image")
+            self.assertEqual(cfg.preset, pid)
+
+    def test_unknown_preset_returns_none(self):
+        from ui.theme import background_preset_config, preset_image_path
+        self.assertIsNone(background_preset_config("不存在的预设"))
+        self.assertIsNone(preset_image_path("不存在的预设"))
+
+    def test_preset_image_exists(self):
+        import os
+
+        from ui.theme import preset_image_path
+        for pid in ("starry", "clouds"):
+            path = preset_image_path(pid)
+            self.assertIsNotNone(path, pid)
+            self.assertTrue(os.path.isfile(path), f"{pid} 的背景图不存在: {path}")
+            self.assertGreater(os.path.getsize(path), 20_000, f"{pid} 的图太小，可能是占位")
+
+    def test_image_is_decodable(self):
+        """图能真的解码成像素 —— 只判断文件存在会放过「截断的 jpg」这种坏素材。"""
+        from PySide6.QtGui import QImage
+        from ui.theme import preset_image_path
+        for pid in ("starry", "clouds"):
+            img = QImage(preset_image_path(pid))
+            self.assertFalse(img.isNull(), f"{pid} 的背景图解不出来")
+            self.assertGreaterEqual(img.width(), 1280, f"{pid} 的背景图太窄，铺满会糊")
+
+    def test_dark_preset_is_heavily_dimmed(self):
+        """星空的图右上有亮月牙，正压着列表的时长/大小列 → 暗化必须明显。
+
+        实测：月牙区域 p90 亮度 0.347，TEXT_DIM 亮度 0.367 —— 两者几乎一样亮，
+        暗化 0.3 时对比只有 0.84（字比背景还暗，等于消失）。0.5 是能让月亮主体回到
+        3:1 以上的最小值。云海用近白图、深色字天然够读，只需一点暗化把侧栏/播放栏
+        从图里剥出来。两者调成同一个值说明没量过实际可读性。
+        """
+        from ui.theme import background_preset_config
+        dark = background_preset_config("starry")
+        light = background_preset_config("clouds")
+        self.assertGreaterEqual(dark.dim, 0.40)
+        self.assertLessEqual(light.dim, 0.20)
+        self.assertGreater(dark.dim, light.dim)
+        self.assertLess(dark.opacity, 1.0, "星空要掺一档底色削平高光")
+        self.assertEqual(dark.blur, 0, "不靠模糊遮丑：糊掉的月亮就不像月亮了")
 
 
 if __name__ == "__main__":

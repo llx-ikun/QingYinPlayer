@@ -12,7 +12,8 @@ v2.6.4 起引入「歌词播放动效」（单选）：
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, Signal
+from PySide6.QtCore import (QEasingCurve, QPointF, QPropertyAnimation, Qt, QTimer,
+                            Signal)
 from PySide6.QtGui import (QAction, QBrush, QColor, QFont, QFontMetrics,
                            QLinearGradient, QPainter, QPen)
 from PySide6.QtWidgets import (QLabel, QListWidget, QListWidgetItem, QMenu,
@@ -87,14 +88,27 @@ def _bump_font(font: QFont, delta: int) -> QFont:
     return font
 
 
-def _typed_split(main_len: int, sub_len: int, progress: float) -> tuple[int, int]:
+def _typed_split(main_len: int, sub_len: int, progress: float,
+                 sync: bool = False) -> tuple[int, int]:
     """逐字推进时，原文 / 译文各自已显示的字数。
 
-    进度按**两行字符总数**算：原文唱完自然轮到译文，两行连着打出而不是各打各的。
-    只数主行的话，译文会永远整行一次性蹦出来，和原文的节奏脱节。
+    两种口径，按动效类型选：
+
+    - `sync=False`（typewriter，v2.6.10 起的口径）：进度按**两行字符总数**算，
+      原文打完自然轮到译文，两行连着打出而不是各打各的。只数主行的话，译文会
+      永远整行一次性蹦出来，和原文的节奏脱节。
+    - `sync=True`（karaoke，v2.9.2）：两行**各按自己的长度**乘同一个进度，也就是
+      同一时刻亮起的比例一样 —— 译文跟着主歌词一起扫。
+      为什么 karaoke 必须这样：扫光是一种「唱到哪儿」的指示，译文是同一句的另一种
+      文字，理应同步推进。走合并总数的话，英文原句长、中文译文短，逐字进度要走完
+      全句七成以后才轮到译文，那段时间译文整行都是「未唱」的暗色 —— 用户看到的就是
+      「带翻译的歌词不会一起变色」。
     """
     if progress <= 0:
         return 0, 0
+    if sync:
+        return (min(round(main_len * progress), main_len),
+                min(round(sub_len * progress), sub_len))
     total = main_len + sub_len
     typed = round(total * progress)
     main_typed = min(typed, main_len)
@@ -110,6 +124,27 @@ def _uncovered_color() -> QColor:
     color = _normal_color()
     color.setAlpha(90)
     return color
+
+
+# v2.9.0 时间模式动画帧间隔（≈30fps）。每帧只重绘当前行，开销可忽略。
+_ANIM_INTERVAL = 33
+
+
+def _brighten(color: QColor, factor: int = 140) -> QColor:
+    """派生渐变第二种颜色（提亮版）：用户没配 color_b 时用它。"""
+    return QColor(color).lighter(factor)
+
+
+def _dimmed(color: QColor) -> QColor:
+    """颜色覆盖版的「未唱到的字」：同色系压到半透明，沉进背景。
+
+    v2.9.2：alpha 90 → 110。90 时未唱段几乎看不见颜色，只像一团灰；
+    抬到 110 后仍明显暗于已唱段，但底色还认得出是用户配的那个色系 ——
+    双语歌词里译文行常常整行都处在未唱状态，太暗就会被当成「没变色」。
+    """
+    c = QColor(color)
+    c.setAlpha(110)
+    return c
 
 
 class _LyricDelegate(QStyledItemDelegate):
@@ -154,9 +189,10 @@ class _LyricDelegate(QStyledItemDelegate):
         sub = index.data(_TRANSLATION_ROLE) or ""
         panel = self._panel
         is_current = panel._mode == "synced" and index.row() == panel._current_index
-        self._paint_block(painter, option.rect, text, sub, option.font, is_current)
+        self._paint_block(painter, option.rect, text, sub, option.font, is_current,
+                          index.row())
 
-    def _paint_block(self, painter, rect, text, sub, base_font, is_current):
+    def _paint_block(self, painter, rect, text, sub, base_font, is_current, row):
         """画「一句」：原文一行 +（可选）译文一行，两行作为一个整体垂直居中。"""
         panel = self._panel
         effect = panel._effect if is_current else "none"
@@ -183,63 +219,141 @@ class _LyricDelegate(QStyledItemDelegate):
 
         top = rect.y() + (rect.height() - (main_h + sub_h)) / 2.0
 
-        # 逐字进度按「两行字符总数」推进：原文唱完自然轮到译文
+        # 逐字进度：typewriter 沿「原文打完再打译文」的连打节奏；karaoke 两行同步
+        # 推进（v2.9.2），译文跟着主歌词一起扫。
         main_typed, sub_typed = len(text), len(sub)
         if is_current and effect in ("typewriter", "karaoke"):
-            main_typed, sub_typed = _typed_split(len(text), len(sub), progress)
+            main_typed, sub_typed = _typed_split(len(text), len(sub), progress,
+                                                 sync=(effect == "karaoke"))
+
+        # v2.9.0：颜色覆盖只作用于当前句；未启用时 pair=None，完全走原有配色分支。
+        # v2.9.1：译文行与原文**同色**（不再压 alpha 205）。原先那层「次级色」在
+        # 浅色主题上会把译文洗成一片灰紫，用户观感就是「译文没跟着变色」；
+        # 层级改由字号（-3px）承担，颜色保持一致才有「整句一起流动」的效果。
+        cfg = panel._active_color_cfg()
+        pair = None
+        direction = "horizontal"
+        transition = 0.08
+        phase = 0.0
+        if cfg is not None and is_current:
+            pair = panel._row_colors(row)
+            direction = cfg.direction
+            transition = cfg.transition
+            phase = panel._color_phase(progress)
 
         main_sung = QColor(ACCENT) if is_current else _normal_color()
         self._draw_line(painter, rect, text, main_font, main_metrics,
                         top + main_metrics.ascent(), main_typed,
-                        main_sung, _uncovered_color(), is_current, effect)
+                        main_sung, _uncovered_color(), is_current, effect,
+                        pair=pair, direction=direction, transition=transition,
+                        phase=phase, band=(top, top + main_h))
         if sub:
+            # v2.9.2：译文行**参与**逐字扫光，进度与原文同步（见 `_typed_split`）。
+            # 两行各用自己的 band 做渐变轴，颜色/相位/软边完全一致，视觉上就是
+            # 「同一句在两种文字上一起扫」。
             self._draw_line(painter, rect, sub, sub_font, sub_metrics,
                             top + main_h + sub_metrics.ascent(), sub_typed,
                             _translation_color(is_current), _translation_color(False),
-                            is_current, effect)
+                            is_current, effect,
+                            pair=pair, direction=direction,
+                            transition=transition, phase=phase,
+                            band=(top + main_h, top + main_h + sub_h))
 
     def _draw_line(self, painter, rect, text, font, metrics, baseline, typed,
-                   sung_color, unsung_color, is_current, effect):
-        """水平居中画一行；当前行的逐字效果按 `typed`（已显示字数）分段上色。"""
+                   sung_color, unsung_color, is_current, effect,
+                   pair=None, direction="horizontal", transition=0.08, phase=0.0,
+                   band=None):
+        """水平居中画一行；当前行的逐字效果按 `typed`（已显示字数）分段上色。
+
+        v2.8.1：超宽时先按行宽省略（右侧 ElideRight），避免被视口硬裁。
+        v2.9.0：`pair=(a,b)` 非空时用双色「流动」渐变替代单色（颜色覆盖）；
+        `direction` 决定渐变轴、`transition` 决定已唱/未唱交界软宽、`phase` 让色带移动。
+        v2.9.1：`band=(top,bottom)` 是**这一行自己**的纵向范围（原文行 / 译文行各一份）。
+        原先传整条 item 的 rect，vertical/diagonal 渐变会跨两行取色，译文只能取到
+        下半段、退化成单色。
+        """
         if not text:
             return
         painter.setFont(font)
+        # 留 12px 呼吸：与当前行高亮底的 10px 内缩对齐，字不至于贴着底色边缘
+        avail = rect.width() - 12
+        if avail > 0 and metrics.horizontalAdvance(text) > avail:
+            text = metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(avail))
         total_w = metrics.horizontalAdvance(text)
         x = int(rect.x() + (rect.width() - total_w) / 2.0)
         y = int(baseline)
 
+        use_grad = pair is not None and is_current
+        if band is None:
+            band = (float(rect.top()), float(rect.bottom()))
+
         if not is_current or effect in ("none", "zoom"):
-            painter.setPen(sung_color)
+            if use_grad:
+                painter.setPen(QPen(QBrush(self._flow(band, x, total_w, pair,
+                                                      direction, phase)), 1))
+            else:
+                painter.setPen(sung_color)
             painter.drawText(x, y, text)
             return
 
         if effect == "typewriter":
             head = text[:typed]
             if head:
-                painter.setPen(sung_color)
+                if use_grad:
+                    painter.setPen(QPen(QBrush(self._flow(band, x, total_w, pair,
+                                                          direction, phase)), 1))
+                else:
+                    painter.setPen(sung_color)
                 painter.drawText(x, y, head)
             return
 
-        # karaoke：整行一次画出，用一小段水平渐变在「已唱 / 未唱」交界处过渡，
-        # 避免原来硬切两截的突兀；顺带从两次 drawText 变成一次。
+        # karaoke：整行一次画出，用一段水平渐变在「已唱 / 未唱」交界处过渡。
+        # 颜色覆盖启用时，已唱段用 a→b 双色，未唱段用同色系半透明。
+        unsung = _dimmed(pair[0]) if use_grad else unsung_color
         if typed <= 0:
-            painter.setPen(unsung_color)
+            painter.setPen(unsung)
             painter.drawText(x, y, text)
             return
         if typed >= len(text):
-            painter.setPen(sung_color)
+            if use_grad:
+                painter.setPen(QPen(QBrush(self._flow(band, x, total_w, pair,
+                                                      direction, phase)), 1))
+            else:
+                painter.setPen(sung_color)
             painter.drawText(x, y, text)
             return
         head_w = metrics.horizontalAdvance(text[:typed])
         span = max(total_w, 1)
-        blend = 6.0
+        blend = max(1.0, transition * total_w)
         grad = QLinearGradient(float(x), 0.0, float(x + total_w), 0.0)
-        grad.setColorAt(0.0, sung_color)
-        grad.setColorAt(max(0.0, (head_w - blend) / span), sung_color)
-        grad.setColorAt(min(1.0, (head_w + blend) / span), unsung_color)
-        grad.setColorAt(1.0, unsung_color)
+        grad.setColorAt(0.0, pair[0] if use_grad else sung_color)
+        grad.setColorAt(max(0.0, (head_w - blend) / span),
+                        pair[1] if use_grad else sung_color)
+        grad.setColorAt(min(1.0, (head_w + blend) / span), unsung)
+        grad.setColorAt(1.0, unsung)
         painter.setPen(QPen(QBrush(grad), 1))
         painter.drawText(x, y, text)
+
+    @staticmethod
+    def _flow(band, x, total_w, pair, direction, phase):
+        """双色「流动」线性渐变：两端 = pair[0]，中间一条 pair[1] 色带随 phase 移动。
+
+        v2.9.1：渐变轴改用 `band`（本行自己的上下边界），不再借整条 item 的 rect。
+        """
+        a, b = pair
+        top, bottom = band
+        if direction == "vertical":
+            start, end = QPointF(x, top), QPointF(x, bottom)
+        elif direction == "diagonal":
+            start, end = QPointF(x, top), QPointF(x + total_w, bottom)
+        else:
+            start, end = QPointF(x, 0.0), QPointF(x + total_w, 0.0)
+        grad = QLinearGradient(start, end)
+        p = min(max(phase, 0.02), 0.98)
+        grad.setColorAt(0.0, a)
+        grad.setColorAt(p, b)
+        grad.setColorAt(1.0, a)
+        return grad
 
 
 class LyricsPanel(QWidget):
@@ -258,6 +372,10 @@ class LyricsPanel(QWidget):
     shift_lyrics_requested = Signal(int)
     # 右键「逐句打轴」：播放中按空格给每一句手动盖时间戳（v2.7.4）
     tap_requested = Signal()
+    # v2.9.0 逐句颜色：请求给这一句取色 / 清除这一句 / 清除本曲（由 MainWindow 落地）
+    line_color_requested = Signal(int)        # 行下标
+    line_color_clear_requested = Signal(int)  # 行下标
+    song_colors_clear_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -287,6 +405,10 @@ class LyricsPanel(QWidget):
         self.empty_label = QLabel(EMPTY_HINT)
         self.empty_label.setObjectName("Dim")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # v2.7.7：联网匹配的进度文案比原来的空状态提示长得多
+        # （"联网匹配 3/3 · LRCLIB、网易云、QQ音乐" 实测 242px，可用宽仅 276px），
+        # 而字号最大能放大到 1.30 倍 —— 不开启自动换行就会被直接裁掉。
+        self.empty_label.setWordWrap(True)
         root.addWidget(self.empty_label)
 
         # 「没有歌词」时占满整块的是 empty_label，列表是隐藏的，所以两个都要挂菜单
@@ -301,6 +423,13 @@ class LyricsPanel(QWidget):
         self._progress_in_line = 0.0
         self._effect = "none"
         self._anim: QPropertyAnimation | None = None
+        # v2.9.0 颜色覆盖：配置（None/未启用=旧路径）、逐句色（time_ms->hex）、动画相位
+        self._color_cfg = None
+        self._line_color_map: dict[int, str] = {}
+        self._anim_phase = 0.0
+        self._color_timer = QTimer(self)
+        self._color_timer.setInterval(_ANIM_INTERVAL)
+        self._color_timer.timeout.connect(self._on_color_tick)
         # 打轴模式（v2.7.4）：此时不跟随播放位置滚动，高亮与滚动全由外部驱动
         self._tapping = False
         self.set_empty()
@@ -330,6 +459,82 @@ class LyricsPanel(QWidget):
         if effect != self._effect:
             self._effect = effect
             self.list.viewport().update()
+
+    def set_color_config(self, cfg) -> None:
+        """下发歌词颜色覆盖配置（v2.9.0）。传 None/未启用 = 回到旧配色。"""
+        self._color_cfg = cfg
+        self._anim_phase = 0.0
+        self._sync_color_timer()
+        self.list.viewport().update()
+
+    def set_line_colors(self, mapping) -> None:
+        """下发逐句颜色：`{time_ms: '#rrggbb'}`（键与歌词行时间戳对应）。"""
+        self._line_color_map = dict(mapping or {})
+        self.list.viewport().update()
+
+    def line_time(self, row: int) -> int | None:
+        """第 row 句的时间戳（ms）；越界/纯文本返回 None。供主窗口按句存颜色用。"""
+        if 0 <= row < len(self._lines):
+            return self._lines[row].time_ms
+        return None
+
+    def _active_color_cfg(self):
+        """返回启用中的颜色配置；None 表示走旧逻辑（这是唯一的开关判断）。"""
+        cfg = self._color_cfg
+        if cfg is not None and getattr(cfg, "enabled", False):
+            return cfg
+        return None
+
+    def _row_colors(self, row: int) -> tuple[QColor, QColor]:
+        """当前句的 (a, b) 颜色：逐句色 > 全局色 > 主题强调色。"""
+        cfg = self._color_cfg
+        custom = None
+        if 0 <= row < len(self._lines):
+            custom = self._line_color_map.get(self._lines[row].time_ms)
+        if custom:
+            a = QColor(custom)
+            b = _brighten(a) if cfg.gradient else QColor(a)
+            return a, b
+        a = QColor(cfg.color_a) if cfg.color_a else QColor(ACCENT)
+        b = QColor(cfg.color_b) if cfg.color_b else _brighten(a)
+        if not cfg.gradient:
+            b = QColor(a)
+        return a, b
+
+    def _color_phase(self, progress: float) -> float:
+        """进度模式用行内进度当相位；时间模式用连续动画相位。"""
+        cfg = self._color_cfg
+        if cfg is not None and cfg.trigger == "time":
+            return self._anim_phase
+        return max(0.0, min(1.0, progress))
+
+    def _sync_color_timer(self) -> None:
+        """时间模式才需要动画定时器；隐藏 / 无同步歌词 / 未启用都停掉。"""
+        cfg = self._active_color_cfg()
+        need = (cfg is not None and cfg.trigger == "time"
+                and self._mode == "synced" and self.isVisible())
+        if need and not self._color_timer.isActive():
+            self._color_timer.start()
+        elif not need and self._color_timer.isActive():
+            self._color_timer.stop()
+
+    def _on_color_tick(self) -> None:
+        cfg = self._active_color_cfg()
+        if cfg is None:
+            self._color_timer.stop()
+            return
+        self._anim_phase = (self._anim_phase
+                            + float(cfg.speed) * _ANIM_INTERVAL / 1000.0) % 1.0
+        if 0 <= self._current_index < self.list.count():
+            self._update_row(self._current_index)   # 只刷当前行，绝不整块重绘
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        self._sync_color_timer()
+
+    def hideEvent(self, event):  # noqa: N802
+        super().hideEvent(event)
+        self._sync_color_timer()
 
     def set_synced(self, lines: list[LyricLine]) -> None:
         self._mode = "synced" if lines else "empty"
@@ -395,9 +600,13 @@ class LyricsPanel(QWidget):
         index = lyric_index_at(self._lines, position_ms)
         progress = self._line_progress(index, position_ms)
         if index == self._current_index:
-            # 行不变：只有逐字效果需要按进度重绘——只重绘当前这一行，别整块刷
-            if (self._effect in ("typewriter", "karaoke")
-                    and abs(progress - self._progress_in_line) > 0.01):
+            # 行不变：只有逐字效果 / 进度驱动的颜色扫光需要按进度重绘，只刷当前行
+            needs_progress = (
+                self._effect in ("typewriter", "karaoke")
+                or (self._active_color_cfg() is not None
+                    and self._color_cfg.trigger == "progress")
+            )
+            if needs_progress and abs(progress - self._progress_in_line) > 0.01:
                 self._progress_in_line = progress
                 self._update_row(index)
             return
@@ -436,6 +645,7 @@ class LyricsPanel(QWidget):
         has = self._mode != "empty"
         self.list.setVisible(has)
         self.empty_label.setVisible(not has)
+        self._sync_color_timer()
 
     def _scroll_target(self, item: QListWidgetItem) -> int | None:
         """算出「让这一项垂直居中」需要把滚动条挪到哪个值。
@@ -478,7 +688,7 @@ class LyricsPanel(QWidget):
         if isinstance(time_ms, int) and time_ms >= 0:
             self.seek_requested.emit(time_ms)
 
-    def _build_menu(self) -> QMenu:
+    def _build_menu(self, row: int = -1) -> QMenu:
         """构建右键菜单（不 exec），便于单测直接检查文案与可用状态。"""
         menu = QMenu(self)
         import_one = QAction("导入歌词文件…", menu)
@@ -507,6 +717,19 @@ class LyricsPanel(QWidget):
         tap.triggered.connect(self.tap_requested.emit)
         tap.setEnabled(self._mode in ("plain", "synced"))
         menu.addAction(tap)
+        # v2.9.0 逐句颜色：只对同步歌词的具体某一句生效
+        color_one = QAction("这一句设置颜色…", menu)
+        color_one.triggered.connect(lambda: self.line_color_requested.emit(row))
+        menu.addAction(color_one)
+        color_clear = QAction("清除这一句颜色", menu)
+        color_clear.triggered.connect(lambda: self.line_color_clear_requested.emit(row))
+        menu.addAction(color_clear)
+        color_song = QAction("清除本曲歌词颜色", menu)
+        color_song.triggered.connect(self.song_colors_clear_requested.emit)
+        menu.addAction(color_song)
+        for action in (color_one, color_clear):
+            action.setEnabled(self._mode == "synced" and row >= 0)
+        color_song.setEnabled(self._mode == "synced")
         menu.addSeparator()
         earlier = QAction("整体提前 0.5 秒", menu)
         earlier.setStatusTip("对齐后整条时间轴偏晚／偏早时微调（写回 .lrc）")
@@ -521,7 +744,12 @@ class LyricsPanel(QWidget):
         return menu
 
     def _show_menu(self, pos) -> None:
-        menu = self._build_menu()
         sender = self.sender()
+        row = -1
+        if sender is self.list:
+            item = self.list.itemAt(pos)
+            if item is not None:
+                row = self.list.row(item)
+        menu = self._build_menu(row)
         anchor = sender.mapToGlobal(pos) if isinstance(sender, QWidget) else pos
         menu.exec(anchor)

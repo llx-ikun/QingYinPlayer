@@ -19,6 +19,8 @@ import sys
 MODULES = [
     "tests.test_covers_scanner",
     "tests.test_lyrics",
+    # v2.9.0 逐曲歌词颜色 sidecar：round-trip / 坏数据容错 / 清空删文件（纯逻辑）
+    "tests.test_lyrics_colors",
     "tests.test_metadata",
     "tests.test_store",
     # v2.1.9 受管理曲库：导入即复制 / 去重 / 同名冲突 / 扫描器落库
@@ -56,6 +58,10 @@ MODULES = [
     "tests.test_e2e.TestE2ELyricsTap",
     # v2.2 外观自定义（强调色 / 字号）：同样单独成进程
     "tests.test_e2e.TestE2EAppearance",
+    # v2.7.8 主题自带背景图：同样是「每项建一个 MainWindow」，单独成进程
+    "tests.test_e2e.TestE2EThemeBackground",
+    # v2.9.0 歌词颜色覆盖：同样是「每项建一个 MainWindow」，单独成进程
+    "tests.test_e2e.TestE2ELyricsColor",
     # v2.1 视频：后端纯逻辑单测
     "tests.test_video",
     # 应用图标规范回归（PNG-in-ICO 的 planes/bitcount 必须为 0）

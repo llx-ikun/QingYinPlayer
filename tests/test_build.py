@@ -108,5 +108,56 @@ class TestVersionSingleSource(unittest.TestCase):
         self.assertNotRegex(source, r"(?m)^APP_VERSION\s*=")
 
 
+class TestBundledAssets(unittest.TestCase):
+    """v2.8.3：内置背景预设图（星空/云海）必须真的打进包里。
+
+    漏了 `--add-data` 的表现极具欺骗性：开发态（仓库根能读到文件）一切正常，
+    打包后才是一块空底，而且不报错 —— 只有跑 exe 的人会发现「选预设没图」。
+    """
+
+    def test_theme_images_are_bundled(self) -> None:
+        args = build.data_args()
+        joined = " ".join(args)
+        for rel in ("theme_dark.jpg", "theme_light.jpg"):
+            self.assertIn(rel, joined, f"构建参数里缺 {rel}，打包后内置背景会是一块空底")
+        # 每个 --add-data 都得配一个值，且目标目录是包内 assets/
+        self.assertEqual(args.count("--add-data") * 2, len(args))
+        self.assertTrue(all(args[i + 1].endswith(f"{os.pathsep}assets")
+                            for i, a in enumerate(args) if a == "--add-data"))
+
+    def test_bundled_paths_match_preset_definition(self) -> None:
+        """build.py 的资源清单与 ui.theme 里的内置背景预设相对路径逐字对应。"""
+        from ui.theme import BACKGROUND_PRESETS
+
+        declared = {p.image for p in BACKGROUND_PRESETS}
+        self.assertEqual(declared, set(build.BUNDLED_ASSETS))
+
+    def test_icon_is_bundled(self) -> None:
+        self.assertIn(build.ICON_PATH, " ".join(build.data_args()))
+
+
+class TestResourcePath(unittest.TestCase):
+    """`app.paths.resource_path`：打包后必须指向 `_MEIPASS`，开发态指向仓库根。
+
+    这是「主题2 打包后是一块空底」的根因所在 —— 用 `exe_dir()` 取资源在 onefile
+    下拿到的是 `dist/`（真 exe 旁边），而资源被解压到临时目录，只有 `_MEIPASS`
+    指向那里。所以这两条不能省。
+    """
+
+    def test_prefers_meipass_when_frozen(self) -> None:
+        from unittest import mock
+
+        from app import paths
+        with mock.patch.object(paths.sys, "_MEIPASS", r"C:\bundle", create=True):
+            self.assertEqual(paths.resource_path("assets", "theme_dark.jpg"),
+                             os.path.join(r"C:\bundle", "assets", "theme_dark.jpg"))
+
+    def test_falls_back_to_repo_root(self) -> None:
+        from app import paths
+        expected = os.path.join(ROOT, "assets", "theme_dark.jpg")
+        self.assertEqual(paths.resource_path("assets", "theme_dark.jpg"), expected)
+        self.assertTrue(os.path.isfile(expected))
+
+
 if __name__ == "__main__":
     unittest.main()

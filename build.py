@@ -32,6 +32,20 @@ APP_NAME = "QingYinPlayer"
 DISPLAY_NAME = "轻音播放器"
 ICON_PATH = os.path.join(HERE, "assets", "app.ico")
 
+# 随包分发的只读资源（v2.8.3）：内置背景预设图（星空/云海）。路径必须与
+# `ui.theme.BACKGROUND_PRESETS` 里写的相对路径一致 —— 运行时用
+# `app.paths.resource_path("assets", name)` 取。
+BUNDLED_ASSETS = ("assets/theme_dark.jpg", "assets/theme_light.jpg")
+
+
+def data_args() -> list[str]:
+    """`--add-data` 参数列表：图标 + 内置背景预设图，统一放进包内的 assets/。"""
+    files = ["assets/app.ico", *BUNDLED_ASSETS]
+    args: list[str] = []
+    for rel in files:
+        args += ["--add-data", f"{os.path.join(HERE, *rel.split('/'))}{os.pathsep}assets"]
+    return args
+
 
 def _require_ascii_app_name() -> None:
     """构建期守卫：exe 名含非 ASCII 字符直接失败。
@@ -125,8 +139,8 @@ def _pyinstaller(onefile: bool) -> str:
         "--distpath", os.path.join(HERE, "dist"),
         "--workpath", os.path.join(HERE, "build", "pyinstaller"),
         "--specpath", os.path.join(HERE, "build"),
-        # 把图标随包带上，供运行时 app.setWindowIcon 显式设置（双保险）
-        "--add-data", f"{ICON_PATH}{os.pathsep}assets",
+        # 图标 + 主题背景图（v2.7.8：背景图不打进去，主题2 打包后就是一块空底）
+        *data_args(),
         # miniaudio 的 _miniaudio.pyd 在 C 层 `import _cffi_backend`，PE 依赖扫描
         # 抓不到这种运行时导入，PyInstaller 会漏收 —— 打包后一启动就
         # ModuleNotFoundError: No module named '_cffi_backend'（v2.6.9 实测，
