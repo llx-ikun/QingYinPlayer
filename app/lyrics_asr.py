@@ -22,8 +22,11 @@
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import os
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QThread, Signal
@@ -52,7 +55,9 @@ _ERROR_MESSAGES = {
     "no_lyrics": "这首歌没有可对齐的同步歌词",
     "no_speech": "没有识别到任何人声内容",
     "model_missing": "AI 模型还没下载",
-    "download_failed": "AI 模型下载失败（检查网络）",
+    # 这两句会接在「AI 对齐失败：」后面，所以别再重复「AI」二字
+    "download_failed": "模型下载失败",
+    "disk_failed": "模型写入失败（检查磁盘空间与权限）",
     "import_failed": "AI 组件缺失或不兼容",
     "decode_failed": "音频解码失败",
     "low_confidence": "识别结果与歌词对不上，已放弃（不会写入错的时间轴）",
@@ -183,8 +188,22 @@ MODEL_REPOS = {
 }
 # 只下这几个文件：仓库里的 README / 其它框架的权重（如 model.safetensors）一律不要。
 _MODEL_FILES = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
-# 国内直连 HF 基本必失败，默认走镜像（用户可用 HF_ENDPOINT 覆盖）
+# 国内直连 HF 基本必失败，默认走镜像（用户可用 QY_HF_ENDPOINT / HF_ENDPOINT 覆盖）
 DEFAULT_ENDPOINT = "https://hf-mirror.com"
+
+# 直链：<endpoint>/<repo>/resolve/main/<file>，镜像会 302 到 CDN（v3.0.1 实测可用）
+_DOWNLOAD_TIMEOUT = 30
+_DOWNLOAD_RETRIES = 3
+_DOWNLOAD_CHUNK = 1 << 20
+_USER_AGENT = "QingYinPlayer/3.0 (+local; python-urllib)"
+
+
+def download_endpoint() -> str:
+    """解析下载站根地址。环境变量优先，方便换镜像而不改代码。"""
+    raw = (os.environ.get("QY_HF_ENDPOINT")
+           or os.environ.get("HF_ENDPOINT")
+           or DEFAULT_ENDPOINT)
+    return raw.strip().rstrip("/")
 
 
 def model_ready(path: str) -> bool:
@@ -198,35 +217,152 @@ def model_ready(path: str) -> bool:
     return all(os.path.isfile(os.path.join(path, name)) for name in _MODEL_FILES)
 
 
-def ensure_model(name: str, progress=None) -> tuple[str, str]:
-    """确保某个档位的模型在本地，返回 `(目录, 错误码)`；已就绪直接返回不联网。"""
+class _DownloadError(Exception):
+    """下载过程中可分类型的失败。`detail` 会原样进 toast，必须是真实原因。"""
+
+    code = "download_failed"
+
+
+class _NetworkError(_DownloadError):
+    code = "download_failed"
+
+
+class _DiskError(_DownloadError):
+    code = "disk_failed"
+
+
+def _brief(exc: BaseException) -> str:
+    """异常 → 一行人能读的说明。空 message 的异常（如 URLError(None)）只留类型名。"""
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def _open_part(path: str, append: bool):
+    """打开 `.part` 写句柄；写不进去单独归成 `disk_failed`（磁盘满/只读/权限）。"""
+    try:
+        return open(path, "ab" if append else "wb")   # noqa: SIM115 - 句柄由调用方 with 关
+    except OSError as exc:
+        raise _DiskError(_brief(exc)) from exc
+
+
+def _fetch_once(url: str, tmp: str, on_progress=None) -> None:
+    """一次下载尝试：支持 Range 续传，写 `.part` 而不是目标文件。
+
+    **为什么不用 huggingface_hub.snapshot_download**：v3.0.0 出货后用户在真实环境
+    里必现「模型下载失败」，而开发态同样的代码能下完 —— 差别只在冻结产物。
+    snapshot_download 一条路要背上 httpx2 / httpcore2 / anyio / fsspec / click /
+    tqdm / filelock 七个三方包，任何一个被 PyInstaller 漏收就是全盘失败，而且异常
+    被它自己的包装层吃掉、看不出根因。我们要的只是 4 个静态文件，标准库足够，
+    错误也能分得清（v3.0.1）。
+    """
+    start = os.path.getsize(tmp) if os.path.isfile(tmp) else 0
+    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    if start:
+        request.add_header("Range", f"bytes={start}-")
+    try:
+        response = urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 416 and start:
+            # 断点比服务器上的文件还长 —— `.part` 是坏片段，删掉从头来
+            _silent_remove(tmp)
+        raise
+    with response:
+        # 服务端不认 Range 会返回 200 + 整个文件，此时必须从头写
+        resuming = response.status == 206 and start > 0
+        written = start if resuming else 0
+        length = int(response.headers.get("Content-Length") or 0)
+        total = written + length if length > 0 else 0
+        with _open_part(tmp, resuming) as handle:
+            while True:
+                try:
+                    block = response.read(_DOWNLOAD_CHUNK)
+                except OSError as exc:      # 传输中断：连接被重置 / 超时
+                    raise _NetworkError(_brief(exc)) from exc
+                if not block:
+                    break
+                try:
+                    handle.write(block)
+                except OSError as exc:      # 磁盘满 / 只读 / 权限
+                    raise _DiskError(_brief(exc)) from exc
+                written += len(block)
+                if on_progress and total > 0:
+                    on_progress(min(1.0, written / total))
+        if total > 0 and written < total:
+            raise _NetworkError(f"下载不完整（{written}/{total} 字节）")
+
+
+def _silent_remove(path: str) -> None:
+    with contextlib.suppress(OSError):
+        os.remove(path)
+
+
+def download_file(url: str, dest: str, on_progress=None) -> tuple[str, str]:
+    """把 url 下到 dest，返回 `(错误码, 详情)`；成功是 `("", "")`。
+
+    失败重试 3 次（续传，不从头来）。4xx 除 408/429 之外立刻收手 —— 仓库改名或
+    文件不存在时重试只会让用户多等三次超时。
+    """
+    tmp = dest + ".part"
+    detail = ""
+    for _attempt in range(_DOWNLOAD_RETRIES):
+        try:
+            _fetch_once(url, tmp, on_progress)
+            os.replace(tmp, dest)       # 先 .part 后改名：不会留下「看起来完整」的半个文件
+            return "", ""
+        except _DownloadError as exc:
+            detail = str(exc)
+            if isinstance(exc, _DiskError):
+                return exc.code, detail
+        except urllib.error.HTTPError as exc:
+            detail = f"HTTP {exc.code} {exc.reason}"
+            if exc.code == 416:
+                # 断点比服务器上的文件还长：`_fetch_once` 已经删掉坏片段，重来一次
+                continue
+            if 400 <= exc.code < 500 and exc.code not in (408, 429):
+                return "download_failed", detail
+        except urllib.error.URLError as exc:
+            detail = _brief(exc.reason if exc.reason else exc)
+        except OSError as exc:
+            return "disk_failed", _brief(exc)
+        except Exception as exc:  # noqa: BLE001 - 兜底也要留下真实类型
+            detail = _brief(exc)
+    return "download_failed", detail
+
+
+def ensure_model(name: str, progress=None) -> tuple[str, str, str]:
+    """确保某个档位的模型在本地，返回 `(目录, 错误码, 详情)`；已就绪不联网。
+
+    第三项是 v3.0.1 加的：v3.0.0 把异常整个吞成 `download_failed`，界面上只剩
+    「检查网络」四个字，连开发侧都无法判断到底是 DNS、HTTP 404、还是磁盘权限。
+    **错误码给人看结论，详情给定位用**，两者都要。
+    """
     target = model_dir_for(name)
     if model_ready(target):
-        return target, ""
+        return target, "", ""
     repo = MODEL_REPOS.get(name)
     if not repo:
-        return target, "model_missing"
+        return target, "model_missing", f"未知档位 {name}"
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        return target, "disk_failed", _brief(exc)
 
-    os.environ.setdefault("HF_ENDPOINT", DEFAULT_ENDPOINT)
-    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-    try:
-        from huggingface_hub import snapshot_download
-    except Exception:  # noqa: BLE001
-        return target, "import_failed"
-    if progress:
-        progress("download", 0.0)
-    try:
-        snapshot_download(
-            repo_id=repo,
-            local_dir=target,
-            allow_patterns=list(_MODEL_FILES),
-        )
-    except Exception:  # noqa: BLE001 - 网络/磁盘/权限全收敛成同一个码
-        return target, "download_failed"
+    endpoint = download_endpoint()
+    count = len(_MODEL_FILES)
+    for index, file_name in enumerate(_MODEL_FILES):
+        def _report(done: float, index: int = index) -> None:
+            if progress:
+                progress("download", (index + done) / count)
+
+        url = f"{endpoint}/{repo}/resolve/main/{file_name}"
+        code, detail = download_file(url, os.path.join(target, file_name), _report)
+        if code:
+            return target, code, f"{file_name}: {detail}"
     if progress:
         progress("download", 1.0)
-    return target, "" if model_ready(target) else "download_failed"
+    if not model_ready(target):
+        return target, "download_failed", "下载后文件仍不完整"
+    return target, "", ""
 
 
 def transcribe(audio_path: str, model_dir: str, language: str = "zh",
@@ -661,9 +797,14 @@ class LyricsAsrWorker(QThread):
             self.progress.emit(percent, _STAGE_TEXT.get(stage, stage))
 
         try:
-            model_dir, err = ensure_model(self._model_name, _report)
+            model_dir, err, detail = ensure_model(self._model_name, _report)
             if err:
-                self.failed.emit(self._track_id, describe_error(err))
+                # 详情一定要带出去：v3.0.0 只显示「检查网络」，用户在真实环境里
+                # 反复失败也说不清是什么，开发侧同样无从下手（v3.0.1）。
+                message = describe_error(err)
+                if detail:
+                    message = f"{message}（{detail}）"
+                self.failed.emit(self._track_id, message)
                 return
             if self.isInterruptionRequested():
                 self.failed.emit(self._track_id, describe_error("cancelled"))

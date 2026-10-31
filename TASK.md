@@ -867,3 +867,33 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py
   - **卡在素材**：夹具全是合成音（无唱词），拿不到真值；`retime_lines()` 已备好手段
 - [x] **E5** 双产物 smoke + 真实平台；`--check` 输出 v3.0.0；onefile 122.8MB / onedir 11.4MB
 - [x] **E6**（临时新增）`main.py --check-ai`：用**冻结产物**验证模型能加载并推理 ✅
+
+---
+
+## v3.0.1 修复：模型下载在真实环境必失败
+
+用户实测反馈：设置页选好档位后点 AI 对齐 → 「AI 对齐失败：AI 模型下载失败（检查网络）」。
+详见 DESIGN.md 40.17。
+
+### F. 下载通道重写
+
+- [x] **F1** 用 `urllib.request` 直连 `<endpoint>/<repo>/resolve/main/<file>` 替换 `snapshot_download`
+  - 去掉 huggingface_hub / httpx2 / httpcore2 / anyio / fsspec / click / tqdm / filelock 八个三方包的关键路径依赖
+- [x] **F2** 大文件可靠：`.part` 原子落盘、`Range` 续传、卡顿 30s 超时、3 次重试
+  - `416` 丢坏片段重来；服务端忽略 Range 回 200 时从 0 重写（已单测）
+- [x] **F3** 错误码分开：网络 `download_failed` / 本地写入 `disk_failed`
+  - 4xx 除 408/429 立刻收手，不让用户白等三次超时
+- [x] **F4** `ensure_model` 返回 `(目录, 错误码, 详情)`，真实原因一路带到 toast
+  - v3.0.0 的「（检查网络）」是猜的；现在显示 `HTTP 503 ...` / `URLError: ...`
+- [x] **F5** 单测 16 例：成功/续传/Range 被忽略/404 不重试/重试后成功/重试用尽/截断检测/磁盘错不重试/416 恢复
+  - 期间抓出真 bug：416 被当普通 4xx 判死、坏片段删了却没重试 → 已修
+- [x] **F6** `main.py --download-model [档位]` 诊断入口（下载 + `WhisperModel` 加载，报告写文件）
+
+### G. 验收
+
+- [x] **G1** ruff 干净；`tests.test_lyrics_asr` 43 例全绿
+- [x] **G2** 全量回归：**34 模块 / 767 用例全绿**，16m52s
+- [x] **G3** 重打包并在产物里验证：onefile 122.8MB / onedir 11.5MB，双 smoke + 真实平台 8s 通过
+  - 冻结产物**全新数据目录**跑 `--download-model tiny`：从零下完 75MB，`WhisperModel` 加载 OK
+  - 冻结产物跑 `--check-ai`（small 档 + 夹具音频）：import / 就绪 / 解码 / 推理全 OK
+  - 真实数据目录里 `small`（461MB）3m35s 下完，四文件字节数与仓库一致

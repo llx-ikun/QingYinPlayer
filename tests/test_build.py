@@ -197,5 +197,114 @@ class TestAiCheckCommand(unittest.TestCase):
                 self.assertIn("AI 自检", f.read())
 
 
+class TestDownloadModelCommand(unittest.TestCase):
+    """`main.py --download-model`（v3.0.1）：在冻结产物里复现真实下载的手段。
+
+    v3.0.0 的下载失败只能靠这条命令定位（用户侧只有一句「检查网络」），所以它
+    必须：不联网也能跑完、失败返回非 0、结论一定落到报告文件里。
+    """
+
+    def setUp(self) -> None:
+        import sys
+
+        self.argv = sys.argv[:]
+
+    def tearDown(self) -> None:
+        import sys
+
+        sys.argv = self.argv
+
+    def test_entry_is_reachable_from_main(self) -> None:
+        """守卫：flag 接错地方的话，产物里这条命令就是「点了什么都不发生」。"""
+        import sys
+        from unittest import mock
+
+        import main as main_mod
+
+        sys.argv = ["main.py", "--download-model", "tiny"]
+        with mock.patch.object(main_mod, "_download_model", return_value=0) as spy:
+            self.assertEqual(main_mod.main(), 0)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_failure_returns_nonzero_and_writes_report(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        import main as main_mod
+        from app import lyrics_asr as la
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "r.txt")
+            with mock.patch.object(main_mod, "AI_CHECK_REPORT", out), \
+                    mock.patch.object(la, "ensure_model",
+                                      return_value=("/nowhere", "download_failed",
+                                                    "model.bin: HTTP 503 Busy")):
+                code = main_mod._download_model(["main.py", "--download-model", "tiny"])
+            self.assertEqual(code, 1)
+            with open(out, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("HTTP 503", text, "报告里必须留真实原因，否则等于没诊断")
+            self.assertIn("download_failed", text)
+
+    def test_unknown_tier_falls_back_to_default(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        import main as main_mod
+        from app import lyrics_asr as la
+        from app.models import DEFAULT_AI_MODEL
+
+        seen = []
+
+        def _fake(name, progress=None):
+            seen.append(name)
+            return ("/nowhere", "download_failed", "x")
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(main_mod, "AI_CHECK_REPORT",
+                                  os.path.join(tmp, "r.txt")), \
+                mock.patch.object(la, "ensure_model", _fake):
+            main_mod._download_model(["main.py", "--download-model", "huge"])
+        self.assertEqual(seen, [DEFAULT_AI_MODEL], "乱传档位要退回默认档，不能直接崩")
+
+    def test_success_path_loads_model(self) -> None:
+        """下载成功还要再加载一次模型：文件齐了但 ctranslate2 崩，等于没修好。"""
+        import sys
+        import tempfile
+        import types
+        from unittest import mock
+
+        import main as main_mod
+        from app import lyrics_asr as la
+
+        loaded = []
+        fake_module = types.ModuleType("faster_whisper")
+
+        def _model(path, **_kwargs):
+            loaded.append(path)
+            return object()
+
+        fake_module.WhisperModel = _model
+        real = sys.modules.get("faster_whisper")
+        sys.modules["faster_whisper"] = fake_module
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "r.txt")
+                with mock.patch.object(main_mod, "AI_CHECK_REPORT", out), \
+                        mock.patch.object(la, "ensure_model",
+                                          return_value=("/model", "", "")), \
+                        mock.patch.object(la, "model_ready", return_value=True):
+                    code = main_mod._download_model(["main.py", "--download-model"])
+                self.assertEqual(code, 0)
+                with open(out, encoding="utf-8") as f:
+                    self.assertIn("加载 OK", f.read())
+        finally:
+            if real is None:
+                sys.modules.pop("faster_whisper", None)
+            else:
+                sys.modules["faster_whisper"] = real
+        self.assertEqual(loaded, ["/model"])
+
+
 if __name__ == "__main__":
     unittest.main()

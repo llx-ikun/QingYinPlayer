@@ -222,6 +222,268 @@ class TestRetime(unittest.TestCase):
         self.assertEqual(la.retime_lines([]), [])
 
 
+class _FakeResponse:
+    """够 urllib.request.urlopen 返回值的形状：status / headers.get / read / with。"""
+
+    def __init__(self, body: bytes, status: int = 200, length=None, chunks=None):
+        self._body = body
+        self._chunks = list(chunks) if chunks is not None else None
+        self.status = status
+        self.headers = {"Content-Length": str(len(body) if length is None else length)}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if self._chunks is not None:
+            return self._chunks.pop(0) if self._chunks else b""
+        body, self._body = self._body, b""     # 只给一次，第二次必须是 EOF
+        return body
+
+
+class _FakeServer:
+    """按脚本依次返回响应或抛异常的假 urlopen，同时记下每次请求头。"""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.requests = []
+
+    def __call__(self, request, timeout=None):
+        self.requests.append(request)
+        action = self.script.pop(0)
+        if isinstance(action, Exception):
+            raise action
+        return action
+
+    def header(self, name, index=0):
+        return self.requests[index].get_header(name) or self.requests[index].headers.get(name)
+
+    def startswith(self, name, index=0):
+        for key, value in self.requests[index].headers.items():
+            if key.lower() == name.lower():
+                return value
+        return None
+
+
+class TestDownloadFile(unittest.TestCase):
+    """模型下载（v3.0.1）：换成标准库直连之后，每条失败路径都要能说清楚原因。
+
+    这个模块原来用 huggingface_hub，异常被它自己的包装层吃掉，用户在真实环境里
+    只看到「检查网络」。下载器重写后**错误分类就是产品行为**，必须钉死。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="qy_dl_")
+        self.dest = os.path.join(self.tmp, "model.bin")
+        self._real_urlopen = la.urllib.request.urlopen
+
+    def tearDown(self):
+        la.urllib.request.urlopen = self._real_urlopen
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _serve(self, *script):
+        server = _FakeServer(*script)
+        la.urllib.request.urlopen = server
+        return server
+
+    def _read_dest(self):
+        with open(self.dest, "rb") as f:
+            return f.read()
+
+    def test_success_writes_file_and_reports_progress(self):
+        seen = []
+        server = self._serve(_FakeResponse(b"abcdefgh"))
+        code, detail = la.download_file("http://x/model.bin", self.dest, seen.append)
+        self.assertEqual((code, detail), ("", ""))
+        self.assertEqual(self._read_dest(), b"abcdefgh")
+        self.assertEqual(seen[-1], 1.0, "进度要走到 100%")
+        self.assertFalse(os.path.exists(self.dest + ".part"), "成功后不该留 .part")
+        self.assertEqual(len(server.requests), 1)
+
+    def test_partial_progress_is_monotonic(self):
+        seen = []
+        self._serve(_FakeResponse(b"", length=8, chunks=[b"abcd", b"efgh"]))
+        la.download_file("http://x/model.bin", self.dest, seen.append)
+        self.assertEqual(seen, [0.5, 1.0])
+
+    def test_resume_sends_range_header(self):
+        with open(self.dest + ".part", "wb") as f:
+            f.write(b"abcd")
+        server = self._serve(_FakeResponse(b"efgh", status=206))
+        code, _detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "")
+        self.assertEqual(self._read_dest(), b"abcdefgh", "续传要接在已有字节后面")
+        self.assertEqual(server.startswith("Range"), "bytes=4-")
+
+    def test_server_ignoring_range_restarts_clean(self):
+        """服务端不认 Range 时会回 200 + 整个文件，此时绝不能append成双倍长度。"""
+        with open(self.dest + ".part", "wb") as f:
+            f.write(b"abcd")
+        self._serve(_FakeResponse(b"abcdefgh", status=200))
+        code, _detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "")
+        self.assertEqual(self._read_dest(), b"abcdefgh")
+
+    def test_http_404_stops_immediately(self):
+        err = la.urllib.error.HTTPError("http://x", 404, "Not Found", {}, None)
+        server = self._serve(err)
+        code, detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "download_failed")
+        self.assertIn("404", detail)
+        self.assertEqual(len(server.requests), 1, "4xx 重试没有意义，必须立刻收手")
+
+    def test_retry_after_transient_network_error(self):
+        server = self._serve(la.urllib.error.URLError("连接被重置"),
+                             _FakeResponse(b"ok"))
+        code, _detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "")
+        self.assertEqual(len(server.requests), 2)
+        self.assertEqual(self._read_dest(), b"ok")
+
+    def test_all_retries_fail_keeps_reason(self):
+        errs = [la.urllib.error.URLError("超时")] * la._DOWNLOAD_RETRIES
+        self._serve(*errs)
+        code, detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "download_failed")
+        self.assertIn("超时", detail, "详情必须带出真实原因，不能只剩一个错误码")
+
+    def test_truncated_body_detected(self):
+        """Content-Length 说 8 字节、实际只给 4 字节：必须当失败，不能落盘半个模型。"""
+        self._serve(*[_FakeResponse(b"abcd", length=8)] * la._DOWNLOAD_RETRIES)
+        code, detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "download_failed")
+        self.assertIn("不完整", detail)
+        self.assertFalse(os.path.exists(self.dest))
+
+    def test_disk_error_not_retried(self):
+        calls = []
+
+        def _boom(path, append):
+            calls.append(path)
+            raise la._DiskError("OSError: 磁盘已满")
+
+        real_open = la._open_part
+        la._open_part = _boom
+        try:
+            self._serve(*[_FakeResponse(b"data")] * la._DOWNLOAD_RETRIES)
+            code, detail = la.download_file("http://x/model.bin", self.dest)
+        finally:
+            la._open_part = real_open
+        self.assertEqual(code, "disk_failed")
+        self.assertIn("磁盘已满", detail)
+        self.assertEqual(len(calls), 1, "磁盘写不进去重试也没有用")
+
+    def test_416_discards_bad_part(self):
+        """断点比服务器上的文件还长（.part 是坏片段）时要丢掉重来。"""
+        with open(self.dest + ".part", "wb") as f:
+            f.write(b"x" * 99)
+        err = la.urllib.error.HTTPError("http://x", 416, "Range Not Satisfiable", {}, None)
+        self._serve(err, _FakeResponse(b"abcdefgh", status=200))
+        code, _detail = la.download_file("http://x/model.bin", self.dest)
+        self.assertEqual(code, "")
+        self.assertEqual(self._read_dest(), b"abcdefgh")
+
+
+class TestEnsureModel(unittest.TestCase):
+    """ensure_model 的契约：`(目录, 错误码, 详情)`，详情永远是真实原因。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="qy_model_")
+        self._real_dir_for = la.model_dir_for
+        self._real_download = la.download_file
+        la.model_dir_for = lambda name: os.path.join(self.tmp, name)
+
+    def tearDown(self):
+        la.model_dir_for = self._real_dir_for
+        la.download_file = self._real_download
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_ready(self, name="base"):
+        target = os.path.join(self.tmp, name)
+        os.makedirs(target, exist_ok=True)
+        for file_name in la._MODEL_FILES:
+            with open(os.path.join(target, file_name), "wb") as f:
+                f.write(b"x")
+
+    def test_ready_model_does_not_touch_network(self):
+        self._make_ready()
+
+        def _boom(*_a, **_k):
+            raise AssertionError("模型已就绪时不许联网")
+
+        la.download_file = _boom
+        target, code, detail = la.ensure_model("base")
+        self.assertEqual((code, detail), ("", ""))
+        self.assertTrue(la.model_ready(target))
+
+    def test_unknown_tier(self):
+        _target, code, detail = la.ensure_model("huge")
+        self.assertEqual(code, "model_missing")
+        self.assertIn("huge", detail)
+
+    def test_downloads_all_files_with_progress(self):
+        seen = []
+        la.download_file = lambda url, dest, cb=None: ("", "")
+        _target, code, _detail = la.ensure_model("tiny", lambda s, f: seen.append(f))
+        # download_file 是假的，文件不会真的落地 → 最后一步要能识别出来
+        self.assertEqual(code, "download_failed")
+        self.assertIn("不完整", _detail)
+        self.assertEqual(seen[-1], 1.0)
+
+    def test_failure_carries_file_name_and_reason(self):
+        la.download_file = lambda url, dest, cb=None: ("download_failed", "HTTP 503 Busy")
+        _target, code, detail = la.ensure_model("tiny")
+        self.assertEqual(code, "download_failed")
+        self.assertIn("HTTP 503", detail)
+        self.assertIn(la._MODEL_FILES[0], detail, "要指明是哪个文件失败")
+
+    def test_url_uses_repo_and_endpoint(self):
+        seen = []
+
+        def _fake(url, dest, cb=None):
+            seen.append(url)
+            return ("", "")
+
+        os.environ["QY_HF_ENDPOINT"] = "https://mirror.example/"
+        la.download_file = _fake
+        try:
+            la.ensure_model("base")
+        finally:
+            os.environ.pop("QY_HF_ENDPOINT", None)
+        self.assertEqual(len(seen), len(la._MODEL_FILES))
+        self.assertTrue(seen[0].startswith(
+            "https://mirror.example/Systran/faster-whisper-base/resolve/main/"), seen[0])
+        self.assertTrue(seen[0].endswith(la._MODEL_FILES[0]))
+
+    def test_default_endpoint_used_without_env(self):
+        saved = {key: os.environ.pop(key, None)
+                 for key in ("QY_HF_ENDPOINT", "HF_ENDPOINT")}
+        try:
+            self.assertEqual(la.download_endpoint(), la.DEFAULT_ENDPOINT)
+        finally:
+            for key, value in saved.items():
+                if value is not None:
+                    os.environ[key] = value
+
+    def test_disk_error_making_dir(self):
+        la.model_dir_for = lambda name: os.path.join(self.tmp, "ro", "deep", name)
+        real_makedirs = os.makedirs
+
+        def _boom(*_a, **_k):
+            raise OSError("拒绝访问")
+
+        os.makedirs = _boom
+        try:
+            _target, code, detail = la.ensure_model("base")
+        finally:
+            os.makedirs = real_makedirs
+        self.assertEqual(code, "disk_failed")
+        self.assertIn("拒绝访问", detail)
+
+
 class TestAlignTrackDegrade(unittest.TestCase):
     """端到端入口在缺依赖时只能返回错误码，不能抛异常。"""
 

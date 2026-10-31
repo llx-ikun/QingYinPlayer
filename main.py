@@ -6,6 +6,7 @@
     python main.py --check                 环境自检（不加载 GUI）
     python main.py --check-ai <模型目录> [音频]
                                            AI 对齐链路自检（不加载 GUI，报告写文件）
+    python main.py --download-model [档位]  下载 AI 模型并验证能加载（报告写文件）
 """
 import os
 import sys
@@ -76,6 +77,64 @@ def _check_ai(argv: list[str]) -> int:
     return code
 
 
+def _download_model(argv: list[str]) -> int:
+    """下载指定档位的 AI 模型并验证能加载（v3.0.1）。
+
+    为什么单独开一个入口：v3.0.0 出货后用户在真实环境里必现「模型下载失败」，
+    开发态却一切正常 —— 只能靠「在产物里跑一遍真实下载」拿到真实报错。窗口化
+    打包没有 stdout，所以结论写文件。
+
+    用法：`QingYinPlayer.exe --download-model base`（不加载 GUI，跑完即退）
+    """
+    args = [a for a in argv[argv.index("--download-model") + 1:] if not a.startswith("--")]
+    lines = [f"{APP_NAME} v{APP_VERSION} 模型下载诊断"]
+    code = 0
+    try:
+        from app import lyrics_asr as la
+        from app.models import DEFAULT_AI_MODEL, LYRICS_AI_MODELS
+
+        name = args[0] if args and args[0] in LYRICS_AI_MODELS else DEFAULT_AI_MODEL
+        target = la.model_dir_for(name)
+        lines.append(f"档位 {name} → 目录 {target}")
+        lines.append(f"下载站 {la.download_endpoint()}（{la.MODEL_REPOS.get(name, '?')}）")
+        lines.append(f"下载前就绪: {la.model_ready(target)}")
+
+        # 进度回调每 1MB 一次，461MB 的 small 档会刷上千行 —— 报告按 10% 归并
+        last_bucket = [-1]
+
+        def _report(stage: str, fraction: float) -> None:
+            bucket = int(fraction * 10)
+            if bucket > last_bucket[0]:
+                last_bucket[0] = bucket
+                lines.append(f"  {stage} {bucket * 10}%")
+
+        # 已经就绪时 ensure_model 不会联网，重复跑这个命令是安全的
+        model_dir, err, detail = la.ensure_model(name, _report)
+        lines.append(f"ensure_model → 错误码 {err or '(无)'} 详情 {detail or '(无)'}")
+        lines.append(f"下载后就绪: {la.model_ready(model_dir)}")
+        if err:
+            code = 1
+        else:
+            # 下载成功不等于能用：ctranslate2 在 PyInstaller 里有过 segfault 前科，
+            # 所以再真正加载一次模型，把「文件齐了但加载崩」也一起验掉
+            from faster_whisper import WhisperModel
+
+            WhisperModel(model_dir, device="cpu", compute_type="int8")
+            lines.append("WhisperModel 加载 OK")
+    except Exception as exc:  # noqa: BLE001 - 诊断入口要把崩溃原因也写下来
+        lines.append(f"失败: {type(exc).__name__}: {exc}")
+        code = 1
+    text = "\n".join(lines)
+    try:
+        with open(AI_CHECK_REPORT, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except OSError:
+        pass
+    print(text)
+    print(f"报告: {AI_CHECK_REPORT}")
+    return code
+
+
 def _resolve_app_icon() -> str | None:
     """定位应用图标：打包后随 --add-data 进入 sys._MEIPASS，开发态用本地 assets。"""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +151,9 @@ def _apply_app_icon(app) -> None:
 def main() -> int:
     if "--check-ai" in sys.argv:
         return _check_ai(sys.argv)
+
+    if "--download-model" in sys.argv:
+        return _download_model(sys.argv)
 
     if "--check" in sys.argv:
         print(f"{APP_NAME} v{APP_VERSION} (Python {sys.version.split()[0]})")
