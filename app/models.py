@@ -41,8 +41,10 @@ MODE_SINGLE = "single"           # 单曲循环
 MODE_SHUFFLE = "shuffle"         # 随机播放
 PLAY_MODES = (MODE_SEQUENTIAL, MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE)
 
-# 歌词播放动效（v2.6.4）：none 无特效 / zoom 当前行放大 / typewriter 打字机 /
-# karaoke 颜色随进度逐渐覆盖。单选，值持久化进 Settings.lyrics_effect。
+# 歌词播放动效（v2.6.4）：none 无动效（仅高亮）/ zoom 放大当前行 /
+# typewriter 逐字显示（未唱不显示）/ karaoke 逐字上色（未唱淡显）。
+# 单选，值持久化进 Settings.lyrics_effect。界面文案见 ui.settings_dialog.effect_label。
+# v3.0.9 只改文案与注释，取值不变 —— 旧配置照常读出来。
 LYRICS_EFFECTS = ("none", "zoom", "typewriter", "karaoke")
 
 # AI 逐字对齐的模型档位（v3.0.0）。体积 / 精度 / 速度三档权衡，默认 base：

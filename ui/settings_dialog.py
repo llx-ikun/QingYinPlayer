@@ -63,13 +63,34 @@ FONT_SCALE_OPTIONS = [
     ("特大", 1.28),
 ]
 
-# 歌词播放动效（v2.6.4，单选）：与 app/models.py 的 LYRICS_EFFECTS 一一对应
+# 歌词播放动效（v2.6.4，单选）：与 app/models.py 的 LYRICS_EFFECTS 一一对应。
+#
+# v3.0.9 命名体系重排。旧命名有四个问题：
+#   1. 「无特效」其实是「关闭」，与另外三个效果不在同一层级；
+#   2. 「打字机」是比喻，不说明效果；
+#   3. 两条逐字效果（typewriter / karaoke）的**唯一差别**是「未唱的字显示不显示」，
+#      旧名里完全没写，用户只能靠试；
+#   4. **重名**：「karaoke」旧名「颜色覆盖」，与下方 v2.9.0 的「歌词颜色覆盖」分区
+#      重名 —— 前者是动效、后者是配色配置，用户以为是同一件事。
+# 现在统一成「动什么 + 怎么动」，并把两条逐字效果的差别直接写进名字。
 LYRICS_EFFECT_OPTIONS = [
-    ("无特效", "none"),
+    ("无动效（仅高亮）", "none"),
     ("放大当前行", "zoom"),
-    ("打字机", "typewriter"),
-    ("颜色覆盖", "karaoke"),
+    ("逐字显示（未唱不显示）", "typewriter"),
+    ("逐字上色（未唱淡显）", "karaoke"),
 ]
+
+
+def effect_label(value: str) -> str:
+    """动效值 → 界面文案。
+
+    v3.0.9：文案**只在这里定义一次**。此前下拉项在 `settings_dialog`、
+    toast 提示在 `main_window` 各写一份，改名漏一处就会「设置页叫 A、提示说 B」。
+    """
+    for label, val in LYRICS_EFFECT_OPTIONS:
+        if val == value:
+            return label
+    return value
 
 # 歌词颜色覆盖（v2.9.0）
 COLOR_TRIGGER_OPTIONS = [
@@ -439,7 +460,11 @@ class SettingsDialog(QDialog):
         effect_row.addWidget(self.effect_combo)
         effect_row.addStretch(1)
         root.addLayout(effect_row)
-        effect_hint = QLabel("放大当前行 / 打字机逐字出现 / 颜色随播放进度逐渐覆盖。")
+        # 名字已经自带说明了效果，这里不再重复罗列；改为说清两件名字答不了的事：
+        # 作用范围（只当前句）与它和下方「歌词颜色覆盖」的关系（正交，可同时开）。
+        effect_hint = QLabel(
+            "只作用于正在播放页的当前这一句；与下方「歌词颜色覆盖」的配色互不影响，"
+            "可以同时开启。")
         effect_hint.setObjectName("Dim")
         effect_hint.setWordWrap(True)
         root.addWidget(effect_hint)

@@ -309,3 +309,55 @@ class TestAiSettings(unittest.TestCase):
     def test_unknown_model_falls_back_to_default(self):
         d = self._dialog(ai_model="gigantic")
         self.assertEqual(d.ai_model_combo.currentData(), "base")
+
+
+class TestLyricsEffectNaming(unittest.TestCase):
+    """歌词动效的界面文案体系（v3.0.9）。
+
+    为什么文案值得单测：它改错了不会报错，只会让用户**选错效果**。这里钉住四件事——
+    值全覆盖、名字唯一、不与「歌词颜色覆盖」分区重名、文案只有一处定义。
+    """
+
+    def test_options_cover_all_effect_values_in_order(self):
+        from app.models import LYRICS_EFFECTS
+        got = [value for _label, value in dlg_mod_settings.LYRICS_EFFECT_OPTIONS]
+        self.assertEqual(
+            got, list(LYRICS_EFFECTS),
+            "下拉项必须与 LYRICS_EFFECTS 一一对应且顺序一致，否则某个效果在界面上选不到")
+
+    def test_labels_are_unique(self):
+        labels = [label for label, _v in dlg_mod_settings.LYRICS_EFFECT_OPTIONS]
+        self.assertEqual(len(labels), len(set(labels)), "动效文案不能重复")
+
+    def test_no_label_reuses_color_overlay_wording(self):
+        """「颜色覆盖」是 v2.9.0 那个独立分区（自定义双色渐变）的名字。
+
+        动效里的 karaoke 曾经也叫「颜色覆盖」，两处同名会让用户以为是一件事。
+        """
+        for label, _value in dlg_mod_settings.LYRICS_EFFECT_OPTIONS:
+            self.assertNotIn("颜色覆盖", label)
+
+    def test_effect_label_is_the_single_source(self):
+        for label, value in dlg_mod_settings.LYRICS_EFFECT_OPTIONS:
+            self.assertEqual(dlg_mod_settings.effect_label(value), label)
+        self.assertEqual(dlg_mod_settings.effect_label("unknown"), "unknown",
+                         "未知值原样返回，别抛异常把设置页拖崩")
+
+    def test_main_window_does_not_hardcode_effect_labels(self):
+        """动效文案只能有一处定义（settings_dialog），主窗口不许再抄一份。
+
+        事故背景：v3.0.9 之前两处各写一份文案表，只改一处就会出现
+        「设置页叫 A、toast 说 B」。
+        """
+        import ast
+        import os
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "ui", "main_window.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        known = {label for label, _v in dlg_mod_settings.LYRICS_EFFECT_OPTIONS}
+        found = [n.value for n in ast.walk(tree)
+                 if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                 and n.value in known]
+        self.assertEqual(found, [],
+                         f"主窗口把动效文案写死了，应改用 effect_label()：{found}")

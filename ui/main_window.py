@@ -78,7 +78,7 @@ from ui.background import BackgroundLayer
 from ui.dialogs import ImportProgressDialog
 from ui.float_bar import FloatBar
 from ui.player_bar import PLAYER_BAR_HEIGHT, PlayerBar
-from ui.settings_dialog import SettingsDialog, stats_for
+from ui.settings_dialog import SettingsDialog, effect_label, stats_for
 from ui.sidebar import SIDEBAR_WIDTH, Sidebar
 from ui.title_bar import TitleBar
 from ui.track_list import TrackList
@@ -1636,9 +1636,9 @@ class MainWindow(QMainWindow):
         self.store.settings.lyrics_effect = effect
         self.store.save()
         self.now_playing.lyrics.set_effect(effect)
-        labels = {"none": "无特效", "zoom": "放大当前行",
-                  "typewriter": "打字机", "karaoke": "颜色覆盖"}
-        self._toast(f"歌词动效：{labels.get(effect, effect)}", 2000)
+        # v3.0.9：文案取自 settings_dialog.effect_label() 这一处定义，
+        # 不在两边各写一份（此前两处容易改一处漏一处，设置页与提示各说各话）。
+        self._toast(f"歌词动效：{effect_label(effect)}", 2000)
 
     # ---------- 歌词颜色覆盖（v2.9.0） ----------
 

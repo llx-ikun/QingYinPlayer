@@ -63,12 +63,10 @@ def main() -> int:
             LyricLine(4000, "童年的荡秋千", "The swing of my childhood"),
             LyricLine(6000, "随记忆一直晃到现在", "Sways in my memory to this day"),
         ]
-    effects = [
-        ("none", "无特效"),
-        ("zoom", "放大"),
-        ("typewriter", "打字机"),
-        ("karaoke", "颜色覆盖"),
-    ]
+    # 文案取自 ui/settings_dialog.LYRICS_EFFECT_OPTIONS，探针截图才和真实界面一致
+    # （v3.0.9 起不再在工具里另写一份）。
+    from ui.settings_dialog import LYRICS_EFFECT_OPTIONS
+    effects = [(value, label) for label, value in LYRICS_EFFECT_OPTIONS]
 
     host = QWidget()
     host.setObjectName("ProbeCanvas")
