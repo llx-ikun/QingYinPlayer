@@ -241,20 +241,9 @@ class SettingsDialog(QDialog):
         form.addRow("昵称", self.nickname_edit)
         root.addLayout(form)
 
-        theme_row = QHBoxLayout()
-        theme_row.setSpacing(16)
-        theme_row.addWidget(QLabel("主题"))
-        self.theme_radios: dict[str, QRadioButton] = {}
-        for tid in ui_theme.THEME_ORDER:
-            radio = QRadioButton(ui_theme.THEME_LABEL[tid])
-            radio.setChecked(tid == self._theme_name)
-            radio.toggled.connect(lambda checked, t=tid: checked and self._on_theme(t))
-            theme_row.addWidget(radio)
-            self.theme_radios[tid] = radio
-        # 兼容旧引用（仅保留浅色别名；深色主题已移除）
-        self.light_radio = self.theme_radios["light"]
-        theme_row.addStretch(1)
-        root.addLayout(theme_row)
+        # v3.1.0：主题单选从「外观」页搬到「背景」页 —— 主题决定配色、背景决定
+        # 底图，两者都是「这一页长什么样」，分散在两个页签里用户找不到。
+        # 注意：搬位置**不等于合并概念**，主题与背景仍然正交（任何主题配任何背景）。
 
         accent_row = QHBoxLayout()
         accent_row.setSpacing(6)
@@ -308,9 +297,37 @@ class SettingsDialog(QDialog):
         root = QVBoxLayout(page)
         root.setSpacing(10)
 
-        # v2.8.3：内置背景预设（星空 / 云海）—— 主题与背景已拆开，这两张图不再是
-        # 「主题2」，而是背景页里可选的两张卡片，任何主题都能配。
-        root.addWidget(QLabel("内置背景"))
+        # v3.1.0：配色主题（4 个，按明暗分两组）+ 背景图案（2 张内置图）。
+        # 两块**互不联动**：主题换的是配色，图案换的是底图，可以任意搭配。
+        root.addWidget(QLabel("配色主题"))
+        self.theme_radios: dict[str, QRadioButton] = {}
+        for group_name, ids in ui_theme.THEME_GROUPS:
+            group_row = QHBoxLayout()
+            group_row.setSpacing(14)
+            group_label = QLabel(group_name)
+            group_label.setObjectName("Dim")
+            group_label.setFixedWidth(46)   # 两组对齐，别让「深色系/浅色系」抖
+            group_row.addWidget(group_label)
+            for tid in ids:
+                radio = QRadioButton(ui_theme.theme_caption(tid))
+                radio.setToolTip(f"{ui_theme.THEME_TONE[tid]}配色，"
+                                 f"可与下方任意背景图案搭配")
+                radio.setChecked(tid == self._theme_name)
+                radio.toggled.connect(
+                    lambda checked, t=tid: checked and self._on_theme(t))
+                group_row.addWidget(radio)
+                self.theme_radios[tid] = radio
+            group_row.addStretch(1)
+            root.addLayout(group_row)
+        # 兼容旧引用（E2E 用 light_radio 直接勾选浅色）
+        self.light_radio = self.theme_radios["light"]
+
+        root.addSpacing(8)
+
+        # v2.8.3：内置背景图案（星空 / 云海）—— 主题与背景已拆开，这两张图不是
+        # 「主题2」，而是这里可选的两张卡片，任何主题都能配（v3.1.0 改名「背景图案」，
+        # 与上面的「配色主题」明确区分）。
+        root.addWidget(QLabel("背景图案"))
         preset_row = QHBoxLayout()
         preset_row.setSpacing(8)
         self.preset_buttons: dict[str, QPushButton] = {}

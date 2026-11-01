@@ -36,7 +36,39 @@ def _contrast(fg: str, bg: str) -> float:
 
 class TestPaletteFormat(unittest.TestCase):
     def test_all_themes_registered(self):
-        self.assertEqual(set(THEMES), {"columbina", "light"})
+        self.assertEqual(set(THEMES),
+                         {"columbina", "obsidian", "light", "pearl"})
+
+    def test_groups_cover_every_theme_exactly_once(self):
+        """背景页按「深色系/浅色系」分组，分组必须不漏不重（v3.1.0）。
+
+        漏一个 → 那个主题在设置页里选不到；重复 → 出现两个单选按钮抢同一个值，
+        勾选状态会打架。
+        """
+        from ui.theme import THEME_GROUPS
+
+        flat = [tid for _name, ids in THEME_GROUPS for tid in ids]
+        self.assertEqual(len(flat), len(set(flat)), "分组里有重复主题")
+        self.assertEqual(set(flat), set(THEMES), "分组遗漏了某个主题")
+
+    def test_caption_joins_label_and_tone(self):
+        from ui.theme import THEME_TONE, theme_caption
+
+        self.assertEqual(theme_caption("columbina"), "星夜 · 深色")
+        self.assertEqual(theme_caption("obsidian"), "曜石 · 纯黑")
+        self.assertEqual(theme_caption("pearl"), "珍珠 · 纯白")
+        self.assertEqual(theme_caption("nope"), "nope", "未知 id 原样返回，别抛异常")
+        self.assertEqual(set(THEME_TONE), set(THEMES), "每个主题都要有明暗说明")
+
+    def test_pure_themes_are_actually_pure(self):
+        """「纯黑 / 纯白」主题的底色要真的接近黑白，否则名不副实（v3.1.0）。"""
+        from ui.theme import OBSIDIAN, PEARL
+
+        self.assertLess(_luminance(OBSIDIAN.BG), 0.02, "曜石底色应接近纯黑")
+        self.assertGreater(_luminance(PEARL.BG), 0.97, "珍珠底色应接近纯白")
+        # 纯色但面板要留一档层次，否则控件边界消失
+        self.assertNotEqual(OBSIDIAN.BG, OBSIDIAN.SURFACE)
+        self.assertNotEqual(PEARL.BG, PEARL.SURFACE)
 
     def test_every_field_is_hex_rgb(self):
         for theme in THEMES.values():
@@ -242,10 +274,21 @@ class TestThemeCycle(unittest.TestCase):
         self.assertIn("qlineargradient", build_stylesheet(THEMES["columbina"]))
         self.assertNotIn("qlineargradient", build_stylesheet(THEMES["light"]))
 
-    def test_order_is_dark_then_light(self):
-        """两态循环顺序：深色 → 浅色。"""
-        from ui.theme import THEME_ORDER
-        self.assertEqual(THEME_ORDER, ("columbina", "light"))
+    def test_order_alternates_dark_and_light(self):
+        """循环顺序是「深 → 浅 → 深 → 浅」（v3.1.0 扩到 4 套后仍保持这个手感）。
+
+        为什么不用「先两个深色再两个浅色」：浮动条那个按钮的历史语义就是
+        「按一下明暗翻转」；分成两段会出现连按两次还是一片深色，手感变了。
+        """
+        from ui.theme import THEME_ORDER, THEME_TONE
+
+        self.assertEqual(len(THEME_ORDER), 4)
+        tones = [THEME_TONE[t] for t in THEME_ORDER]
+        dark = {"深色", "纯黑"}
+        for i in range(len(tones) - 1):
+            self.assertNotEqual(
+                tones[i] in dark, tones[i + 1] in dark,
+                f"第 {i} 与 {i + 1} 项明暗应交替：{tones}")
 
 
 class TestBuiltinBackgroundPresets(unittest.TestCase):

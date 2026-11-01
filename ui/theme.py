@@ -61,14 +61,40 @@ LIGHT = Theme(
 
 COLUMBINA = Theme(
     name="columbina",
-    # 「午夜」深色主题（v2.8.3 重做）：更接近深夜的墨黑蓝紫。底色 #181824 从
-    # 深蓝紫斜向过渡到更深的 #0f0f18（BG_ALT），避免整屏糊成一块黑；面板略亮一档。
-    # 强调色用长春花紫 #7f7bff，白字对比 3.40:1、在面板上 4.63:1。
+    # 「星夜」深色主题（v2.8.3 重做，v3.1.0 改名）：更接近深夜的墨黑蓝紫。
+    # 底色 #181824 从深蓝紫斜向过渡到更深的 #0f0f18（BG_ALT），避免整屏糊成一块黑；
+    # 面板略亮一档。强调色用长春花紫 #7f7bff，白字对比 3.40:1、在面板上 4.63:1。
     BG="#181824", SURFACE="#22222e", SURFACE_HOVER="#2b2b39", SURFACE_ACTIVE="#343445",
     BORDER="#3a3a4a", TEXT="#eceaf6", TEXT_DIM="#9b9aaf",
     ACCENT="#7f7bff", ACCENT_HOVER="#9995ff", ACCENT_DIM="#5956b2",
     ACCENT_SOFT="#2e2e49", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#ffffff",
     BG_ALT="#0f0f18",
+)
+
+OBSIDIAN = Theme(
+    name="obsidian",
+    # 「曜石」纯黑主题（v3.1.0）：不带紫调的真黑。
+    # BG 用 #0a0a0c 而不是 #000000 —— 纯 0 会让窗口边界、阴影和「面板 vs 窗口底」
+    # 的层次彻底消失（对比 1.0），看着像没渲染完；留 2% 的灰，肉眼仍是纯黑。
+    BG="#0a0a0c", SURFACE="#141418", SURFACE_HOVER="#1c1c22", SURFACE_ACTIVE="#25252c",
+    BORDER="#303038", TEXT="#f0f0f2", TEXT_DIM="#94949e",
+    # 强调色冰蓝 #3585dc：在近黑面板上对比 4.9:1，白字压在它上面 3.8:1（守住 3:1，
+    # 见 tests/test_theme.py 的质量门槛）。不用紫，是为了和「星夜」一眼分开。
+    ACCENT="#3585dc", ACCENT_HOVER="#4d97e6", ACCENT_DIM="#2a6bb0",
+    ACCENT_SOFT="#152435", DANGER="#ff6b7d", HEART="#ff5c8a", ON_ACCENT="#ffffff",
+)
+
+PEARL = Theme(
+    name="pearl",
+    # 「珍珠」纯白主题（v3.1.0）：白底 + 冷灰层次。
+    # SURFACE 用 #fafafa 而不是 #ffffff —— 面板与窗口底同色就没有层次（对比 1.0），
+    # 只能靠边框硬撑，看起来像塑料片。差一档白，层次就出来了。
+    BG="#ffffff", SURFACE="#fafafa", SURFACE_HOVER="#f0f0f3", SURFACE_ACTIVE="#e7e7ec",
+    BORDER="#e3e3e8", TEXT="#17171a", TEXT_DIM="#6e6e78",
+    # 强调色石墨蓝 #2f6fde：白底上对比 4.5:1，白字压在它上面 4.7:1。
+    # 比「月白」的陶土橙冷一档，两个浅色主题一眼分得开。
+    ACCENT="#2f6fde", ACCENT_HOVER="#1f5cc4", ACCENT_DIM="#17479c",
+    ACCENT_SOFT="#e8effc", DANGER="#d9455a", HEART="#e8455c", ON_ACCENT="#ffffff",
 )
 
 # ---------- 内置背景预设（v2.8.3） ----------
@@ -98,16 +124,41 @@ BACKGROUND_PRESETS = (
 )
 PRESET_BY_ID = {p.id: p for p in BACKGROUND_PRESETS}
 
-THEMES = {"columbina": COLUMBINA, "light": LIGHT}
+THEMES = {"columbina": COLUMBINA, "light": LIGHT,
+          "obsidian": OBSIDIAN, "pearl": PEARL}
 
-# 主题钮的循环顺序（点一下切到下一个）——两态循环：深色 ↔ 浅色。
-THEME_ORDER = ("columbina", "light")
+# 主题钮的循环顺序（点一下切到下一个）：星夜 → 月白 → 曜石 → 珍珠，再回星夜。
+# 刻意排成「深 → 浅 → 深 → 浅」交替，而不是先列两个深色再列两个浅色：这个按钮
+# 历史上的语义就是「按一下明暗翻转」，交替顺序让每按一次都还能立刻看出变化，
+# 只是每两次顺带换一种风格。分组展示是设置页的事（见 THEME_GROUPS），与这里无关。
+THEME_ORDER = ("columbina", "light", "obsidian", "pearl")
 THEME_NEXT = {cur: THEME_ORDER[(i + 1) % len(THEME_ORDER)]
               for i, cur in enumerate(THEME_ORDER)}
-# 每个主题自己的代表图标；切换按钮显示的是「下一个主题」的图标
-THEME_ICON = {"columbina": "moon", "light": "sun"}
-THEME_LABEL = {"columbina": "深色", "light": "浅色"}
-DEFAULT_THEME = "light"      # 新装默认「浅色」主题
+# 每个主题自己的代表图标；切换按钮显示的是「下一个主题」的图标。
+# 目前只有月亮/太阳两种手绘图标，同色系内复用 —— 图标是装饰，真正的区分在
+# tooltip 与设置页文案上（见 THEME_LABEL / THEME_TONE）。
+THEME_ICON = {"columbina": "moon", "obsidian": "moon",
+              "light": "sun", "pearl": "sun"}
+# 界面文案（v3.1.0）：label 是意象名，tone 是直白的明暗说明，两者拼成
+# 「星夜 · 深色」这种完整叫法。分成两个字段而不是写死一个字符串，是因为
+# 浮动条的 tooltip 只需要意象名（「切换到星夜主题」），设置页需要完整叫法。
+THEME_LABEL = {"columbina": "星夜", "obsidian": "曜石",
+               "light": "月白", "pearl": "珍珠"}
+THEME_TONE = {"columbina": "深色", "obsidian": "纯黑",
+              "light": "浅色", "pearl": "纯白"}
+# 设置页背景区的**归类**：按明暗分两组，组名就是用户在界面上看到的分类标题。
+THEME_GROUPS = (
+    ("深色系", ("columbina", "obsidian")),
+    ("浅色系", ("light", "pearl")),
+)
+DEFAULT_THEME = "light"      # 新装默认「月白」浅色主题
+
+
+def theme_caption(theme_id: str) -> str:
+    """主题的完整叫法，如「星夜 · 深色」。设置页单选按钮用它。"""
+    label = THEME_LABEL.get(theme_id, theme_id)
+    tone = THEME_TONE.get(theme_id)
+    return f"{label} · {tone}" if tone else label
 
 FONT_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif'
 

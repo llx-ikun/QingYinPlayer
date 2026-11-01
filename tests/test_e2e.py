@@ -485,26 +485,38 @@ class TestE2EV2(unittest.TestCase):
             window2.close()
 
     def test_float_bar_theme_toggle(self):
-        from ui.theme import THEME_NEXT
+        """主题钮按 THEME_ORDER 轮转，图标/提示指向「点下去会切到哪个」。
+
+        v3.1.0：配色从两套变四套（深→浅交替），所以断言**全部从真相源推导**
+        （THEME_NEXT / THEME_ICON / THEME_LABEL），不写死「深色/浅色」这种两态语义
+        —— 否则再加主题时这例会假失败，而且失败信息会误导成「切换逻辑坏了」。
+        """
+        from ui.theme import (THEME_ICON, THEME_LABEL, THEME_NEXT,
+                              THEME_ORDER)
         self._import()
         fb = self.window.float_bar
-        # 两态循环：深色 ↔ 浅色。按钮图标/提示指向「点下去会切到哪个」，
-        # 初始（当前=浅色）目标是深色（月亮图标，切到深色夜空）。
-        self.assertEqual(self.store.settings.theme, "light")
-        self.assertEqual(fb.theme_toggle._kind, "moon")
-        self.assertIn("切换到深色主题", fb.theme_toggle.toolTip())
-        self.assertTrue(fb.theme_toggle.isChecked())   # 当前浅色 = 开关打开
 
-        self.window._toggle_theme()
-        self.assertEqual(self.store.settings.theme, "columbina")
-        self.assertEqual(fb.theme_toggle._kind, "sun")
-        self.assertIn("切换到浅色主题", fb.theme_toggle.toolTip())
-        self.assertFalse(fb.theme_toggle.isChecked())
+        def check(cur: str) -> None:
+            nxt = THEME_NEXT[cur]
+            self.assertEqual(self.store.settings.theme, cur)
+            # 图标/提示都指向下一个目标，而不是当前主题
+            self.assertEqual(fb.theme_toggle._kind, THEME_ICON[nxt])
+            self.assertIn(f"切换到{THEME_LABEL[nxt]}主题",
+                          fb.theme_toggle.toolTip())
+            # checked 纯装饰位：当前是浅色系（太阳）才点亮
+            self.assertEqual(fb.theme_toggle.isChecked(),
+                             THEME_ICON[cur] == "sun")
 
-        self.window._toggle_theme()
-        self.assertEqual(self.store.settings.theme, "light")  # 闭环回到起点
-        self.assertEqual(fb.theme_toggle._kind, "moon")
-        self.assertTrue(fb.theme_toggle.isChecked())
+        cur = self.store.settings.theme
+        self.assertEqual(cur, "light")   # 新装默认
+        check(cur)
+
+        # 连点一整圈：每步都从 THEME_NEXT 推期望值，末了必须闭环回起点
+        for _ in range(len(THEME_ORDER)):
+            self.window._toggle_theme()
+            cur = THEME_NEXT[cur]
+            check(cur)
+        self.assertEqual(cur, "light")
 
         # v2.2.2 布局：左列主题圆钮 + 齿轮设置，右侧导入音乐 / 数据目录两个独立按钮
         self.assertTrue(fb.theme_toggle.isCheckable())
@@ -1691,8 +1703,12 @@ class TestE2EThemeBackground(unittest.TestCase):
         from ui.settings_dialog import SettingsDialog, stats_for
 
         dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store), self.window)
-        # 主题单选只剩浅色/深色两套
-        self.assertEqual(list(dialog.theme_radios), ["columbina", "light"])
+        # v3.1.0：主题单选搬到背景页，共 4 套（星夜/曜石/月白/珍珠）。
+        # 界面顺序按**分组展示**走（深色系两项在前、浅色系在后），
+        # 与浮动条的循环顺序 THEME_ORDER（深浅交替）刻意不同，别混为一谈。
+        from ui.theme import THEME_GROUPS
+        shown = [tid for _name, ids in THEME_GROUPS for tid in ids]
+        self.assertEqual(list(dialog.theme_radios), shown)
         # 背景页有星空/云海两张内置卡片
         self.assertEqual(set(dialog.preset_buttons), {"starry", "clouds"})
         dialog.deleteLater()

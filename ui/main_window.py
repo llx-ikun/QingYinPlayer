@@ -1584,7 +1584,7 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, name: str) -> None:
         self.store.settings.theme = name
         self._apply_appearance()
-        # 文案跟主题表走：两态循环，用主题表的中文名，别写死「浅色 / 深色」
+        # v3.1.0：文案跟主题表走（四套配色），用主题表的中文名，别写死「浅色 / 深色」
         label = ui_theme.THEME_LABEL.get(name, name)
         self._toast(f"已切换到{label}主题", 2000)
 
@@ -1683,7 +1683,7 @@ class MainWindow(QMainWindow):
         self._toast("已清除本曲的全部歌词颜色", 2000)
 
     def _toggle_theme(self) -> None:
-        # 两态循环：深色 ↔ 浅色
+        # v3.1.0：按 THEME_ORDER 轮转四套配色（深→浅交替），不写死两态
         order = ui_theme.THEME_ORDER
         cur = ui_theme.current_theme().name
         idx = order.index(cur) if cur in order else -1

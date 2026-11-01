@@ -124,9 +124,9 @@ class FloatBar(QWidget):
     def set_theme_icon(self, theme_name: str) -> None:
         """主题钮：图标与提示都指向「点下去会切到哪个主题」。
 
-        两态循环 深色 ↔ 浅色，所以按钮上画的不是当前主题，
-        而是下一个目标（月亮=深色 / 太阳=浅色）。具体是谁由 tooltip 说清
-        （「切换到深色主题」）。
+        v3.1.0 起循环表是四套配色（深→浅交替），按钮上画的不是当前主题，
+        而是下一个目标（月亮=深色系 / 太阳=浅色系）。具体是谁由 tooltip 说清
+        （「切换到曜石主题」）。
         """
         from ui.theme import THEME_ICON, THEME_LABEL, THEME_NEXT
 
