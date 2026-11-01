@@ -1000,27 +1000,72 @@ class TestLyricsColor(unittest.TestCase):
         self.assertIsNone(_typed_from_words((), "故事", 300, 2000))
         self.assertIsNone(_typed_from_words(bad, "", 300, 2000))
 
+    def test_typed_from_words_compresses_drag(self):
+        """拖音压缩（v3.0.7）：单个字窗超上限时按上限走完并顺延，不卡在一个字上。
+
+        实测现场《唯有追赶风的方向》"Freely, aloud~~~~"：whisper 把整段拖音算给了
+        'u'（4770ms），旧实现扫光在 'u' 上卡 4.8 秒，用户看到的就是「这句唱完了，
+        歌词却卡在中间不动，很久才切下一句」。
+        """
+        from app.lyrics import WordSpan
+        from ui.lyrics_panel import _typed_from_words
+
+        # "aloud"：'u' 占 600~5370（4770ms 拖音），'d' 在拖音末尾收尾
+        words = (WordSpan(0, 100, "a"), WordSpan(100, 600, "lo"),
+                 WordSpan(600, 5370, "u"), WordSpan(5370, 5450, "d"))
+        text = "aloud"
+        self.assertEqual(_typed_from_words(words, text, 0), 0)
+        self.assertEqual(_typed_from_words(words, text, 600), 3, "a+lo 已过完")
+        self.assertEqual(_typed_from_words(words, text, 1200), 4,
+                         "'u' 压缩到 1200ms，走到中点只亮出 'alou'")
+        self.assertEqual(_typed_from_words(words, text, 1880), 5,
+                         "压缩后的有效终点：整句走完")
+        self.assertEqual(_typed_from_words(words, text, 3000), 5,
+                         "拖音剩余时间整句保持高亮 —— 旧实现在这里还是 4（卡住）")
+        self.assertEqual(_typed_from_words(words, text, 5370), 5,
+                         "'d' 的真实起点也已是整句完成态")
+
+    def test_typed_from_words_drag_boundary_keeps_normal_line(self):
+        """字窗都不超上限的行，压缩逻辑零影响（边界值 = 上限也不压）。"""
+        from app.lyrics import WordSpan
+        from ui.lyrics_panel import _typed_from_words
+
+        # 最大字窗正好 1200ms（等于上限，不触发压缩）
+        words = (WordSpan(0, 300, "谁"), WordSpan(300, 600, "也"),
+                 WordSpan(600, 1800, "捉"))
+        text = "谁也捉"
+        self.assertEqual(_typed_from_words(words, text, 600), 2)
+        self.assertEqual(_typed_from_words(words, text, 900), 2,
+                         "600~1200 是 '捉' 的前半段，按真实比例仍是 2 字")
+        self.assertEqual(_typed_from_words(words, text, 1200), 3)
+        self.assertEqual(_typed_from_words(words, text, 1800), 3)
+
     def test_paint_block_prefers_word_times(self):
-        """有逐字数据时 `_paint_block` 用字时间窗；译文按同比例推进。"""
+        """有逐字数据时 `_paint_block` 用字时间窗；译文按同比例推进。
+
+        注意用**等长字窗**构造（每个 600ms，都不触发 v3.0.7 的拖音压缩）：
+        验证的是「真实字窗优先于线性插值」——线性插值在 37.5% 处只亮 2 字，
+        真实字窗已亮到第 5 字，二者可区分。
+        """
         from app.lyrics import LyricLine, WordSpan
 
         text, sub = "谁也捉摸不透", "nobody knows"
         panel = self._panel()
-        # 两句：句边界 1000~5000 明确，进度 0.5 → 位置 3000ms
+        # 两句：句边界 1000~5000；进度 0.375 → 位置 2500ms
         panel.set_synced([LyricLine(1000, text, sub,
-                                    words=(WordSpan(1000, 1100, "谁也"),
-                                           WordSpan(1100, 1200, "捉摸"),
-                                           WordSpan(1200, 5000, "不透"))),
+                                    words=(WordSpan(1000, 1600, "谁也"),
+                                           WordSpan(1600, 2200, "捉摸"),
+                                           WordSpan(2200, 2800, "不透"))),
                           LyricLine(5000, "下一句")])
         panel.set_effect("karaoke")
         panel._current_index = 0
-        panel._progress_in_line = 0.5
+        panel._progress_in_line = 0.375
 
         calls = self._spy_draw(panel, text, sub)
         main_typed, sub_typed = calls[0][1], calls[1][1]
         self.assertEqual(main_typed, 5,
-                         "3000ms 在「不透」窗口(1200~5000)的 47% 处 → "
-                         "4 个字已过完 + round(2×0.47)=1 → 5")
+                         "2500ms 在「不透」窗口(2200~2800)的 50% 处 → "
+                         "4 个字已过完 + round(2×0.5)=1 → 5（线性插值只有 2）")
         self.assertEqual(sub_typed, round(len(sub) * main_typed / len(text)),
                          "译文按原文比例同步推进")
 

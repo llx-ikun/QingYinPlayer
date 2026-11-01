@@ -115,8 +115,16 @@ def _typed_split(main_len: int, sub_len: int, progress: float,
     return main_typed, max(0, typed - main_len)
 
 
+# 单字扫光上限（v3.0.7）：字窗超过这个时长，基本是「拖长音」被 whisper 整段算给了
+# 某一个音节（实测《唯有追赶风的方向》"Freely, aloud~~~~" 的 'u' 独占 4.77s）。
+# 逐字扫光按真实比例走会在这一个字上卡好几秒，用户看到的就是「这句唱完了，歌词却
+# 卡在中间不动，很久才切到下一句」。
+CHAR_SWEEP_MAX_MS = 1200
+
+
 def _typed_from_words(words, text: str, position_ms: int,
-                      line_end_ms: int = 0) -> int | None:
+                      line_end_ms: int = 0,
+                      char_max_ms: int = CHAR_SWEEP_MAX_MS) -> int | None:
     """有逐字时间轴时，按**真实时间窗**求「已经唱到第几个字」（v3.0.0）。
 
     返回 None 表示「这份逐字数据没法用」，调用方回退 `_typed_split` 的线性插值
@@ -125,8 +133,13 @@ def _typed_from_words(words, text: str, position_ms: int,
     为什么要它而不是「按句进度插值」：句内插值假设字与字匀速，前奏长、拖腔、
     一字一顿的地方全错；逐字时间轴是这些时间的实测值，直接用才是「逐字卡准」。
 
+    **v3.0.7 拖音压缩**：某字窗超过 `char_max_ms` 时按上限走完，且它**之后**的字
+    全部顺延（有效时间轴严格连续）。语义是「拖音是最后一个音在延长，词其实已经
+    唱完了」——扫光应在正常速度下尽快走完整句、然后整句保持高亮，而不是让一个
+    字符慢慢亮 4 秒。正常行（所有字窗都不超上限）压缩前后**完全一致**，零回归。
+
     判定口径（`typed` 是**字符下标**，不是词元下标）：
-    - 落在某个字的时间窗内 → 按窗内比例把该字的字符数折算后四舍五入
+    - 落在某个字的有效时间窗内 → 按窗内比例把该字的字符数折算后四舍五入
       （「故事」是一个词元、窗口走到 60% → typed=1，即只亮出「故」）；
     - 还没到第一个字 → 0；过了最后一个字 → 整行（`len(text)`）。
     """
@@ -145,9 +158,11 @@ def _typed_from_words(words, text: str, position_ms: int,
     if avg <= 0:
         avg = 250
 
-    if position_ms <= words[0].start_ms:
-        return 0
-    typed = 0
+    # 先算「有效时间轴」：每字时长夹到上限；只要出现过一个被压缩的字，其后的字
+    # 就全部顺延 —— 这样拖音多出来的那几秒不会在句内留下「扫光不动的空隙」。
+    bounds: list[tuple[int, int]] = []
+    cursor = None
+    shifted = False
     for i, span in enumerate(words):
         start = span.start_ms
         end = span.end_ms
@@ -156,6 +171,20 @@ def _typed_from_words(words, text: str, position_ms: int,
                    else max(line_end_ms, start + avg))
         if end <= start:
             end = start + 1
+        dur = end - start
+        if dur > char_max_ms:
+            dur = char_max_ms
+            shifted = True
+        if shifted and cursor is not None:
+            start = cursor
+        bounds.append((start, start + dur))
+        cursor = start + dur
+
+    if position_ms <= bounds[0][0]:
+        return 0
+    typed = 0
+    for i, span in enumerate(words):
+        start, end = bounds[i]
         if position_ms < start:
             return typed
         if position_ms < end:
