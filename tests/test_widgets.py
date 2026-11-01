@@ -1351,18 +1351,6 @@ class TestLyricsMenu(unittest.TestCase):
         self.assertEqual(got, [1])
         self.assertFalse(self._actions(self._panel(False))["清除本曲逐字数据"].isEnabled())
 
-    def test_online_search_submenu_emits_platform(self):
-        """右键「在线搜索歌词」是平台子菜单，选中哪个平台就发哪个名字（v3.0.4）。"""
-        panel = self._panel(True)
-        got = []
-        panel.search_online_requested.connect(got.append)
-        submenu = self._actions(panel)["在线搜索歌词（去网页找）"].menu()
-        subs = {a.text(): a for a in submenu.actions()}
-        self.assertEqual(set(subs), {"LRCLIB", "网易云", "QQ音乐"})
-        subs["网易云"].trigger()
-        subs["QQ音乐"].trigger()
-        self.assertEqual(got, ["网易云", "QQ音乐"])
-
 
 class TestIconRendering(unittest.TestCase):
     """图标按设备像素渲染（v2.5）：高分屏上不能把 16px 位图放大糊掉。"""

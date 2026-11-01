@@ -39,7 +39,6 @@ from app.lyrics_match import (
 from app.lyrics_online import (
     DEFAULT_TIMEOUT,
     LyricHit,
-    build_web_search_url,
     clean_artist,
     clean_title,
     fetch_best_hit,
@@ -309,47 +308,6 @@ DEFAULT_SOURCES: list[tuple[str, object]] = [
     ("网易云", fetch_netease),
     ("QQ音乐", fetch_qq),
 ]
-
-
-# ---------- 手动在线搜索（给人看的网页，v3.0.4） ----------
-#
-# 自动三源都没命中时，右键「在线搜索歌词」让用户去网页自己找。原来只开
-# lrclib.net，中文歌往往在那儿搜不到——这次按自动源的同一份清单，给每个
-# 平台一个「给人看的」搜索地址（不是 JSON API），让用户能去最可能命中的平台兜底。
-
-# 各平台网页搜索模板，`{q}` 处填 URL 编码后的「标题 艺人」。
-# LRCLIB 复用 `lyrics_online.build_web_search_url`，不在两处各写一遍编码逻辑。
-WEB_SEARCH_TEMPLATES = {
-    "网易云": "https://music.163.com/#/search/m/?s={q}&type=1",
-    "QQ音乐": "https://y.qq.com/n/ryqq/search?w={q}&t=song",
-}
-
-
-def build_web_search_urls(title: str, artist: str = "") -> list[tuple[str, str]]:
-    """为各自动源构造网页搜索地址，返回 `[(平台名, url)]`（顺序同 DEFAULT_SOURCES）。
-
-    与 `lyrics_online.build_web_search_url`（只拼 LRCLIB）互补：这里覆盖全部自动源，
-    供右键「在线搜索歌词」子菜单使用。纯字符串拼接，可离线单测。
-    """
-    keyword = " ".join(p for p in ((title or "").strip(), (artist or "").strip()) if p)
-    q = urllib.parse.quote_plus(keyword)
-    out: list[tuple[str, str]] = []
-    for name, _fn in DEFAULT_SOURCES:
-        if name == "LRCLIB":
-            out.append((name, build_web_search_url(title, artist)))
-            continue
-        template = WEB_SEARCH_TEMPLATES.get(name)
-        if template:
-            out.append((name, template.format(q=q)))
-    return out
-
-
-def web_search_url(platform: str, title: str, artist: str = "") -> str:
-    """取指定平台的网页搜索地址；平台未知时返回空串（调用方据此提示）。"""
-    for name, url in build_web_search_urls(title, artist):
-        if name == platform:
-            return url
-    return ""
 
 
 # ---------- 多源协调 ----------

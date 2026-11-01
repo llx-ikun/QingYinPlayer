@@ -60,7 +60,7 @@ from app.lyrics_asr import LyricsAsrWorker, model_dir_for, model_ready
 from app.lyrics_words import apply_track_words, clear_all_words, clear_song_words
 from app.lyrics_local_align import LyricsLocalAlignWorker
 from app.lyrics_import import match_lrc_files
-from app.lyrics_multi import DEFAULT_SOURCES, MultiSourceWorker, web_search_url
+from app.lyrics_multi import DEFAULT_SOURCES, MultiSourceWorker
 from app.lyrics_online import (clear_miss,
                                read_cache, read_miss, write_cache, write_miss)
 from app.metadata import read_track
@@ -403,9 +403,6 @@ class MainWindow(QMainWindow):
             self._import_lyrics_for_current)
         self.now_playing.lyrics.batch_import_requested.connect(
             self._batch_import_lyrics)
-        # 歌词区右键「在线搜索歌词」（v2.6.4）：联网匹配失败时去网页自己搜
-        self.now_playing.lyrics.search_online_requested.connect(
-            self._open_lyrics_search)
         # 歌词区右键「转成 .lrc 文件（本地近似对齐）」：纯文本 → 带时间轴 LRC
         self.now_playing.lyrics.align_local_requested.connect(
             self._align_lyrics_local_for_current)
@@ -857,25 +854,6 @@ class MainWindow(QMainWindow):
             self.now_playing.set_empty(ONLINE_PENDING_HINT)
         else:
             self._toast("无法发起联网匹配", 2500)
-
-    def _open_lyrics_search(self, platform: str = "LRCLIB") -> None:
-        """歌词区右键「在线搜索歌词」：用系统默认浏览器打开**指定平台**的网页搜索。
-
-        联网匹配不到（未找到 / 被限流）时给用户一条自己动手的路：网页已自动
-        带上「标题 + 艺人」，用户找到后下载 .lrc 再用「导入歌词文件」绑定。
-        v3.0.4：从「只开 LRCLIB」扩展成按平台打开（LRCLIB / 网易云 / QQ音乐），
-        中文歌在 LRCLIB 上常搜不到，让用户能改去最可能命中的平台。
-        """
-        track = self.player.current_track
-        if track is None:
-            self._toast("当前没有播放中的歌曲", 2000)
-            return
-        url = web_search_url(platform, track.display_title, track.display_artist)
-        if not url:
-            self._toast(f"「{platform}」没有可用的网页搜索地址", 3000)
-            return
-        if not QDesktopServices.openUrl(QUrl(url)):
-            self._toast(f"无法打开浏览器，请手动到{platform}搜索", 4000)
 
     # ---------- 歌词对齐（本地 v2.6.9 优先 / 联网 v2.6.6 兜底） ----------
 

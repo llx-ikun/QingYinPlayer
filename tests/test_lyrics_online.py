@@ -27,7 +27,6 @@ from app.lyrics_online import (
     build_get_url,
     build_keyword_url,
     build_search_url,
-    build_web_search_url,
     cache_path,
     clean_artist,
     clean_title,
@@ -406,23 +405,6 @@ class TestLookupPlan(unittest.TestCase):
     def test_keyword_url_uses_q(self):
         self.assertIn("q=", build_keyword_url("晴天"))
         self.assertNotIn("track_name", build_keyword_url("晴天"))
-
-    def test_web_search_url_targets_human_page(self):
-        """「在线搜索歌词」拼的是给人看的网页，不是 JSON API。"""
-        url = build_web_search_url("晴天", "周杰伦")
-        self.assertTrue(url.startswith("https://lrclib.net/search?"))
-        self.assertNotIn("/api/", url)
-        self.assertIn("q=", url)
-
-    def test_web_search_url_includes_title_and_artist(self):
-        from urllib.parse import unquote
-
-        url = unquote(build_web_search_url("晴天", "周杰伦"))
-        self.assertIn("晴天", url)
-        self.assertIn("周杰伦", url)
-
-    def test_web_search_url_skips_missing_artist(self):
-        self.assertNotIn("None", build_web_search_url("晴天", ""))
 
 
 class TestAsHits(unittest.TestCase):

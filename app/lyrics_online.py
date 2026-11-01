@@ -152,17 +152,6 @@ def build_keyword_url(text: str) -> str:
     return f"{SEARCH_URL}?{urllib.parse.urlencode({'q': text or ''})}"
 
 
-def build_web_search_url(title: str, artist: str = "") -> str:
-    """构造 LRCLIB 网页搜索地址（供「在线搜索歌词」在浏览器里打开）。
-
-    与 `build_keyword_url` 不同：这里拼的是**给人看的网页**（lrclib.net/search），
-    不是 JSON API（lrclib.net/api/search）。自动带上「标题 + 艺人」，让用户
-    联网匹配失败时能自己到网页上搜。
-    """
-    query = " ".join(p for p in (title or "", artist or "") if p)
-    return f"https://lrclib.net/search?{urllib.parse.urlencode({'q': query})}"
-
-
 def build_get_url(title: str, artist: str, album: str = "",
                   duration_ms: int = 0) -> str:
     """精确端点。`duration` 只接受 1..3600 秒，越界会被服务端 400，先在这里钳住。"""

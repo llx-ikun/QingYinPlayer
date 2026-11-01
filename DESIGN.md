@@ -2809,3 +2809,39 @@ similarity(a,b) = max(字符级 SequenceMatcher.ratio(), token 级 Dice 系数)
   5.6 ms/次（单次联网超时 4.5 s），匹配耗时完全不是瓶颈，所以没装也不追。
 - 权重是手工定的，没有做网格搜索——因为没有足够大的标注集，搜出来的
   数字只会过拟合这 45 例。
+
+### 40.22 v3.0.8 移除右键「在线搜索歌词（去网页找）」（2026-11-01）
+
+**需求**：用户看图点名「这个功能不要了」。需求本身没有争议——自动三源（LRCLIB /
+网易云 / QQ音乐）已经覆盖「本地没有歌词」的绝大多数情况，还搜不到的歌，让它跳到
+浏览器让用户自己找 .lrc 再回来「导入歌词文件」，是把播放器的活推给用户。
+
+**决策：彻底删，不留死代码**。牵连四层，全部清掉：
+
+| 层 | 位置 | 删除内容 |
+|----|------|----------|
+| UI 菜单 | `ui/lyrics_panel.py` | `search_online_requested` 信号、平台子菜单构造 |
+| 主窗口 | `ui/main_window.py` | 信号连接、`_open_lyrics_search()` 槽、`web_search_url` import |
+| 业务层 | `app/lyrics_multi.py` | `WEB_SEARCH_TEMPLATES`、`build_web_search_urls()`、`web_search_url()` |
+| 单源工具 | `app/lyrics_online.py` | `build_web_search_url()` |
+| 测试 | 3 个文件 | 9 例（`test_widgets` 1 + `test_lyrics_multi` 5 + `test_lyrics_online` 3） |
+
+**为什么连 URL 构造函数一起删**（而不是只删菜单项）：
+
+1. 三个函数**除了这条菜单没有任何其他调用方**（grep 全库确认），留着就是死代码，
+   将来接手的人会以为「这功能还在，只是入口藏起来了」，白查一遍。
+2. 测试会继续测没人调用的纯函数——看起来覆盖率很高，实际在守一座空城。
+3. 联网匹配主链路完全不依赖它们：`lyrics_multi` 用的是 `fetch_best_hit` /
+   `pick_with_consistency` 那条线，`urllib.parse` 在两个模块里都另有用途，
+   不存在「删了出未使用 import」的连带问题（ruff 已确认）。
+
+**保留的部分**：`DESIGN.md` / `TASK.md` / `overview_v3.0.4.md` 里的历史记录**不改**。
+它们是决策流水账，记录「当时为什么这么做」；改写历史会让后来的人看不出这个功能
+曾经存在、又为什么被拿掉。新决策追加在本节，与前文并存。
+
+**风险预演**：唯一真实风险是外部脚本 import 了 `build_web_search_url`
+（v2.6.4 起就是公开函数）。本项目没有对外 API 承诺，`tools/` 下也没有引用，
+判定为可接受；真需要时从 git 历史（`git show 02461e9:app/lyrics_online.py`）取回即可。
+
+**验证**：grep 全库确认代码侧零残留（只剩 md 历史档案）、ruff 全绿、受影响三模块
+全绿、全量回归全绿、重新打包后冻结产物自证 `v3.0.8`。
