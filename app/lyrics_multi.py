@@ -357,7 +357,10 @@ def web_search_url(platform: str, title: str, artist: str = "") -> str:
 
 def _best_with_source(pairs: list[tuple[str, LyricHit]], title: str, artist: str,
                       duration_ms: int, album: str = "") -> tuple[LyricHit | None, str]:
-    """在 `(来源, hit)` 列表里统一打分选最优，返回 `(hit, 来源)`。"""
+    """v3.0.5 起由 `pick_with_consensus` 取代；保留只为不破坏可能有外部调用。
+
+    新逻辑多了「跨源投票」与「low 置信档拒收」两件事，直接用新函数。
+    """
     best = pick_best([hit for _, hit in pairs], title, artist, duration_ms, album)
     if best is None:
         return None, ""
