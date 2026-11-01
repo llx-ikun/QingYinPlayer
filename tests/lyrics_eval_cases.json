@@ -1,0 +1,120 @@
+[
+  {
+    "name": "中文·正版·完全匹配（同步稿优先）",
+    "query": {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
+    "candidates": [
+      {"track": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269, "synced": true},
+      {"track": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269, "plain": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·同名不同曲（靠时长区分）",
+    "query": {"title": "后来", "artist": "刘若英", "album": "我很好", "duration": 349},
+    "candidates": [
+      {"track": "后来", "artist": "刘若英", "album": "我很好", "duration": 349, "synced": true},
+      {"track": "后来", "artist": "张敬轩", "album": "不同专辑", "duration": 300, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·繁简差异（秘密/祕密，时长差 4s）",
+    "query": {"title": "不能说的秘密", "artist": "周杰伦", "album": "", "duration": 290},
+    "candidates": [
+      {"track": "不能说的祕密", "artist": "周杰伦", "album": "", "duration": 294, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·带版次 Live（应选录音室版）",
+    "query": {"title": "起风了", "artist": "买辣椒也用券", "album": "起风了", "duration": 325},
+    "candidates": [
+      {"track": "起风了", "artist": "买辣椒也用券", "album": "起风了", "duration": 325, "synced": true},
+      {"track": "起风了 (Live)", "artist": "买辣椒也用券", "album": "演唱会", "duration": 360, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·候选标题混入艺人名",
+    "query": {"title": "稻香", "artist": "周杰伦", "album": "魔杰座", "duration": 223},
+    "candidates": [
+      {"track": "周杰伦 - 稻香", "artist": "周杰伦", "album": "魔杰座", "duration": 223, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·大小写与标点差异",
+    "query": {"title": "Viva la Vida", "artist": "Coldplay", "album": "Viva la Vida or Death and All His Friends", "duration": 242},
+    "candidates": [
+      {"track": "viva la vida", "artist": "coldplay", "album": "Viva la Vida or Death and All His Friends", "duration": 242, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·候选标题带 feat.",
+    "query": {"title": "Something Just Like This", "artist": "The Chainsmokers", "album": "Memories...Do Not Open", "duration": 247},
+    "candidates": [
+      {"track": "Something Just Like This (feat. Coldplay)", "artist": "The Chainsmokers", "album": "Memories...Do Not Open", "duration": 247, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·伴奏版干扰（应选原版）",
+    "query": {"title": "Shape of You", "artist": "Ed Sheeran", "album": "÷", "duration": 233},
+    "candidates": [
+      {"track": "Shape of You (Karaoke Version)", "artist": "Various Artists", "album": "Karaoke Hits", "duration": 233, "synced": true},
+      {"track": "Shape of You", "artist": "Ed Sheeran", "album": "÷", "duration": 233, "synced": true}
+    ],
+    "expect": 1
+  },
+  {
+    "name": "日文·正常匹配",
+    "query": {"title": "打上花火", "artist": "DAOKO", "album": "打上花火", "duration": 250},
+    "candidates": [
+      {"track": "打上花火", "artist": "DAOKO", "album": "打上花火", "duration": 250, "synced": true},
+      {"track": "打上花火", "artist": "米津玄師", "album": "BOOTLEG", "duration": 260, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "韩文·艺人用谚文",
+    "query": {"title": "Dynamite", "artist": "BTS", "album": "Dynamite", "duration": 199},
+    "candidates": [
+      {"track": "Dynamite", "artist": "방탄소년단", "album": "Dynamite", "duration": 199, "synced": true},
+      {"track": "Dynamite", "artist": "BTS", "album": "Dynamite", "duration": 210, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "纯音乐·应拒绝",
+    "query": {"title": "Canon in D", "artist": "Pachelbel", "album": "Classic", "duration": 300},
+    "candidates": [
+      {"track": "Canon in D", "artist": "Pachelbel", "album": "Classic", "duration": 300, "synced": true, "instrumental": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "完全无关·应拒绝",
+    "query": {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
+    "candidates": [
+      {"track": "孤勇者", "artist": "陈奕迅", "album": "孤勇者", "duration": 250, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "中文·冷门但正版（标题完全匹配）",
+    "query": {"title": "杀死那个石家庄人", "artist": "万能青年旅店", "album": "冀西南林路行", "duration": 372},
+    "candidates": [
+      {"track": "杀死那个石家庄人", "artist": "万能青年旅店", "album": "冀西南林路行", "duration": 372, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "跨语言·中文标题对英文曲名（专辑桥）",
+    "query": {"title": "痴人说梦", "artist": "谭维维", "album": "崩坏星穹铁道-痴人说梦 Ravings", "duration": 250},
+    "candidates": [
+      {"track": "Ravings", "artist": "谭维维", "album": "崩坏星穹铁道-痴人说梦 Ravings", "duration": 250, "synced": true}
+    ],
+    "expect": 0
+  }
+]

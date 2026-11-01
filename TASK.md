@@ -958,3 +958,35 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py
 - [x] **N1** ruff 干净；新增 `TestOnsetEnvelope`/`TestSnapToOnset`/`TestGuessLanguage`/
       `TestOnsetInAlign` + 语言信号共 13 例单测
 - [x] **N2** 全量回归（本轮结果见交付说明）
+
+---
+
+## v3.0.4 收尾旧待办 + 歌词匹配评测集
+
+两条从早期挂着的待办（#94 / #98）功能主体早已落地，本轮做收尾；另起歌词匹配评测集
+作为「准确率 90%+」需求的第一步。详见 DESIGN.md 40.20。
+
+### O. 崩溃日志收尾（#94）
+
+- [x] **O1** 新增 `tests/test_crashlog.py`（10 例）：写入/追加/静默失败/轮转/钩子/install_qt
+- [x] **O2** 修 `_rotate` 多留一份的 bug（`range(KEEP-1)` → `range(KEEP-2)`）
+- [x] **O3** `run_tests.py` 注册 `tests.test_crashlog`
+
+### P. 在线搜索多平台（#98）
+
+- [x] **P1** `lyrics_multi.build_web_search_urls` / `web_search_url`（复用 LRCLIB 单源实现）
+- [x] **P2** 右键「在线搜索歌词」改子菜单（LRCLIB/网易云/QQ音乐），信号带平台名
+- [x] **P3** `main_window._open_lyrics_search(platform)` 按平台打开；未知平台给提示
+- [x] **P4** 单测：`TestWebSearchUrls`（5 例）+ 菜单子项 emit（1 例）
+
+### Q. 歌词匹配评测集（「准确率 90%+」第一步）
+
+- [x] **Q1** `tools/eval_match.py`（precision / recall / 误配率）
+- [x] **Q2** `tests/fixtures/lyrics_eval/cases.json`（14 条，中/英/日/韩 × 多场景）
+- [x] **Q3** 跑出基线：precision 100% / recall 92% / 误配率 0%（唯一漏配=繁简）
+- [ ] **Q4** 下一轮：繁简/NFKC 归一 → 权重重构 → 跨源投票+置信分档（每步用 eval 量化）
+
+### R. 验收
+
+- [x] **R1** ruff 干净；定向测试 crashlog+multi+menu 56 例全绿
+- [x] **R2** 全量回归 35 模块全绿（10m25s）

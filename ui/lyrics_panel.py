@@ -430,7 +430,8 @@ class LyricsPanel(QWidget):
     import_lyrics_requested = Signal()
     batch_import_requested = Signal()
     # 右键「在线搜索歌词」：联网也匹配不到时，去网页自己搜（v2.6.4）
-    search_online_requested = Signal()
+    # v3.0.4 改为携带平台名（LRCLIB/网易云/QQ音乐），子菜单按平台打开
+    search_online_requested = Signal(str)
     # 右键「转成 .lrc 文件（本地近似对齐）」：纯文本歌词本地对齐成 LRC（v2.6.9）
     align_local_requested = Signal()
     # v3.0.0 右键「AI 对齐歌词（逐字）」：本地 whisper 给每个字真实时间轴
@@ -791,9 +792,14 @@ class LyricsPanel(QWidget):
         retry = QAction("重新联网匹配歌词", menu)
         retry.triggered.connect(self.retry_online_requested.emit)
         menu.addAction(retry)
-        search = QAction("在线搜索歌词…", menu)
-        search.triggered.connect(self.search_online_requested.emit)
-        menu.addAction(search)
+        search_menu = QMenu("在线搜索歌词（去网页找）", menu)
+        from app.lyrics_multi import DEFAULT_SOURCES
+        for _name, _fn in DEFAULT_SOURCES:
+            act = QAction(_name, search_menu)
+            act.triggered.connect(
+                lambda _checked=False, n=_name: self.search_online_requested.emit(n))
+            search_menu.addAction(act)
+        menu.addMenu(search_menu)
         # 右键「转成 .lrc 文件（本地近似对齐）」：离线把纯文本歌词配成带时间轴 LRC。
         # 纯信号处理估算（可能整体差几秒），配合下面的「整体提前/延后」微调。
         align_local = QAction("转成 .lrc 文件（本地近似对齐）", menu)

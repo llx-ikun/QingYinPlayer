@@ -2618,3 +2618,41 @@ windowed 产物没有 `sys.stdout`，所以报告写到 `%TEMP%\qy_ai_check.txt`
 
 **验收**：`onset_envelope` / `snap_to_onset` / `guess_language` / onset 集成 / 语言信号 共 13 例新单测；
 ruff 干净；全量回归（本轮见 TASK K）。
+
+### 40.20 v3.0.4 收尾两条旧待办 + 建歌词匹配评测集（2026-11-01）
+
+**背景**：任务清单里 #94（崩溃日志）、#98（扩展歌词搜索 + 平台与进度显示）从早期一直挂着。
+核实后：**功能主体其实早就随 v2.7.5 / v2.6.x 落地了，只是没标完成**，真正缺的是收尾。
+
+**#94 崩溃日志（功能不动，补测 + 修 bug）**
+- 现状：`app/crashlog.py` 的 `install`/`install_qt`/日志轮转/线程钩子都在，`main.py` 已装、
+  `store.py` 已接入。缺的是专门单测（原来只有 `test_store` 间接覆盖）。
+- 新增 `tests/test_crashlog.py`（10 例）：日志写入/追加、写失败静默、超限轮转、
+  **多次轮转最多保留 KEEP 份**、两处钩子安装、excepthook 落盘、thread_excepthook 忽略
+  SystemExit、install_qt 可调用。
+- **顺带修一个真 bug**：`_rotate` 从 `range(KEEP-1,0,-1)` 起挪，会多产生一份 `.KEEP`，
+  实际留 KEEP+1 份（注释写「连当前共 3 份」）。改成 `range(KEEP-2,0,-1)`。测试抓出来的。
+
+**#98 扩展歌词搜索（补最后一块：手动在线搜索多平台）**
+- 现状：自动多源（LRCLIB/网易云/QQ）、`联网匹配 cur/total · 返回源名` 进度、`来源：xxx`
+  显示**都已具备**。唯一缺口：右键「在线搜索歌词」只打开 lrclib.net，另两个平台没入口。
+- 新增 `lyrics_multi.build_web_search_urls(title, artist)` / `web_search_url(platform, ...)`：
+  按 `DEFAULT_SOURCES` 同一份清单生成各平台「给人看的」网页搜索地址（LRCLIB 复用
+  `lyrics_online.build_web_search_url`，避免两处编码逻辑分叉）。
+- 右键「在线搜索歌词」改成子菜单（LRCLIB / 网易云 / QQ音乐），信号带平台名。
+- **不做**「再加酷狗当第 4 个自动源」：逆向无样本接口、易失效，风险 > 收益（明确取舍）。
+
+**歌词匹配评测集（回应「准确率 90%+」需求的第一步）**
+- 为什么先建：没有逐曲标注真值，「90%」无法验收。匹配逻辑 `pick_best` 是纯函数，
+  用「query + 候选 + 期望」的**构造式黄金集**即可离线、可复现地量化。
+- 新增 `tools/eval_match.py` + `tests/fixtures/lyrics_eval/cases.json`（14 条，覆盖
+  中/英/日/韩 × 正版/同名不同曲/繁简/版次/feat./伴奏/纯音乐/跨语言专辑桥）。
+- **基线（v3.0.4，构造集）**：用例 14｜应命中 12｜配 11 全对（误配 0）｜漏配 1
+  → **precision 100% / recall 92% / 误配率 0%**。唯一漏配是「繁简差异（秘密/祕密）」。
+
+**下一轮算法改进（有基线后逐项改、每步用 eval 量化）**
+1. 归一化：NFKC + 繁→简高频映射（补繁简漏配）+ 去标点；
+2. 相似度：difflib ratio + 分语言 token（中日韩字符 bigram / 拉丁词级）；
+3. 权重重构：标题 > 艺人 > 时长 > 专辑（时长从与标题等价降到佐证级）+ 伴奏/翻唱负信号；
+4. 跨源投票 + 置信分档：≥2 源一致提置信，low 不写盘（对齐「precision 优先」）。
+- 依赖策略：标准库为主，运行时检测到 rapidfuzz 则用于增强（不硬依赖）。

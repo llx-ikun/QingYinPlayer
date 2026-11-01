@@ -19,6 +19,7 @@ from app.lyrics_multi import (
     build_netease_search_url,
     build_qq_lyric_url,
     build_qq_search_url,
+    build_web_search_urls,
     fetch_netease,
     fetch_outcome_multi,
     fetch_qq,
@@ -26,6 +27,7 @@ from app.lyrics_multi import (
     parse_netease_search,
     parse_qq_lyric,
     parse_qq_search,
+    web_search_url,
 )
 
 
@@ -110,6 +112,35 @@ class TestSearchUrl(unittest.TestCase):
         url = build_qq_lyric_url("mid123")
         self.assertIn("songmid=mid123", url)
         self.assertIn("nobase64=1", url)                  # 1 才返回明文 LRC
+
+
+class TestWebSearchUrls(unittest.TestCase):
+    """手动「在线搜索歌词」要多平台（v3.0.4）：自动三源各给一个网页入口。"""
+
+    def test_returns_all_default_sources_in_order(self):
+        urls = build_web_search_urls("晴天", "周杰伦")
+        self.assertEqual([name for name, _ in urls], ["LRCLIB", "网易云", "QQ音乐"])
+
+    def test_lrclib_delegates_to_single_source_builder(self):
+        from app.lyrics_online import build_web_search_url
+        got = dict(build_web_search_urls("晴天", "周杰伦"))
+        self.assertEqual(got["LRCLIB"], build_web_search_url("晴天", "周杰伦"))
+
+    def test_netease_and_qq_carry_encoded_keyword(self):
+        got = dict(build_web_search_urls("晴天", "周杰伦"))
+        self.assertIn("music.163.com", got["网易云"])
+        self.assertIn("y.qq.com", got["QQ音乐"])
+        # 中文关键词要 URL 编码，不能原样出现在地址里
+        self.assertNotIn("晴天", got["网易云"])
+        self.assertNotIn("晴天", got["QQ音乐"])
+
+    def test_web_search_url_by_platform(self):
+        self.assertIn("music.163.com", web_search_url("网易云", "晴天", "周杰伦"))
+        self.assertEqual(web_search_url("酷狗", "晴天"), "", "未知平台返回空串")
+
+    def test_empty_title_and_artist_still_safe(self):
+        for _name, url in build_web_search_urls("", ""):
+            self.assertTrue(url.startswith("https://"))
 
 
 class TestParseNetease(unittest.TestCase):

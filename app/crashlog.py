@@ -39,8 +39,13 @@ def log_path() -> str:
 
 
 def _rotate(path: str) -> None:
-    """app.log → app.log.1 → app.log.2，最老的一份丢弃。"""
-    for index in range(KEEP - 1, 0, -1):
+    """app.log → app.log.1 → app.log.2，最老的一份丢弃。
+
+    只保留 `KEEP` 份（含当前 app.log）：所以要挪动的是 `.1..(KEEP-2)`，最老的
+    `.KEEP-1` 被直接覆盖丢弃。原来从 `KEEP-1` 起挪会多产生一份 `.KEEP`，
+    实际留下 KEEP+1 份（v3.0.4 补测时发现并修正）。
+    """
+    for index in range(KEEP - 2, 0, -1):
         src = f"{path}.{index}"
         if os.path.exists(src):
             os.replace(src, f"{path}.{index + 1}")

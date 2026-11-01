@@ -27,6 +27,8 @@ MODULES = [
     "tests.test_lyrics_asr",
     "tests.test_metadata",
     "tests.test_store",
+    # v2.7.5 崩溃日志（v3.0.4 补测）：日志写入/轮转保留份数/写失败静默/异常钩子安装
+    "tests.test_crashlog",
     # v2.1.9 受管理曲库：导入即复制 / 去重 / 同名冲突 / 扫描器落库
     "tests.test_library",
     # v2.2 联网歌词：URL 构造 / 脏数据 / 选曲打分 / 缓存读写 / 后台线程（不联网）
