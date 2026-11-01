@@ -173,6 +173,47 @@ class TestAttachWords(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_apply_track_words_retimes_to_first_word(self):
+        """AI 对齐后行时间整体偏早：`apply_track_words` 用首字实测时刻重打行轴（v3.0.6）。
+
+        现场就是《唯有追赶风的方向》：LRC 首句标 3.5s，人声实测 8.9s 才起——
+        只贴字不重打行轴，行高亮会提前 5.4s 亮、逐字扫光才动，看起来「对不上」。
+        """
+        tmp = tempfile.mkdtemp(prefix="qy_lyric_words_retime_")
+        try:
+            lines = [LyricLine(3500, "Who can surely know", "风将吹向何方"),
+                     LyricLine(6220, "How the wind blows", "谁也捉摸不透")]
+            lw.save_from_lines("t5", [
+                LyricLine(3500, "Who can surely know",
+                          words=(WordSpan(8920, 9120, "Who can surely know"),)),
+                LyricLine(6220, "How the wind blows",
+                          words=(WordSpan(10890, 11090, "How the wind blows"),)),
+            ], tmp)
+            out = lw.apply_track_words(lines, "t5", tmp)
+            self.assertEqual(out[0].time_ms, 8920, "行时间要重打为实测首字时刻")
+            self.assertEqual(out[0].words[0].start_ms, 8920, "逐字数据原样保留")
+            self.assertEqual(out[0].translation, "风将吹向何方", "译文要跟着原文行走")
+            self.assertEqual(out[1].time_ms, 10890)
+            self.assertEqual(out[1].translation, "谁也捉摸不透")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_apply_track_words_monotonic_when_partial(self):
+        """部分行没 words 时，重打后仍严格递增（min_gap 把夹在中间的行往前推）。"""
+        tmp = tempfile.mkdtemp(prefix="qy_lyric_words_mono_")
+        try:
+            lines = [LyricLine(1000, "一句"),
+                     LyricLine(5000, "没有逐字")]
+            lw.save_from_lines("t6", [
+                LyricLine(1000, "一句", words=(WordSpan(8000, 8500, "一句"),)),
+            ], tmp)
+            out = lw.apply_track_words(lines, "t6", tmp)
+            self.assertEqual(out[0].time_ms, 8000)
+            self.assertEqual(out[1].time_ms, 8120,
+                             "夹在中间的无 words 行被推到上一行之后，保证递增不跳变")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

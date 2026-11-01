@@ -33,7 +33,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.lyrics import LyricLine, WordSpan
 from app.lyrics_local_align import TARGET_SR, decode_mono, rms_envelope
-from app.lyrics_words import save_from_lines
+from app.lyrics_words import retime_lines, save_from_lines  # noqa: F401  # retime_lines re-export 供 `la.retime_lines` 旧调用方用
 from app.models import DEFAULT_AI_MODEL
 
 # ---------- 可调阈值 ----------
@@ -778,29 +778,6 @@ def align_lyrics(lines: list[LyricLine], recognized: list[RecognizedWord],
             max_shift = max(max_shift, abs(block[0].start_ms - line.time_ms))
     return AlignOutcome(out, matched_ratio=ratio, mean_probability=mean_prob,
                         max_shift_ms=max_shift)
-
-
-def retime_lines(lines: list[LyricLine], min_gap_ms: int = 120) -> list[LyricLine]:
-    """用对齐出的首字时间重打**行**时间轴，返回新列表。
-
-    这是「行级误差 6.04s → <0.5s」的落点：本地近似对齐只能按有声段和字数估，前奏一长
-    整条时间轴就整体偏早；whisper 给出的首字时刻是实测值，直接拿来当行起点。
-
-    三条约束：
-    1. 只有拿到逐字数据的行才重打，其余行保持原时间（宁可不改）；
-    2. 时间必须严格递增（间隔至少 `min_gap_ms`），否则高亮会跳来跳去；
-    3. 不写回任何文件——调用方决定这棵新时间轴要不要落成 .lrc。
-    """
-    out: list[LyricLine] = []
-    prev = -1
-    for line in lines or []:
-        time_ms = line.words[0].start_ms if line.words else line.time_ms
-        time_ms = max(0, time_ms)
-        if prev >= 0 and time_ms < prev + min_gap_ms:
-            time_ms = prev + min_gap_ms
-        prev = time_ms
-        out.append(LyricLine(time_ms, line.text, line.translation, line.words))
-    return out
 
 
 def align_track(audio_path: str, lines: list[LyricLine], model_dir: str,

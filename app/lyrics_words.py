@@ -156,10 +156,40 @@ def attach_words(lines: list[LyricLine],
     return out
 
 
+def retime_lines(lines: list[LyricLine], min_gap_ms: int = 120) -> list[LyricLine]:
+    """用对齐出的首字时间重打**行**时间轴，返回新列表（v3.0.6 接入渲染链）。
+
+    这是「行级误差 6.04s → <0.5s」的落点：本地近似对齐只能按有声段和字数估，
+    前奏一长整条时间轴就整体偏早；whisper 给出的首字时刻是实测值，直接拿来当行起点。
+
+    三条约束：
+    1. 只有拿到逐字数据的行才重打，其余行保持原时间（宁可不改）；
+    2. 时间必须严格递增（间隔至少 `min_gap_ms`），否则高亮会跳来跳去；
+    3. 纯内存、不写任何文件——渲染层取到歌词后调 `apply_track_words` 即自动生效，
+       .lrc 与 sidecar 都不动（不构成对用户歌词文件的破坏性写回）。
+    """
+    out: list[LyricLine] = []
+    prev = -1
+    for line in lines or []:
+        time_ms = line.words[0].start_ms if line.words else line.time_ms
+        time_ms = max(0, time_ms)
+        if prev >= 0 and time_ms < prev + min_gap_ms:
+            time_ms = prev + min_gap_ms
+        prev = time_ms
+        out.append(LyricLine(time_ms, line.text, line.translation, line.words))
+    return out
+
+
 def apply_track_words(lines: list[LyricLine], track_id,
                       base_dir: str | None = None) -> list[LyricLine]:
-    """`load_line_words` + `attach_words` 的组合：播放器取到歌词后调这一句即可。"""
-    return attach_words(lines, load_line_words(track_id, base_dir))
+    """`load_line_words` + `attach_words` + `retime_lines` 的组合：播放器取到歌词后调这一句即可。
+
+    贴完逐字数据后，用每行首字的实测时刻重打行时间轴（v3.0.6）。为什么必须做：
+    AI 对齐（whisper）算出的字级时刻是对的，但很多 .lrc 的行时间本身整体偏早
+    （本地近似对齐 / 前奏没算对），行高亮按旧时间提前亮、逐字扫光按实测时间才动，
+    两者错位几秒，表现就是「歌词对不上人声」。行轴校正纯在内存里做，不写任何文件。
+    """
+    return retime_lines(attach_words(lines, load_line_words(track_id, base_dir)))
 
 
 def save_from_lines(track_id, lines: list[LyricLine],
