@@ -268,7 +268,6 @@ class TestSliderKnob(unittest.TestCase):
 
 class TestTrackListLayout(unittest.TestCase):
     """列表页头 / 列头 / 排序控件（v2.1.4）。"""
-
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -715,7 +714,7 @@ class TestLyricsThemeColor(unittest.TestCase):
 
 
 class TestLyricsEffect(unittest.TestCase):
-    """歌词播放动效（v2.6.4）：none/zoom/typewriter/karaoke 单选，非法值回落。"""
+    """歌词播放动效：none/typewriter/karaoke 单选，非法值回落（v3.2.1 去掉 zoom）。"""
 
     @classmethod
     def setUpClass(cls):
@@ -729,13 +728,37 @@ class TestLyricsEffect(unittest.TestCase):
         panel.set_effect("bogus")
         self.assertEqual(panel._effect, "none")
 
-    def test_set_effect_accepts_all_valid_values(self):
+    def test_removed_zoom_falls_back_to_none(self):
+        """v3.2.1 删掉 zoom：老配置/老调用传进来必须安静地退成 none，不能崩。"""
         from ui.lyrics_panel import LyricsPanel
 
         panel = LyricsPanel()
-        for effect in ("zoom", "typewriter", "karaoke", "none"):
+        panel.set_effect("karaoke")
+        panel.set_effect("zoom")
+        self.assertEqual(panel._effect, "none", "zoom 已不是合法值，应回退 none")
+
+    def test_set_effect_accepts_all_valid_values(self):
+        from app.models import LYRICS_EFFECTS
+        from ui.lyrics_panel import LyricsPanel
+
+        panel = LyricsPanel()
+        for effect in LYRICS_EFFECTS:
             panel.set_effect(effect)
             self.assertEqual(panel._effect, effect)
+
+    def test_current_line_always_enlarged_regardless_of_effect(self):
+        """v3.2.1：放大是默认行为，与动效无关。
+
+        `_line_delta()` 签名里根本没有 effect 参数 —— 结构上就不可能再依赖动效。
+        这里再钉一层：三档动效下当前行的增量都必须一样且 > 0。
+        """
+        from app.models import LYRICS_EFFECTS
+        from ui.lyrics_panel import _CURRENT_DELTA, _line_delta
+
+        self.assertGreater(_CURRENT_DELTA, 0)
+        for _effect in LYRICS_EFFECTS:
+            self.assertEqual(_line_delta(True), _CURRENT_DELTA)
+            self.assertEqual(_line_delta(False), 0)
 
     def test_line_progress_mid_line_and_last_line(self):
         from app.lyrics import LyricLine
@@ -764,7 +787,7 @@ class TestLyricsEffect(unittest.TestCase):
         from ui.lyrics_panel import LyricsPanel
 
         panel = LyricsPanel()
-        panel.set_effect("zoom")
+        panel.set_effect("karaoke")
         panel.set_plain(["纯文本歌词"])
         panel.update_position(1000)
         self.assertEqual(panel._current_index, -1)
@@ -1614,6 +1637,78 @@ class TestCoverSide(unittest.TestCase):
         """视图变大，封面不该变小（防止比例写反）。"""
         sides = [self._side(600 + 100 * i, 500 + 60 * i) for i in range(6)]
         self.assertEqual(sides, sorted(sides))
+
+
+class TestDropIndicatorPreview(unittest.TestCase):
+    """v3.2.0 拖拽排序的「实时预览位置」：落点 → 插入行的换算 + 自绘那条线。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def _list(self):
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QListWidgetItem
+        from ui.track_list import _TrackListWidget
+
+        widget = _TrackListWidget()
+        widget.resize(420, 300)
+        for i in range(3):
+            item = QListWidgetItem(f"row{i}")
+            item.setSizeHint(QSize(400, 40))
+            widget.addItem(item)
+        widget.show()
+        self.app.processEvents()
+        return widget
+
+    def test_row_at_top_half_inserts_before(self):
+        from PySide6.QtCore import QPoint
+        widget = self._list()
+        try:
+            rect = widget.visualItemRect(widget.item(0))
+            row = widget._row_at(QPoint(20, rect.top() + 2))
+            self.assertEqual(row, 0, "落在上半行 → 插到这一行之前")
+        finally:
+            widget.deleteLater()
+
+    def test_row_at_bottom_half_inserts_after(self):
+        from PySide6.QtCore import QPoint
+        widget = self._list()
+        try:
+            rect = widget.visualItemRect(widget.item(0))
+            row = widget._row_at(QPoint(20, rect.bottom() - 2))
+            self.assertEqual(row, 1, "落在下半行 → 插到这一行之后")
+        finally:
+            widget.deleteLater()
+
+    def test_row_at_empty_area_appends(self):
+        from PySide6.QtCore import QPoint
+        widget = self._list()
+        try:
+            bottom = widget.viewport().height() - 3
+            self.assertEqual(widget._row_at(QPoint(20, bottom)), 3,
+                             "空白区 → 放到末尾")
+        finally:
+            widget.deleteLater()
+
+    def test_paint_with_drop_row_does_not_crash(self):
+        """自绘插入线必须能安全重绘（QPainter 目标/坐标写错这里会崩或抛异常）。"""
+        widget = self._list()
+        try:
+            for row in (None, 0, 1, 3):
+                widget._drop_row = row
+                pixmap = widget.grab()          # 触发 paintEvent
+                self.assertFalse(pixmap.isNull())
+        finally:
+            widget.deleteLater()
+
+    def test_native_indicator_disabled(self):
+        """原生 drop indicator 必须关掉：它画在行控件底下看不见，还会和自绘那条打架。"""
+        widget = self._list()
+        try:
+            self.assertFalse(widget.showDropIndicator())
+        finally:
+            widget.deleteLater()
 
 
 if __name__ == "__main__":

@@ -326,6 +326,30 @@ class LibraryStore:
             return self.favorite_tracks()
         return self.playlist_tracks(view_id)
 
+    def set_view_order(self, view_id: str, ids: list[str]) -> bool:
+        """按给定顺序重排一个视图（v3.2.0 拖拽排序落盘）。
+
+        歌单 → 直接改 `Playlist.track_ids`（和 `move_in_playlist` 落到同一处，
+        两条路径不会各存一份互相打架）；音乐库 / 我喜欢 → 存
+        `settings.view_orders`。返回 False 表示这个视图不支持自定义顺序
+        （例如「最近播放」，它按播放时间动态排，存下来的顺序立刻会被重算打乱）。
+
+        防御性过滤：只接受曲库里真有的 id，其余的丢掉 —— 拖拽中途删歌、或外部的
+        手改 JSON 都可能带来幽灵 id。
+        """
+        valid = [tid for tid in ids if tid in self.tracks]
+        if view_id in (PLAYLIST_LIBRARY, PLAYLIST_FAVORITES):
+            self.settings.view_orders[view_id] = valid
+            return True
+        pl = self.get_playlist(view_id)
+        if pl is None or view_id == PLAYLIST_RECENT:
+            return False
+        kept = [tid for tid in valid if tid in pl.track_ids]
+        rest = [tid for tid in pl.track_ids if tid not in kept]
+        # rest 兜住「没出现在显示列表里」的歌单条目，绝不能因为一次拖拽把它们弄丢
+        pl.track_ids = kept + rest
+        return True
+
     def view_name(self, view_id: str) -> str:
         if view_id == PLAYLIST_LIBRARY:
             return "音乐库"

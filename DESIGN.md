@@ -2915,3 +2915,130 @@ v2.8.3 曾把「主题」和「背景」**刻意拆开**：主题只管配色，
 | 单选搬页漏掉某个主题导致选不到 | 新增 `test_groups_cover_every_theme_exactly_once`（不漏不重） |
 | 循环顺序退化成「深深浅浅」 | 新增 `test_order_alternates_dark_and_light` |
 | 「纯黑/纯白」名不副实 | 新增 `test_pure_themes_are_actually_pure`（亮度 <0.02 / >0.97） |
+
+---
+
+### 42. v3.2.0 拖拽排序取代「上移/下移」，纯色主题归入「外观」页
+
+> 两个需求同一轮落地：①「曜石/珍珠」两个纯色主题从「背景」页挪到「外观」页；
+> ② 删掉右键「上移/下移」，改成任意列表拖拽排序 + 实时插入位置预览。
+
+#### 1. 主题按「有没有装饰底纹」分页，不按明暗分页
+
+v3.1.0 把四套配色都塞进了「背景」页。用户看过真实界面后要求把两个**纯色**主题
+（曜石/珍珠）放到「外观」。这不是随手挪位置，背后有一条能站住的划分：
+
+| 页 | 主题 | 共同点 |
+|----|------|--------|
+| 设置 → **外观** | 曜石 · 纯黑 / 珍珠 · 纯白 | 只换配色，**不含任何底纹**，和强调色、字号是同一类"看起来怎样" |
+| 设置 → **背景** | 星夜 · 深色 / 月白 · 浅色 | 带装饰底纹（渐变/光雾），要和背景图案一起权衡才配得好看 |
+
+明暗归类（`THEME_GROUPS` 的深色系/浅色系）**保留**，它承载的是"这一套是深还是浅"，
+与摆放位置正交 —— 所以两页都用同一套渲染函数 `_add_theme_rows(root, bucket)`，
+只是传入的 bucket 不同（`THEME_SOLID` / `THEME_PATTERNED`）。
+
+#### 2. 单选跨页必须用 QButtonGroup，不能靠 parent 互斥
+
+`QRadioButton` 的互斥是**按 parent 分组**的。四套单选分到两个页面控件下之后，
+默认会各亮一个 —— 界面上同时显示两套配色被选中。修法：
+
+- 四套单选**一次性建好**（顺序按 `THEME_GROUPS`），再分别 `addWidget` 进两页；
+- 全部 `addButton` 进同一个 `QButtonGroup(self)`，由它跨页互斥。
+
+「建好再分发」比"各页自己建"好处在状态只有一个来源：不存在两处不同步。
+`test_theme_radios_exclusive_across_pages` 专门钉住这条，防止有人把它"优化"成各自建。
+
+#### 3. 删「上移/下移」的理由：两条路径必然打架
+
+原来右键菜单有「上移/下移」，歌单视图还能拖。两个入口操作同一个 `track_ids`，
+但**拖拽是"整块搬到某个位置"，上移是"和邻居换一次"** —— 多选拖拽时前者搬的是一段，
+后者只能挪一首，两种语义混在一起，用户没法预期。删掉按钮，只留拖拽。
+
+#### 4. 拖拽的语义：存"看到的顺序"，不是"做一次 swap"
+
+`_on_reordered(tids, new_index)` 收到的是**新位置**，但落盘用的是：
+
+```python
+ids = [t.id for t in self._displayed]   # 屏幕上这个列表，从前往后
+picked = [tid for tid in tids if tid in ids]
+for tid in picked: ids.remove(tid)
+ids[new_index:new_index] = picked       # 整块插回去
+store.set_view_order(view_id, ids)
+```
+
+为什么绕这一圈而不直接 `move(tid, new_index)`：拖动发生在用户眼前那个列表上，而它
+可能正被「按艺人排序」重排过、也可能属于某个歌单。用户认定的"新顺序"就是屏幕上的
+样子 —— 整份存下来，无论当前用哪种排序，结果都和眼睛看到的一致，也不用为每种视图
+各写一套下标换算。
+
+配套的三件事缺一不可：
+
+1. **拖完自动切「自定义顺序」**（否则下次 `refresh_list()` 按原规则重排，表现就是
+   「拖了弹回去」）。切的时候同步 `_sort_by_view`，离开再回来还是这个选择。
+2. **落盘位置分两处**：歌单改 `Playlist.track_ids`（和 `move_in_playlist` 同一处，
+   不另存一份）；音乐库/我喜欢 存 `Settings.view_orders`（`tracks` 字典的插入序
+   不能动，动了会连带影响「最近导入」）。
+3. **多选要整块报**：`reordered` 信号从 `(str, int)` 改成 `(list, int)`。原来只报
+   `moved[0]`，拖一整段时上层只能看到第一首，落盘顺序和眼睛看到的差一截。
+
+#### 5. 两种视图禁拖，理由都是"拖了立刻被覆盖"
+
+| 视图 | 为什么不给拖 |
+|------|------------|
+| 最近播放 | 按播放时间动态排，放下后一刷新就变回原样 |
+| 搜索中的任意列表 | 显示的是子集，按可见顺序落盘会把没显示的曲子挤到末尾 |
+
+#### 6. 实时预览：自己画，因为原生指示线看不见
+
+每行都是 `setItemWidget` 塞进去的自定义控件，Qt 原生的 drop indicator 画在行控件
+**底下**，被完全盖住。所以 `_TrackListWidget` 自己来：
+
+- `dragMoveEvent` 里 `indexAt(pos)` + 与行中线比较 → 插入位置（上半行插前、下半行插后，
+  空白区=末尾）；
+- `paintEvent` 里在目标行的上/下边缘画 2px 强调色横线 + 两端小圆点（一条光秃秃的线
+  容易被当成行分隔线）；
+- `setDropIndicatorShown(False)` 关掉原生那条，否则两条同时出现像有两个落点。
+
+#### 7. 风险与验证
+
+| 风险 | 处理 |
+|------|------|
+| 纯色主题挪走后界面选不到 | `test_pages_partition_every_theme_exactly_once`（不漏不重） |
+| 跨页单选双亮 | `test_theme_radios_exclusive_across_pages` |
+| 拖完弹回去 | `test_library_drag_switches_to_custom_and_saves` 断言 `_sort_id` 变 custom |
+| 关软件丢顺序 | 同一例用新 `LibraryStore(data_file())` 复读验证 |
+| 新导入的歌毁掉手排顺序 | `apply_manual_order` 把没记录的接到末尾（`test_new_tracks_go_last_...`） |
+| 幽灵 id / 脏 JSON | `_as_view_orders` 逐条隔离 + 去重（`test_bad_view_orders_do_not_wipe_settings`） |
+| 一次拖拽弄丢歌单里没显示的曲子 | `set_view_order` 用 `rest` 兜住（`test_playlist_order_keeps_tracks_missing_from_display`） |
+| 自绘插入线画崩 | `test_paint_with_drop_row_does_not_crash` 逐个位置 `grab()` |
+
+---
+
+### 43. v3.2.1 移除「放大当前行」：放大是默认行为，不是选项
+
+**需求**：删掉动效下拉里的「放大当前行」，改为当前播放行始终自动放大。
+
+#### 判定：这是「把一个选项降级为默认」，不是「删功能」
+
+用户要的从来不是"能不能放大"，而是"歌词好看好读"。把放大做成四个选项之一，
+代价是**默认体验次优**：不选它的用户一直在看小字号当前行，还得先发现、再选一遍。
+
+所以做法不是简单删一项，而是：
+
+1. `LYRICS_EFFECTS` 从 4 个减到 3 个（none / typewriter / karaoke）；
+2. 当前行字号增量**无条件生效**，取原来 zoom 的 `+6`（不是 none 的 `+3`）——
+   既然要替掉那个选项，效果就得和它一样；
+3. `_line_delta(is_current)` 的签名里**故意没有 effect**：从结构上保证没人能再让它
+   依赖动效（旧代码就是 `_ZOOM_DELTA if effect == "zoom" else _NORMAL_DELTA`）。
+
+#### 兼容
+
+老配置 `lyrics_effect="zoom"` 读出来会落到 `"none"`（`Settings.from_dict` 按
+`LYRICS_EFFECTS` 收敛），表现正好等于「只是放大」这一默认行为 —— 用户不会看到
+效果变化，也不会丢别的设置。`set_effect("zoom")` 同样安静回退，不抛异常。
+
+#### 为什么要专门写一条防回归测试
+
+`test_zoom_is_not_an_option_anymore` 同时在两处断言「没有 zoom」：`LYRICS_EFFECTS`
+（数据层）与 `LYRICS_EFFECT_OPTIONS` 的文案里不含「放大」（界面层）。
+理由：这类"加回去更灵活"的改动看起来无害，但会把默认体验重新做差一次。

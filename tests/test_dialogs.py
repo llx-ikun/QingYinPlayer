@@ -312,10 +312,11 @@ class TestAiSettings(unittest.TestCase):
 
 
 class TestLyricsEffectNaming(unittest.TestCase):
-    """歌词动效的界面文案体系（v3.0.9）。
+    """歌词动效的界面文案体系（v3.0.9，v3.2.1 去掉「放大当前行」）。
 
-    为什么文案值得单测：它改错了不会报错，只会让用户**选错效果**。这里钉住四件事——
-    值全覆盖、名字唯一、不与「歌词颜色覆盖」分区重名、文案只有一处定义。
+    为什么文案值得单测：它改错了不会报错，只会让用户**选错效果**。这里钉住五件事——
+    值全覆盖、名字唯一、不与「歌词颜色覆盖」分区重名、文案只有一处定义、
+    以及「放大」不再作为选项存在。
     """
 
     def test_options_cover_all_effect_values_in_order(self):
@@ -324,6 +325,19 @@ class TestLyricsEffectNaming(unittest.TestCase):
         self.assertEqual(
             got, list(LYRICS_EFFECTS),
             "下拉项必须与 LYRICS_EFFECTS 一一对应且顺序一致，否则某个效果在界面上选不到")
+
+    def test_zoom_is_not_an_option_anymore(self):
+        """v3.2.1：「当前行始终放大」，放大不该再出现在下拉里。
+
+        防回归的意义在于 —— 有人可能觉得"加回去更灵活"，但那会把默认体验
+        做成次优（默认不放大，要用户自己发现还有个放大选项）。
+        """
+        from app.models import LYRICS_EFFECTS
+        values = [v for _l, v in dlg_mod_settings.LYRICS_EFFECT_OPTIONS]
+        self.assertNotIn("zoom", values)
+        self.assertNotIn("zoom", LYRICS_EFFECTS)
+        for label, _v in dlg_mod_settings.LYRICS_EFFECT_OPTIONS:
+            self.assertNotIn("放大", label, "放大已不是可选项，别留在文案里")
 
     def test_labels_are_unique(self):
         labels = [label for label, _v in dlg_mod_settings.LYRICS_EFFECT_OPTIONS]

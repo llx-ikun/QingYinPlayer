@@ -151,6 +151,12 @@ THEME_GROUPS = (
     ("深色系", ("columbina", "obsidian")),
     ("浅色系", ("light", "pearl")),
 )
+# 主题归哪个设置页（v3.1.1）：带装饰底纹的留在「背景」页，和背景图案放一起调；
+# 纯色主题（一条纯黑/纯白，不含任何底纹）跟强调色、字号一样属于「外观」，
+# 挪到「外观」页。"归哪页"只影响摆在哪，与 THEME_ORDER 的切换顺序无关 ——
+# 四套仍然按同一个循环轮转（浮动条那个按钮不分页）。
+THEME_PATTERNED = ("columbina", "light")   # 带装饰底纹 → 设置-背景
+THEME_SOLID = ("obsidian", "pearl")        # 纯色 → 设置-外观
 DEFAULT_THEME = "light"      # 新装默认「月白」浅色主题
 
 

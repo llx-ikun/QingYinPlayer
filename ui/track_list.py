@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QModelIndex, QSize, Qt, Signal
+from PySide6.QtCore import QModelIndex, QPoint, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -49,6 +50,71 @@ _HEAD_PAD_R = _ITEM_MARGIN_H + _ROW_PAD_R          # 14
 _ROW_PAD_V = 6
 _ROW_H = 52
 _SPACING = 8
+
+
+class _TrackListWidget(QListWidget):
+    """列表本体：拖拽时在落点画一条强调色插入线（v3.2.0）。
+
+    为什么不用 Qt 自带的 drop indicator：每行都是 `setItemWidget` 塞进去的自定义
+    控件，原生指示线画在行控件底下，被完全盖住 —— 拖动时看不见会落在哪，等于没有
+    预览。这里自己算目标行、自己画，保证「实时预览位置」真的看得见。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drop_row: int | None = None
+        # 关掉原生指示线，否则与自绘那条同时出现，看着像有两个落点
+        self.setDropIndicatorShown(False)
+
+    # ---- 拖拽预览 ----
+
+    def _row_at(self, pos) -> int:
+        """落点 → 插入位置：落在行的上半部分插到它前面，下半部分插到它后面。"""
+        index = self.indexAt(pos)
+        if not index.isValid():
+            return self.count()          # 空白区 = 放到最后
+        rect = self.visualItemRect(self.item(index.row()))
+        if rect.height() and pos.y() > rect.center().y():
+            return index.row() + 1
+        return index.row()
+
+    def _set_drop_row(self, row: int | None) -> None:
+        if row != self._drop_row:
+            self._drop_row = row
+            self.viewport().update()
+
+    def dragMoveEvent(self, event):  # noqa: N802
+        super().dragMoveEvent(event)
+        self._set_drop_row(self._row_at(event.position().toPoint()))
+
+    def dragLeaveEvent(self, event):  # noqa: N802
+        self._set_drop_row(None)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):  # noqa: N802
+        self._set_drop_row(None)
+        super().dropEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        if self._drop_row is None or not self.count():
+            return
+        row = min(self._drop_row, self.count() - 1)
+        rect = self.visualItemRect(self.item(row))
+        if not rect.isValid():
+            return
+        y = rect.bottom() - 1 if self._drop_row > row else rect.top() + 1
+        color = QColor(current_theme().ACCENT)
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(color, 2))
+        painter.drawLine(rect.left() + 6, y, rect.right() - 6, y)
+        # 两端各一个圆点：一条光秃秃的线容易被当成行分隔线
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        for x in (rect.left() + 6, rect.right() - 6):
+            painter.drawEllipse(QPoint(x, y), 3, 3)
+        painter.end()
 
 
 def format_badge(fmt: str) -> tuple[str, str]:
@@ -232,7 +298,7 @@ class TrackItemWidget(QWidget):
 class TrackList(QWidget):
     track_activated = Signal(str, int)      # (track_id, 视图内索引)
     context_action = Signal(str, str)       # (track_id, action)
-    reordered = Signal(str, int)            # (track_id, new_index)
+    reordered = Signal(list, int)            # (被拖动的 track_id 列表, 新位置)
     play_all_requested = Signal()
     sort_changed = Signal(str)              # 排序预设 id，形如 "size:desc"
     now_playing_requested = Signal()
@@ -248,7 +314,7 @@ class TrackList(QWidget):
         root.addWidget(self._build_column_header())
 
         # ---- 列表 ----
-        self.list = QListWidget()
+        self.list = _TrackListWidget()
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setUniformItemSizes(True)
@@ -497,19 +563,22 @@ class TrackList(QWidget):
         if not moved:
             return
         new_index = destination if destination < start else destination - (end - start + 1)
-        self.reordered.emit(moved[0].id, max(0, new_index))
+        new_index = max(0, new_index)
+        # v3.2.0：整块一起报（原来只报 moved[0]，多选拖一整段时上层只能看到第一首，
+        # 落盘顺序会和眼睛看到的差一截）。上层负责把这几个 id 整体移动到新位置。
+        self.reordered.emit([t.id for t in moved], new_index)
         # 同步内部顺序，保持 UI 与数据一致
         rest = self._tracks[:start] + self._tracks[end + 1:]
         new_index = max(0, min(new_index, len(rest)))
         self._tracks = rest[:new_index] + moved + rest[new_index:]
 
     def _menu_actions(self):
+        # v3.2.0：去掉「上移 / 下移」—— 改成直接拖拽，拖动时有插入位置预览，
+        # 一次能把歌拖到任意位置，比连点十几次上移快得多。
         return [
             ("play", "播放", True),
             ("add_to_playlist", "添加到歌单…", True),
             ("remove_from_playlist", "从歌单移除", self._in_playlist),
-            ("move_up", "上移", self._in_playlist),
-            ("move_down", "下移", self._in_playlist),
             ("bind_lyrics", "导入歌词文件…", True),
             ("refresh", "重新读取歌曲信息", True),
             ("locate", "在文件资源管理器中显示", True),

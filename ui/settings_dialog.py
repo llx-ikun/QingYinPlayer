@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""设置对话框：外观（主题/强调色/字号）、自定义背景、歌词与统计。
+"""设置对话框：外观（纯色主题/强调色/字号）、背景（装饰主题/底图）、歌词与统计。
 
 v2.2 的三条设计取舍：
 1. **一个色值**（强调色）：hover/dim/soft/on_accent 由 theme 派生，不让用户手调四档
@@ -16,6 +16,7 @@ import os
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QColorDialog,
     QDialog,
@@ -66,16 +67,18 @@ FONT_SCALE_OPTIONS = [
 # 歌词播放动效（v2.6.4，单选）：与 app/models.py 的 LYRICS_EFFECTS 一一对应。
 #
 # v3.0.9 命名体系重排。旧命名有四个问题：
-#   1. 「无特效」其实是「关闭」，与另外三个效果不在同一层级；
+#   1. 「无特效」其实是「关闭」，与另外几个效果不在同一层级；
 #   2. 「打字机」是比喻，不说明效果；
 #   3. 两条逐字效果（typewriter / karaoke）的**唯一差别**是「未唱的字显示不显示」，
 #      旧名里完全没写，用户只能靠试；
 #   4. **重名**：「karaoke」旧名「颜色覆盖」，与下方 v2.9.0 的「歌词颜色覆盖」分区
 #      重名 —— 前者是动效、后者是配色配置，用户以为是同一件事。
 # 现在统一成「动什么 + 怎么动」，并把两条逐字效果的差别直接写进名字。
+#
+# v3.2.1 移除「放大当前行」：**当前行始终自动放大**，不再是一个选项。放大是歌词最
+# 基本的可读性要求，让它躺在下拉里等人挑，等于把默认体验做成了次优。
 LYRICS_EFFECT_OPTIONS = [
     ("无动效（仅高亮）", "none"),
-    ("放大当前行", "zoom"),
     ("逐字显示（未唱不显示）", "typewriter"),
     ("逐字上色（未唱淡显）", "karaoke"),
 ]
@@ -165,7 +168,7 @@ class SettingsDialog(QDialog):
     online_lyrics_changed = Signal(bool)
     accent_changed = Signal(str)         # "#rrggbb"，"" = 跟随主题默认
     font_scale_changed = Signal(float)
-    lyrics_effect_changed = Signal(str)  # none / zoom / typewriter / karaoke
+    lyrics_effect_changed = Signal(str)  # none / typewriter / karaoke
     lyrics_color_changed = Signal(object)  # v2.9.0：LyricsColorConfig
     ai_model_changed = Signal(str)       # v3.0.0：AI 逐字对齐的模型档位
     ai_language_changed = Signal(str)    # v3.0.3：AI 识别语言（auto/zh/en）
@@ -206,13 +209,38 @@ class SettingsDialog(QDialog):
             self._bg[scope] = (BackgroundConfig.from_dict(source.to_dict())
                                if isinstance(source, BackgroundConfig) else BackgroundConfig())
 
+        # v3.1.1：四套配色的单选**一次性建好**，再分别摆进「外观 / 背景」两页。
+        # 为什么不各页自己建：
+        # 1) QRadioButton 的互斥是按 parent 分组的 —— 分在两页会各亮一个（两套配色
+        #    同时显示为选中），必须靠 QButtonGroup 跨页统一互斥；
+        # 2) 「归哪页」只是摆放位置，状态只有一个，建好再分发不会出现两处不同步。
+        self.theme_group = QButtonGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_radios: dict[str, QRadioButton] = {}
+        for _group_name, _ids in ui_theme.THEME_GROUPS:
+            for _tid in _ids:
+                radio = QRadioButton(ui_theme.theme_caption(_tid))
+                _solid = _tid in ui_theme.THEME_SOLID
+                radio.setToolTip(
+                    f"{ui_theme.THEME_TONE[_tid]}配色"
+                    + ("，不含装饰底纹" if _solid else "，带装饰底纹")
+                    + "；可与任意背景图案自由搭配（图案在「背景」页选）")
+                radio.setChecked(_tid == self._theme_name)
+                radio.toggled.connect(
+                    lambda checked, t=_tid: checked and self._on_theme(t))
+                self.theme_group.addButton(radio)
+                self.theme_radios[_tid] = radio
+        self.light_radio = self.theme_radios["light"]   # 兼容旧引用
+
         root = QVBoxLayout(self)
         root.setSpacing(10)
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("SettingsTabs")
-        self.tabs.addTab(self._build_appearance_tab(nickname), "外观")
-        self.tabs.addTab(self._build_background_tab(), "背景")
+        self.appearance_page = self._build_appearance_tab(nickname)
+        self.tabs.addTab(self.appearance_page, "外观")
+        self.background_page = self._build_background_tab()
+        self.tabs.addTab(self.background_page, "背景")
         self.tabs.addTab(self._build_misc_tab(stats, online_lyrics), "歌词与统计")
         self.tabs.addTab(self._build_storage_tab(), "存储")
         root.addWidget(self.tabs, 1)
@@ -241,9 +269,13 @@ class SettingsDialog(QDialog):
         form.addRow("昵称", self.nickname_edit)
         root.addLayout(form)
 
-        # v3.1.0：主题单选从「外观」页搬到「背景」页 —— 主题决定配色、背景决定
-        # 底图，两者都是「这一页长什么样」，分散在两个页签里用户找不到。
-        # 注意：搬位置**不等于合并概念**，主题与背景仍然正交（任何主题配任何背景）。
+        # v3.1.1：纯色主题（曜石 / 珍珠）放「外观」页 —— 它们只是把整套配色换成
+        # 一条纯黑/纯白，不涉及任何底纹，和强调色、字号属于同一类"看起来怎样"的设置。
+        # 带装饰底纹的星夜/月白仍在「背景」页，跟背景图案放一起调。
+        # 注意：换个摆放位置**不等于**主题与背景合并，两者仍然正交（任何主题配任何背景）。
+        root.addWidget(QLabel("纯色主题"))
+        self._add_theme_rows(root, ui_theme.THEME_SOLID)
+        root.addSpacing(4)
 
         accent_row = QHBoxLayout()
         accent_row.setSpacing(6)
@@ -281,7 +313,8 @@ class SettingsDialog(QDialog):
         font_row.addStretch(1)
         root.addLayout(font_row)
 
-        hint = QLabel("外观改动立即生效，可以一边看一边调。")
+        hint = QLabel("外观改动立即生效，可以一边看一边调。"
+                      "纯色主题不含底纹，想要星空 / 云海底纹请到「背景」页。")
         hint.setObjectName("Dim")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -290,6 +323,28 @@ class SettingsDialog(QDialog):
         self._sync_swatches()
         return page
 
+    def _add_theme_rows(self, root: QVBoxLayout, bucket: tuple[str, ...]) -> None:
+        """把属于某一页的主题单选摆出来，仍按「深色系 / 浅色系」标明明暗。
+
+        bucket 取 `ui_theme.THEME_SOLID`（外观页）或 `THEME_PATTERNED`（背景页）。
+        分组标签保留，因为它承载的是"这一套是深还是浅"的信息 —— 分页只是摆放位置，
+        与明暗归类无关。
+        """
+        for group_name, ids in ui_theme.THEME_GROUPS:
+            picked = [tid for tid in ids if tid in bucket]
+            if not picked:
+                continue
+            group_row = QHBoxLayout()
+            group_row.setSpacing(14)
+            group_label = QLabel(group_name)
+            group_label.setObjectName("Dim")
+            group_label.setFixedWidth(46)   # 两组对齐，别让「深色系/浅色系」抖
+            group_row.addWidget(group_label)
+            for tid in picked:
+                group_row.addWidget(self.theme_radios[tid])
+            group_row.addStretch(1)
+            root.addLayout(group_row)
+
     # ---------- 页 2：背景 ----------
 
     def _build_background_tab(self) -> QWidget:
@@ -297,30 +352,11 @@ class SettingsDialog(QDialog):
         root = QVBoxLayout(page)
         root.setSpacing(10)
 
-        # v3.1.0：配色主题（4 个，按明暗分两组）+ 背景图案（2 张内置图）。
-        # 两块**互不联动**：主题换的是配色，图案换的是底图，可以任意搭配。
+        # v3.1.1：这一页只剩带装饰底纹的两套（星夜 / 月白）；纯色的曜石 / 珍珠
+        # 已移到「外观」页。两块**互不联动**：主题换的是配色，图案换的是底图，
+        # 可以任意搭配。
         root.addWidget(QLabel("配色主题"))
-        self.theme_radios: dict[str, QRadioButton] = {}
-        for group_name, ids in ui_theme.THEME_GROUPS:
-            group_row = QHBoxLayout()
-            group_row.setSpacing(14)
-            group_label = QLabel(group_name)
-            group_label.setObjectName("Dim")
-            group_label.setFixedWidth(46)   # 两组对齐，别让「深色系/浅色系」抖
-            group_row.addWidget(group_label)
-            for tid in ids:
-                radio = QRadioButton(ui_theme.theme_caption(tid))
-                radio.setToolTip(f"{ui_theme.THEME_TONE[tid]}配色，"
-                                 f"可与下方任意背景图案搭配")
-                radio.setChecked(tid == self._theme_name)
-                radio.toggled.connect(
-                    lambda checked, t=tid: checked and self._on_theme(t))
-                group_row.addWidget(radio)
-                self.theme_radios[tid] = radio
-            group_row.addStretch(1)
-            root.addLayout(group_row)
-        # 兼容旧引用（E2E 用 light_radio 直接勾选浅色）
-        self.light_radio = self.theme_radios["light"]
+        self._add_theme_rows(root, ui_theme.THEME_PATTERNED)
 
         root.addSpacing(8)
 
@@ -477,11 +513,12 @@ class SettingsDialog(QDialog):
         effect_row.addWidget(self.effect_combo)
         effect_row.addStretch(1)
         root.addLayout(effect_row)
-        # 名字已经自带说明了效果，这里不再重复罗列；改为说清两件名字答不了的事：
-        # 作用范围（只当前句）与它和下方「歌词颜色覆盖」的关系（正交，可同时开）。
+        # 名字已经自带说明了效果，这里不再重复罗列；改为说清三件名字答不了的事：
+        # 作用范围（只当前句）、**当前行始终放大**（v3.2.1 起不是选项），
+        # 以及它和下方「歌词颜色覆盖」的关系（正交，可同时开）。
         effect_hint = QLabel(
-            "只作用于正在播放页的当前这一句；与下方「歌词颜色覆盖」的配色互不影响，"
-            "可以同时开启。")
+            "只作用于正在播放页的当前这一句；当前播放的这句始终会自动放大，"
+            "无需额外设置。与下方「歌词颜色覆盖」的配色互不影响，可以同时开启。")
         effect_hint.setObjectName("Dim")
         effect_hint.setWordWrap(True)
         root.addWidget(effect_hint)

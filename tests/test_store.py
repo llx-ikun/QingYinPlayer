@@ -433,5 +433,84 @@ class TestDamagedData(unittest.TestCase):
         self.assertTrue(os.path.exists(self.db))
 
 
+class TestViewOrder(unittest.TestCase):
+    """v3.2.0 拖拽排序落盘：歌单改 track_ids，音乐库/我喜欢 存 settings.view_orders。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="qy_order_")
+        self.db = os.path.join(self.tmp, "data.json")
+        self.paths = [os.path.join(self.tmp, f"歌曲{i}.mp3") for i in range(3)]
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _store(self):
+        s = LibraryStore(self.db)
+        for i, p in enumerate(self.paths):
+            s.add_or_update(_meta(title=f"歌曲{i}"), p)
+        s.save()
+        return s
+
+    def test_library_order_persists_across_restart(self):
+        s = self._store()
+        tids = [t.id for t in s.all_tracks()]
+        self.assertTrue(s.set_view_order(PLAYLIST_LIBRARY, list(reversed(tids))))
+        s.save()
+        # 重启（新实例读同一个 data.json）
+        again = LibraryStore(self.db)
+        self.assertEqual(again.settings.view_orders[PLAYLIST_LIBRARY],
+                         list(reversed(tids)))
+
+    def test_playlist_order_writes_into_playlist(self):
+        """歌单顺序只有一处存储：拖拽和「上移下移」都落在 track_ids，不会各存一份。"""
+        s = self._store()
+        pl = s.create_playlist("顺序")
+        tids = [t.id for t in s.all_tracks()]
+        s.add_to_playlist(pl.id, tids)
+        self.assertTrue(s.set_view_order(pl.id, list(reversed(tids))))
+        self.assertEqual(s.get_playlist(pl.id).track_ids, list(reversed(tids)))
+
+    def test_playlist_order_keeps_tracks_missing_from_display(self):
+        """显示列表里没出现的歌单条目不能被一次拖拽弄丢。
+
+        场景：以后若加了搜索/过滤，displayed 只是子集；防御性保底不该丢数据。
+        """
+        s = self._store()
+        pl = s.create_playlist("顺序")
+        tids = [t.id for t in s.all_tracks()]
+        s.add_to_playlist(pl.id, tids)
+        s.set_view_order(pl.id, [tids[1]])
+        self.assertEqual(s.get_playlist(pl.id).track_ids,
+                         [tids[1], tids[0], tids[2]])
+
+    def test_recent_view_rejects_custom_order(self):
+        """「最近播放」按播放时间动态排，存下来的顺序立刻会被重算打乱 → 明确拒绝。"""
+        s = self._store()
+        self.assertFalse(s.set_view_order(PLAYLIST_RECENT, []))
+
+    def test_unknown_track_ids_dropped(self):
+        s = self._store()
+        self.assertTrue(s.set_view_order(PLAYLIST_LIBRARY, ["不存在的id"]))
+        self.assertEqual(s.settings.view_orders[PLAYLIST_LIBRARY], [])
+
+    def test_bad_view_orders_do_not_wipe_settings(self):
+        """data.json 里 view_orders 脏掉时，逐条隔离，别把整块设置打回默认。"""
+        from app.models import Settings
+
+        settings = Settings.from_dict({
+            "nickname": "阿坤",
+            "view_orders": {
+                PLAYLIST_LIBRARY: ["a", "a", "b", 3, "", "c"],
+                PLAYLIST_FAVORITES: "不是列表",
+                "": ["x"],
+            },
+        })
+        self.assertEqual(settings.nickname, "阿坤")
+        self.assertEqual(settings.view_orders[PLAYLIST_LIBRARY], ["a", "b", "c"],
+                         "重复/非法 id 要剔掉")
+        self.assertNotIn(PLAYLIST_FAVORITES, settings.view_orders)
+        self.assertNotIn("", settings.view_orders)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,7 @@ class TestPaletteFormat(unittest.TestCase):
                          {"columbina", "obsidian", "light", "pearl"})
 
     def test_groups_cover_every_theme_exactly_once(self):
-        """背景页按「深色系/浅色系」分组，分组必须不漏不重（v3.1.0）。
+        """分组必须不漏不重（v3.1.0）。
 
         漏一个 → 那个主题在设置页里选不到；重复 → 出现两个单选按钮抢同一个值，
         勾选状态会打架。
@@ -50,6 +50,23 @@ class TestPaletteFormat(unittest.TestCase):
         flat = [tid for _name, ids in THEME_GROUPS for tid in ids]
         self.assertEqual(len(flat), len(set(flat)), "分组里有重复主题")
         self.assertEqual(set(flat), set(THEMES), "分组遗漏了某个主题")
+
+    def test_pages_partition_every_theme_exactly_once(self):
+        """「归哪页」也必须不漏不重（v3.1.1）。
+
+        四套配色按页拆开摆：纯色的曜石/珍珠在「外观」页，带装饰底纹的星夜/月白
+        在「背景」页。漏一个 → 那个主题在界面上**彻底选不到**（比"分组漏了"更狠，
+        因为另一页也不会兜住它）；重复 → 两页各一个单选抢同一个值，靠 QButtonGroup
+        才不至于双亮，但状态迟早不同步。
+        """
+        from ui.theme import THEME_PATTERNED, THEME_SOLID
+
+        flat = list(THEME_SOLID) + list(THEME_PATTERNED)
+        self.assertEqual(len(flat), len(set(flat)), "同一个主题被摆到了两页")
+        self.assertEqual(set(flat), set(THEMES), "有主题不属于任何一页")
+        # 纯色主题必须真的纯（这就是它归「外观」的理由），别把带底纹的挪过去
+        for tid in THEME_SOLID:
+            self.assertIn(tid, ("obsidian", "pearl"))
 
     def test_caption_joins_label_and_tone(self):
         from ui.theme import THEME_TONE, theme_caption

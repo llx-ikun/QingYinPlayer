@@ -2,13 +2,16 @@
 """歌词面板：同步高亮 + 平滑自动滚动 + 点击跳转 + 播放动效。
 
 v2.6.4 起引入「歌词播放动效」（单选）：
-- none        无动效（当前行加粗 + 强调色，字号 +3，行为与之前一致）；
-- zoom        放大当前行（字号 +6，更醒目）；
+- none        无动效（当前行加粗 + 强调色 + 字号放大）；
 - typewriter  逐字显示（未唱的字**不画**，唱到才出现）；
 - karaoke     逐字上色（未唱的字**淡色画出**，唱到变亮）。
 
 后两条是同一族（都按字推进），唯一差别是「未唱的字显示不显示」—— 界面文案
 （v3.0.9）把这个差别直接写在名字里，避免用户只能靠试。
+
+v3.2.1：**当前行始终自动放大**（原来要选「放大当前行」才生效）。放大不是动效，
+是读歌词的基本条件，不该躺在下拉里等人挑；于是 `effect` 不再影响字号，只剩
+「按不按字推进」这一件事。
 
 逐字效果靠 `_LyricDelegate` 自绘：每行仍是 QListWidgetItem（`text()`/`foreground()`
 等数据不变，测试兼容），但文字由 delegate 按「当前行 + 行内进度」分段绘制。
@@ -29,12 +32,23 @@ from ui.theme import ACCENT, current_theme
 # 空状态默认文案：`set_empty(hint)` 传入临时文案后，下一次不带参数要能复原
 EMPTY_HINT = "暂无歌词\n支持同名 .lrc 文件与内嵌歌词"
 
-# 歌词行高：要容纳 zoom 放大后的字号（基础 13px + 6pt ≈ 19px），并留上下余量
+# 歌词行高：要容纳当前行放大后的字号（基础 13px + 6pt ≈ 19px），并留上下余量
 _LINE_HEIGHT = 36
 
-# 当前行字号放大档：none/typewriter/karaoke 用 +3（与历史一致），zoom 用 +6
-_ZOOM_DELTA = 6
-_NORMAL_DELTA = 3
+# 当前行字号放大档（v3.2.1 起无条件生效，与 effect 无关）。
+# 取 6 而不是 3：原来 3 是「无动效」的档、6 是「放大当前行」的档；放大变成默认后
+# 用 6，让「正在唱的这句」一眼可辨 —— 这也是它能替掉那个选项的唯一理由。
+_CURRENT_DELTA = 6
+
+
+def _line_delta(is_current: bool) -> int:
+    """当前行的字号增量。
+
+    故意**不接收 effect**：v3.2.1 之后放大与动效是两个正交维度，签名里没有 effect
+    就从结构上保证"没人能偷偷让它依赖动效"（曾经就是 `_ZOOM_DELTA if effect ==
+    "zoom" else _NORMAL_DELTA` 这么写的）。
+    """
+    return _CURRENT_DELTA if is_current else 0
 
 # 译文比原文小多少（像素）。双语歌词里译文是次要信息，压小一档 + 降透明度，
 # 让视线先落在正在唱的原文上。
@@ -258,12 +272,12 @@ class _LyricDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):  # noqa: N802
         size = super().sizeHint(option, index)
-        # 保证能容纳当前行放大后的字号（zoom 加 6px 是上限）
-        _font, metrics = self._font(option.font, _ZOOM_DELTA)
+        # 保证能容纳当前行放大后的字号（v3.2.1：放大是常态，+6px 是上限）
+        _font, metrics = self._font(option.font, _CURRENT_DELTA)
         height = max(size.height(), metrics.height() + 12)
         # 双语：一层原文 + 一层译文，高度要按两层算，否则译文会被裁掉半截
         if index.data(_TRANSLATION_ROLE):
-            _sub_font, sub_metrics = self._font(option.font, _ZOOM_DELTA + _SUB_DELTA)
+            _sub_font, sub_metrics = self._font(option.font, _CURRENT_DELTA + _SUB_DELTA)
             height = max(height, metrics.height() + sub_metrics.height() + 14)
         size.setHeight(height)
         return size
@@ -294,7 +308,7 @@ class _LyricDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(rect.adjusted(10, 3, -10, -3), 9, 9)
             painter.restore()
 
-        delta = (_ZOOM_DELTA if effect == "zoom" else _NORMAL_DELTA) if is_current else 0
+        delta = _line_delta(is_current)
         main_font, main_metrics = self._font(base_font, delta, bold=is_current)
         main_h = main_metrics.height()
 
@@ -384,7 +398,7 @@ class _LyricDelegate(QStyledItemDelegate):
         if band is None:
             band = (float(rect.top()), float(rect.bottom()))
 
-        if not is_current or effect in ("none", "zoom"):
+        if not is_current or effect == "none":
             if use_grad:
                 painter.setPen(QPen(QBrush(self._flow(band, x, total_w, pair,
                                                       direction, phase)), 1))

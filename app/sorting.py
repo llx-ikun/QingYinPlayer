@@ -5,7 +5,9 @@ v2.1.4 把排序从「只有维度」升级为「维度 + 方向」的预设：
 下拉框直接列出「最近导入」「文件大小（大→小）」「时长（短→长）」等条目，
 选中即同时确定维度与升降序——单一控件就能清晰表达当前排序方式。
 
-排序 id 形如 `size:desc`；`custom:asc` 表示保持原始顺序（歌单自定义序，可拖拽）。
+排序 id 形如 `size:desc`；`custom:asc` 表示「自定义顺序」（保持原始顺序）。
+v3.2.0 起拖拽即可排序：歌单的自定义序存在 `Playlist.track_ids`，音乐库 / 我喜欢的
+存在 `Settings.view_orders`，两边都靠 `custom:asc` 这个预设生效。
 """
 from __future__ import annotations
 
@@ -91,6 +93,29 @@ def sort_tracks(tracks: Sequence[Track], sort_id: str,
     if preset.key == "size":
         return _sort_by_size(items, preset.desc, size_getter)
     return sorted(items, key=_KEY_FUNCS[preset.key], reverse=preset.desc)
+
+
+def apply_manual_order(tracks: Sequence[Track],
+                       order_ids: Sequence[str]) -> list[Track]:
+    """按记下来的 id 顺序重排「自定义顺序」（v3.2.0）。
+
+    歌单的顺序本来就存在 `Playlist.track_ids` 里（`view_tracks()` 已按它返回），
+    这里只服务音乐库 / 我喜欢这两个虚拟视图 —— 它们的顺序单独存在
+    `Settings.view_orders`，因为底层 `tracks` 字典的插入序不能动（改了会影响
+    「最近导入」等按添加时间的排序）。
+
+    **没记到的曲子保持原相对次序接在末尾**，而不是「缺一个就整体作废」：后者
+    会让用户辛苦拖了半天的顺序，因为新导入一首歌就全白费。
+    """
+    items = list(tracks)
+    if not order_ids:
+        return items
+    rank = {tid: i for i, tid in enumerate(order_ids)}
+    known = [t for t in items if t.id in rank]
+    unknown = [t for t in items if t.id not in rank]
+    # rank 里每个 id 唯一 → 这是个全序，排序结果与输入次序无关（稳定）
+    known.sort(key=lambda t: rank[t.id])
+    return known + unknown
 
 
 def _sort_by_size(items: list[Track], desc: bool,

@@ -41,11 +41,14 @@ MODE_SINGLE = "single"           # 单曲循环
 MODE_SHUFFLE = "shuffle"         # 随机播放
 PLAY_MODES = (MODE_SEQUENTIAL, MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE)
 
-# 歌词播放动效（v2.6.4）：none 无动效（仅高亮）/ zoom 放大当前行 /
-# typewriter 逐字显示（未唱不显示）/ karaoke 逐字上色（未唱淡显）。
-# 单选，值持久化进 Settings.lyrics_effect。界面文案见 ui.settings_dialog.effect_label。
-# v3.0.9 只改文案与注释，取值不变 —— 旧配置照常读出来。
-LYRICS_EFFECTS = ("none", "zoom", "typewriter", "karaoke")
+# 歌词播放动效（v2.6.4）：none 无动效（仅高亮）/ typewriter 逐字显示（未唱不显示）/
+# karaoke 逐字上色（未唱淡显）。单选，值持久化进 Settings.lyrics_effect，
+# 界面文案见 ui.settings_dialog.effect_label。
+# v3.2.1 移除 zoom（放大当前行）：**当前行始终自动放大**，不再是可选项 —— 放大是
+# 歌词最基本的可读性要求，让用户在四个选项里挑一遍才知道要选它，属于白折腾。
+# 旧配置里的 "zoom" 读出来落到 "none"（`Settings.from_dict` 按 LYRICS_EFFECTS 收敛），
+# 表现正好等于「只是放大」这一默认行为，不报错也不丢别的设置。
+LYRICS_EFFECTS = ("none", "typewriter", "karaoke")
 
 # AI 逐字对齐的模型档位（v3.0.0）。体积 / 精度 / 速度三档权衡，默认 base：
 #   tiny  ~75MB   最快，中文识别勉强，字边界容易飘
@@ -122,6 +125,30 @@ def _as_str(value, default: str, *, allow_empty: bool = False) -> str:
     if isinstance(value, str) and (allow_empty or value.strip()):
         return value
     return default
+
+
+def _as_view_orders(value) -> dict[str, list[str]]:
+    """把 `view_orders` 收敛成 {str: [str]}（v3.2.0）。
+
+    逐条隔离：坏键、坏值只丢自己，别让一条脏数据把整块设置打回默认 ——
+    与 v2.7.5 对 Settings 其他字段的处理保持一致。id 用字符串去重保序，
+    重复 id 会让同一首歌在排序里出现两次。
+    """
+    if not isinstance(value, dict):
+        return {}
+    orders: dict[str, list[str]] = {}
+    for key, ids in value.items():
+        if not isinstance(key, str) or not key or not isinstance(ids, list):
+            continue
+        seen: set[str] = set()
+        clean: list[str] = []
+        for tid in ids:
+            if isinstance(tid, str) and tid and tid not in seen:
+                seen.add(tid)
+                clean.append(tid)
+        if clean:
+            orders[key] = clean
+    return orders
 
 
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -370,11 +397,15 @@ class Settings:
     online_lyrics: bool = True          # v2.2：本地无歌词时联网补（LRCLIB）
     accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
     font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
-    lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/zoom/typewriter/karaoke）
+    lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/typewriter/karaoke，v3.2.1 去掉 zoom）
     lyrics_ai_model: str = DEFAULT_AI_MODEL   # v3.0.0：AI 逐字对齐的模型档位
     lyrics_ai_language: str = DEFAULT_AI_LANGUAGE   # v3.0.3：识别语言（auto/zh/en）
     lyrics_ai_quality: str = DEFAULT_AI_QUALITY     # v3.0.3：识别质量（fast/balanced/quality）
     lyrics_color: LyricsColorConfig = field(default_factory=LyricsColorConfig)  # v2.9.0
+    # v3.2.0 拖拽排序：音乐库 / 我喜欢 这两个虚拟视图的手动顺序（view_id -> [track_id]）。
+    # 歌单顺序不在这里 —— 它天然存在 Playlist.track_ids 里。只记录**用户真的拖过**
+    # 的视图，没拖过的视图不写键，空字典就是「还没自定义过」。
+    view_orders: dict[str, list[str]] = field(default_factory=dict)
     # v2.2 自定义背景：三个作用域（全部 / 列表页 / 正在播放页）
     bg_all: BackgroundConfig = field(default_factory=BackgroundConfig)
     bg_library: BackgroundConfig = field(default_factory=BackgroundConfig)
@@ -414,6 +445,8 @@ class Settings:
             "lyrics_ai_language": self.lyrics_ai_language,
             "lyrics_ai_quality": self.lyrics_ai_quality,
             "lyrics_color": self.lyrics_color.to_dict(),
+            "view_orders": {k: list(v) for k, v in self.view_orders.items()
+                            if isinstance(v, list)},
             "bg": {
                 "all": self.bg_all.to_dict(),
                 "library": self.bg_library.to_dict(),
@@ -457,6 +490,7 @@ class Settings:
         s.lyrics_ai_quality = (ai_quality if ai_quality in LYRICS_AI_QUALITIES
                                else DEFAULT_AI_QUALITY)
         s.lyrics_color = LyricsColorConfig.from_dict(d.get("lyrics_color") or {})
+        s.view_orders = _as_view_orders(d.get("view_orders"))
         bg = d.get("bg") or {}
         if isinstance(bg, dict):
             s.bg_all = BackgroundConfig.from_dict(bg.get("all") or {})

@@ -294,6 +294,65 @@ class TestE2E(unittest.TestCase):
         self.assertEqual(first_row.title.text(), tracks[1].display_title)
         self.window.set_view("__library__")
 
+    # ---------- 拖拽排序（v3.2.0） ----------
+
+    def test_library_drag_switches_to_custom_and_saves(self):
+        """音乐库拖一下：自动切「自定义顺序」+ 顺序落盘 + 重启后还在。
+
+        这是 v3.2.0 的主验收点：拖完不能弹回去（切预设），关软件不能丢（落盘）。
+        """
+        self._import()
+        self.window.set_view("__library__")
+        self.assertNotEqual(self.window._sort_id, "custom:asc",
+                            "默认是「最近导入」，先确认起点不是自定义序")
+        before = [t.id for t in self.window._displayed]
+        self.assertTrue(self.window.track_list._drag_enabled, "音乐库也该能拖了")
+
+        # 把第 0 行拖到末尾
+        last = len(before) - 1
+        self.window.track_list._on_rows_moved(None, 0, 0, last + 1)
+
+        self.assertEqual(self.window._sort_id, "custom:asc", "拖完必须切到自定义顺序")
+        after = [t.id for t in self.window._displayed]
+        self.assertEqual(after, [*before[1:], before[0]], "界面顺序要跟着变")
+        self.assertEqual(self.store.settings.view_orders["__library__"], after)
+
+        # 新实例读同一个 data.json（模拟重启）
+        from app.paths import data_file
+        from app.store import LibraryStore
+        again = LibraryStore(data_file())
+        self.assertEqual(again.settings.view_orders["__library__"], after)
+        self.window.set_view("__library__")
+
+    def test_library_drag_disabled_while_searching(self):
+        """搜索时显示的是子集，按可见顺序落盘会把没显示的曲子挤走 → 禁拖。"""
+        self._import()
+        self.window.set_view("__library__")
+        self.assertTrue(self.window.track_list._drag_enabled)
+        self.window._on_search_changed("晴")
+        self.assertFalse(self.window.track_list._drag_enabled,
+                         "搜索状态下不能拖")
+        self.window._on_search_changed("")
+        self.assertTrue(self.window.track_list._drag_enabled, "清空搜索要恢复")
+
+    def test_recent_view_never_drag_reorderable(self):
+        """「最近播放」按播放时间动态排，拖了也会被重算打乱 → 直接不给拖。"""
+        self._import()
+        self.window.set_view("__recent__")
+        self.assertFalse(self.window.track_list._drag_enabled)
+        self.window.set_view("__library__")
+
+    def test_context_menu_has_no_move_up_down(self):
+        """v3.2.0 删掉「上移/下移」，避免和拖拽两条路并存。"""
+        self._import()
+        menu, actions = self.window.track_list._build_menu(
+            self.store.all_tracks()[0].id)
+        try:
+            self.assertNotIn("move_up", actions)
+            self.assertNotIn("move_down", actions)
+        finally:
+            menu.deleteLater()
+
     def test_add_to_playlist_via_menu(self):
         """右键「添加到歌单」菜单：选中歌单后入库，重复添加不重复。
 
@@ -968,7 +1027,7 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(self.window.track_list.sort_combo.currentData(), "size:asc")
 
     def test_playlist_default_sort_keeps_custom_order(self):
-        """歌单默认「自定义顺序」：允许拖拽，不被排序打乱。"""
+        """歌单默认「自定义顺序」；切到别的排序也仍可拖（拖一下自动切回自定义）。"""
         self._import()
         pid = self.store.create_playlist("排序测试").id
         ids = [t.id for t in self.store.all_tracks()]
@@ -977,8 +1036,11 @@ class TestE2EV2(unittest.TestCase):
         self.assertEqual(self.window._sort_id, "custom:asc")
         self.assertTrue(self.window.track_list._drag_enabled)
         self.window._on_sort_changed("title:asc")
-        self.assertFalse(self.window.track_list._drag_enabled,
-                         "非自定义排序下应关闭拖拽，否则拖完会被排序覆盖")
+        # v3.2.0：不再因为"非自定义排序"就禁拖 —— 拖一下会自动切回自定义顺序，
+        # 这正是"随时能手动排"的前提。禁拖只剩两种情况：搜索中 / 最近播放。
+        self.assertTrue(self.window.track_list._drag_enabled,
+                        "非自定义排序下也能拖，拖完自动切回自定义顺序")
+        self.window._on_sort_changed("custom:asc")
 
     def test_header_shows_total_duration(self):
         self._import()
@@ -1703,15 +1765,42 @@ class TestE2EThemeBackground(unittest.TestCase):
         from ui.settings_dialog import SettingsDialog, stats_for
 
         dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store), self.window)
-        # v3.1.0：主题单选搬到背景页，共 4 套（星夜/曜石/月白/珍珠）。
-        # 界面顺序按**分组展示**走（深色系两项在前、浅色系在后），
-        # 与浮动条的循环顺序 THEME_ORDER（深浅交替）刻意不同，别混为一谈。
-        from ui.theme import THEME_GROUPS
-        shown = [tid for _name, ids in THEME_GROUPS for tid in ids]
-        self.assertEqual(list(dialog.theme_radios), shown)
+        # v3.1.1：四套配色按页拆开摆 —— 纯色的曜石/珍珠在「外观」页（跟强调色、
+        # 字号一起），带装饰底纹的星夜/月白在「背景」页（跟背景图案一起）。
+        # 断言用 parentWidget 判"摆在哪页"，不猜布局顺序。
+        for tid in ("obsidian", "pearl"):
+            self.assertIs(dialog.theme_radios[tid].parentWidget(),
+                          dialog.appearance_page, f"{tid} 应在「外观」页")
+        for tid in ("columbina", "light"):
+            self.assertIs(dialog.theme_radios[tid].parentWidget(),
+                          dialog.background_page, f"{tid} 应在「背景」页")
         # 背景页有星空/云海两张内置卡片
         self.assertEqual(set(dialog.preset_buttons), {"starry", "clouds"})
         dialog.deleteLater()
+
+    def test_theme_radios_exclusive_across_pages(self):
+        """跨页单选必须互斥（v3.1.1）。
+
+        QRadioButton 的互斥是**按 parent 分组**的，两页各摆一部分之后它们不再
+        是同一个 parent → 默认会各亮一个，界面上同时显示两套配色被选中。
+        这例钉住 QButtonGroup 的跨页互斥，防止有人"优化"掉它。
+        """
+        from ui.settings_dialog import SettingsDialog, stats_for
+
+        dialog = SettingsDialog("light", "音乐爱好者", stats_for(self.store), self.window)
+        try:
+            self.assertTrue(dialog.theme_radios["light"].isChecked())
+
+            dialog.theme_radios["obsidian"].setChecked(True)   # 外观页
+            self.assertFalse(dialog.theme_radios["light"].isChecked(),   # 背景页
+                             "选了「外观」页的曜石，「背景」页的月白必须自动取消")
+            self.assertFalse(dialog.theme_radios["columbina"].isChecked())
+            self.assertFalse(dialog.theme_radios["pearl"].isChecked())
+
+            dialog.theme_radios["columbina"].setChecked(True)  # 反向再验一次
+            self.assertFalse(dialog.theme_radios["obsidian"].isChecked())
+        finally:
+            dialog.deleteLater()
 
     def test_per_page_preset_marks_custom(self):
         """分页面点内置预设：必须自动「本页单独设置」，否则会被 bg_all 静默吞掉。

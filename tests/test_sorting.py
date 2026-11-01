@@ -18,6 +18,7 @@ from app.sorting import (  # noqa: E402
     DEFAULT_PLAYLIST_SORT,
     DEFAULT_SORT,
     SORT_PRESETS,
+    apply_manual_order,
     default_sort_for,
     preset_by_id,
     sort_tracks,
@@ -127,6 +128,50 @@ class TestSortTracks(unittest.TestCase):
     def test_does_not_mutate_input(self):
         original = list(self.tracks)
         sort_tracks(self.tracks, "duration:desc")
+        self.assertEqual(self.tracks, original)
+
+
+class TestManualOrder(unittest.TestCase):
+    """v3.2.0 拖拽排序：按记录下来的 id 顺序重排「自定义顺序」。"""
+
+    def setUp(self):
+        self.tracks = [mk("a"), mk("b"), mk("c"), mk("d")]
+
+    def _ids(self, items):
+        return [t.id for t in items]
+
+    def test_empty_order_keeps_input(self):
+        """没拖过的视图（view_orders 里没有这条键）必须原样返回。"""
+        self.assertEqual(self._ids(apply_manual_order(self.tracks, [])),
+                         ["a", "b", "c", "d"])
+
+    def test_follows_recorded_order(self):
+        self.assertEqual(self._ids(apply_manual_order(self.tracks, ["d", "b", "a", "c"])),
+                         ["d", "b", "a", "c"])
+
+    def test_new_tracks_go_last_in_original_relative_order(self):
+        """顺序表里没有的曲子（新导入 / 新收藏）接到末尾，且保持原相对次序。
+
+        这条是"新增一首歌就毁掉全部手排顺序"的防线。
+        """
+        self.assertEqual(self._ids(apply_manual_order(self.tracks, ["c", "a"])),
+                         ["c", "a", "b", "d"])
+
+    def test_order_ids_not_in_tracks_are_ignored(self):
+        """库里已删掉的歌留在顺序表里（幽灵 id）不该让排序抛异常或错位。"""
+        self.assertEqual(self._ids(apply_manual_order(self.tracks, ["zz", "b", "zz2", "a"])),
+                         ["b", "a", "c", "d"])
+
+    def test_result_independent_of_input_order(self):
+        """同一份记录顺序，输入怎么打乱，输出都一致 —— 排序稳定性的定义。"""
+        order = ["d", "a", "c", "b"]
+        first = self._ids(apply_manual_order(self.tracks, order))
+        second = self._ids(apply_manual_order(list(reversed(self.tracks)), order))
+        self.assertEqual(first, second)
+
+    def test_does_not_mutate_input(self):
+        original = list(self.tracks)
+        apply_manual_order(self.tracks, ["d", "c", "b", "a"])
         self.assertEqual(self.tracks, original)
 
 

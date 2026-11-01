@@ -70,7 +70,8 @@ from app.models import (LYRICS_AI_MODEL_SIZES, PLAYLIST_FAVORITES, PLAYLIST_LIBR
 from app.paths import covers_dir, data_file, library_dir
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
-from app.sorting import default_sort_for, preset_by_id, sort_tracks
+from app.sorting import (DEFAULT_PLAYLIST_SORT, apply_manual_order,
+                         default_sort_for, preset_by_id, sort_tracks)
 from app.store import LibraryStore
 from app.version import version_text
 from ui import theme as ui_theme
@@ -511,6 +512,12 @@ class MainWindow(QMainWindow):
 
     def refresh_list(self) -> None:
         tracks = self.store.view_tracks(self._view_id)
+        # v3.2.0：自定义顺序 = 用户拖出来的顺序。歌单的顺序天然在 playlist.track_ids
+        # 里（view_tracks 已按它返回），音乐库/我喜欢 是虚拟视图，顺序单独存在
+        # settings.view_orders —— 只在这两个视图上补一次重排。
+        if preset_by_id(self._sort_id).is_custom:
+            tracks = apply_manual_order(
+                tracks, self.store.settings.view_orders.get(self._view_id, ()))
         # 搜索过滤
         if self._search_text:
             needle = self._search_text.casefold()
@@ -530,9 +537,14 @@ class MainWindow(QMainWindow):
                                    lambda t: self.store.is_favorite(t.id),
                                    lambda t: sizes.get(t.id, 0))
         in_playlist = self._is_playlist_view(self._view_id)
-        # 只有「自定义顺序」才允许拖拽排序，否则拖完又被排序覆盖
-        self.track_list.set_context_config(
-            in_playlist, in_playlist and preset_by_id(self._sort_id).is_custom)
+        # v3.2.0：任何列表都能拖（拖完自动切到「自定义顺序」，见 _on_reordered）。
+        # 两种例外：
+        # - 「最近播放」按播放时间动态排，放下后一刷新就变回原样，拖了等于没拖；
+        # - 搜索状态下显示的是子集，按可见顺序落盘会把没显示的曲子挤到末尾。
+        drag_ok = (bool(tracks)
+                   and not self._search_text
+                   and self._view_id != PLAYLIST_RECENT)
+        self.track_list.set_context_config(in_playlist, drag_ok)
 
     def _refresh_counts(self) -> None:
         self.sidebar.set_favorite_count(self.store.favorite_count())
@@ -1358,12 +1370,38 @@ class MainWindow(QMainWindow):
         # 无条件刷新：重命名当前视图的歌单时，头部标题同样需要更新
         self.refresh_list()
 
-    def _on_reordered(self, tid: str, new_index: int) -> None:
-        if not self._is_playlist_view(self._view_id):
+    def _on_reordered(self, tids: list[str], new_index: int) -> None:
+        """拖拽放下：把**看到的顺序**落盘，并把排序切到「自定义顺序」（v3.2.0）。
+
+        为什么按「可见顺序」整份存，而不是在某个隐藏列表里做一次 swap：
+        拖动发生在用户眼前那个（可能已被排序、可能属于某个歌单的）列表上，
+        用户认定的"新顺序"就是屏幕上的样子。整份存下来，无论当前用的是哪种
+        排序规则，结果都和眼睛看到的一致 —— 不用为每种视图各写一套下标换算。
+
+        tids 是**整块**（多选拖动时一次搬好几首，按原相对次序插入，不拆散）。
+
+        拖完必须切到「自定义顺序」，否则下次 refresh_list 会按原规则重排一遍，
+        表现就是「拖了弹回去」。
+        """
+        ids = [t.id for t in self._displayed]
+        picked = [tid for tid in tids if tid in ids]
+        if not picked:
             return
-        if self.store.move_in_playlist(self._view_id, tid, new_index):
-            self.store.save()
-            self.refresh_list()
+        for tid in picked:
+            ids.remove(tid)
+        new_index = max(0, min(new_index, len(ids)))
+        ids[new_index:new_index] = picked
+
+        if not self.store.set_view_order(self._view_id, ids):
+            return
+        self.store.save()
+
+        if not preset_by_id(self._sort_id).is_custom:
+            self._sort_id = DEFAULT_PLAYLIST_SORT          # custom:asc
+            self._sort_by_view[self._view_id] = self._sort_id   # 记住这个视图的选择
+            self.track_list.set_sort(self._sort_id)        # 只改下拉显示，不触发信号
+            self._toast("已切换到「自定义顺序」，此顺序会保存", 2600)
+        self.refresh_list()
 
     # ---------- 列表右键动作 ----------
 
@@ -1381,10 +1419,6 @@ class MainWindow(QMainWindow):
             self.store.remove_from_playlist(self._view_id, tid)
             self.store.save()
             self.refresh_list()
-        elif action == "move_up":
-            self._move_in_playlist(tid, -1)
-        elif action == "move_down":
-            self._move_in_playlist(tid, +1)
         elif action == "bind_lyrics":
             self._bind_lyrics(track)
         elif action == "refresh":
@@ -1393,20 +1427,6 @@ class MainWindow(QMainWindow):
             self._locate(track)
         elif action == "remove_from_library":
             self._remove_from_library(track)
-
-    def _move_in_playlist(self, tid: str, delta: int) -> None:
-        if not self._is_playlist_view(self._view_id):
-            return
-        playlist = self.store.get_playlist(self._view_id)
-        if playlist is None or tid not in playlist.track_ids:
-            return
-        index = playlist.track_ids.index(tid)
-        target = index + delta
-        if target < 0 or target >= len(playlist.track_ids):
-            return
-        self.store.move_in_playlist(self._view_id, tid, target)
-        self.store.save()
-        self.refresh_list()
 
     def _add_to_playlist_menu(self, track: Track) -> None:
         menu = QMenu(self)
