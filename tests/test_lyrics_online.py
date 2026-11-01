@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.lyrics_match import CONF_HIGH, CONF_LOW
 from app.lyrics_online import (
     FetchOutcome,
     LyricsFetchWorker,
@@ -38,6 +39,7 @@ from app.lyrics_online import (
     miss_path,
     parse_hits,
     pick_best,
+    pick_best_detail,
     read_cache,
     read_miss,
     score_hit,
@@ -493,6 +495,96 @@ class TestScoringStricter(unittest.TestCase):
         score, gate = score_hit(hit, "晴天".lower(), "周杰伦", 269.0)
         self.assertTrue(gate)
         self.assertGreaterEqual(score, 6.5)
+
+
+class TestScoringV305(unittest.TestCase):
+    """v3.0.5 打分层重构：逐项相似度 + 候选侧清洗 + 置信分档 + 版次负信号。
+
+    这一批用例全部来自「时长不精确」的真实场景（本地音轨与线上差 8~20 秒很常见），
+    以前在那种场景下只有「标题包含」一条窄路，错一个字就全盘皆输。
+    """
+
+    def test_traditional_matches_simplified_without_duration(self):
+        """繁简差异 + 时长漂移：以前 title/artist/duration 三条路全断，直接漏配。"""
+        hits = parse_hits([_payload(trackName="不能说的祕密", artistName="周杰倫",
+                                    duration=308)])
+        best = pick_best(hits, "不能说的秘密", "周杰伦", 290_000)
+        self.assertIsNotNone(best)
+
+    def test_candidate_side_artist_prefix_is_cleaned(self):
+        """`周杰伦 - 稻香` 的艺人前缀要在候选取掉，否则标题相似度只有 0.5。"""
+        hits = parse_hits([_payload(trackName="周杰伦 - 稻香", artistName="周杰伦",
+                                    albumName="", duration=235)])
+        best = pick_best(hits, "稻香", "周杰伦", 223_000)
+        self.assertIsNotNone(best)
+
+    def test_one_missing_char_is_still_strong(self):
+        hits = parse_hits([_payload(trackName="夜空中最亮星", artistName="逃跑计划",
+                                    albumName="", duration=272)])
+        best = pick_best(hits, "夜空中最亮的星", "逃跑计划", 252_000)
+        self.assertIsNotNone(best)
+
+    def test_weak_title_alone_is_rejected(self):
+        """标题 0.7~0.85 且艺人全不相干：这一档最容易配错，默认不收。
+
+        `Pieces` vs `Pieces of Me` 是真实的两首不同的歌（Sum 41 / Ashlee Simpson），
+        标题相似度 0.75 刚好落在「弱匹配」区间里。
+        """
+        hits = parse_hits([_payload(trackName="Pieces of Me",
+                                    artistName="Ashlee Simpson",
+                                    albumName="", duration=0)])
+        self.assertIsNone(pick_best(hits, "Pieces", "Sum 41", 0))
+
+    def test_weak_title_can_be_opted_in_for_diagnostics(self):
+        """`allow_low=True` 只给评测/排障用，用来观察低置信档拒绝了什么。"""
+        hits = parse_hits([_payload(trackName="Pieces of Me",
+                                    artistName="Ashlee Simpson",
+                                    albumName="", duration=0)])
+        best, detail = pick_best_detail(hits, "Pieces", "Sum 41", 0, allow_low=True)
+        self.assertIsNotNone(best)
+        self.assertEqual(detail.confidence, CONF_LOW)
+
+    def test_detail_reports_signals_and_confidence(self):
+        hit = parse_hits([_payload()])[0]
+        best, detail = pick_best_detail(hit and [hit], "晴天", "周杰伦", 269_000)
+        self.assertIsNotNone(best)
+        self.assertEqual(detail.confidence, CONF_HIGH)
+        self.assertGreaterEqual(detail.title_sim, 0.99)
+        self.assertGreaterEqual(detail.artist_sim, 0.99)
+        self.assertEqual(detail.duration_diff, 0)
+        self.assertTrue(detail.gate)
+        self.assertIn("标题精确", detail.reasons)
+
+    def test_detail_is_none_when_rejected(self):
+        hits = parse_hits([_payload(trackName="孤勇者", artistName="陈奕迅",
+                                    albumName="孤勇者", duration=250)])
+        best, detail = pick_best_detail(hits, "晴天", "周杰伦", 269_000)
+        self.assertIsNone(best)
+        self.assertIsNone(detail)
+
+    def test_version_marker_loses_tie_to_clean_title(self):
+        """`晴天 (伴奏)` 与 `晴天` 清洗后同名，只能靠版次负信号分出高下。"""
+        hits = parse_hits([
+            _payload(trackName="晴天 (伴奏)", syncedLyrics="[00:01.00]伴奏"),
+            _payload(trackName="晴天", syncedLyrics="[00:01.00]原版"),
+        ])
+        best = pick_best(hits, "晴天", "周杰伦", 269_000)
+        self.assertIsNotNone(best)
+        self.assertEqual(best.synced, "[00:01.00]原版")
+
+    def test_cross_script_artist_is_not_penalized_as_cover(self):
+        """艺人跨书写系统时不能按「翻唱」扣分——那是无从比较，不是不像。"""
+        hit = parse_hits([_payload(trackName="Dynamite", artistName="방탄소년단",
+                                   albumName="", duration=220)])[0]
+        _best, detail = pick_best_detail([hit], "Dynamite", "BTS", 199_000)
+        self.assertNotIn("疑似翻唱", detail.reasons)
+
+    def test_same_script_cover_is_still_penalized(self):
+        """同一书写系统里艺人对不上、时长也差很远，仍然要按翻唱扣分。"""
+        hit = parse_hits([_payload(trackName="晴天", artistName="翻唱歌手",
+                                   albumName="", duration=180)])[0]
+        _best, detail = pick_best_detail([hit], "晴天", "周杰伦", 269_000)
+        self.assertIn("疑似翻唱", detail.reasons)
 
 
 class TestAlbumBridge(unittest.TestCase):

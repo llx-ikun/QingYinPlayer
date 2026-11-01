@@ -116,5 +116,260 @@
       {"track": "Ravings", "artist": "谭维维", "album": "崩坏星穹铁道-痴人说梦 Ravings", "duration": 250, "synced": true}
     ],
     "expect": 0
+  },
+
+  {
+    "name": "中文·整句繁体（标题与艺人都是繁体）",
+    "query": {"title": "說好不哭", "artist": "周杰倫", "album": "說好不哭", "duration": 310},
+    "candidates": [
+      {"track": "说好不哭", "artist": "周杰伦", "album": "说好不哭", "duration": 310, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·繁体歌词页的繁體標題對簡體查詢",
+    "query": {"title": "光年之外", "artist": "邓紫棋", "album": "", "duration": 235},
+    "candidates": [
+      {"track": "光年之外", "artist": "鄧紫棋", "album": "", "duration": 240, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·候选标题带年份括号（夜曲 (2005)）",
+    "query": {"title": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦", "duration": 227},
+    "candidates": [
+      {"track": "夜曲 (2005)", "artist": "周杰伦", "album": "十一月的萧邦", "duration": 227, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·音轨号前缀（03. 稻香）",
+    "query": {"title": "稻香", "artist": "周杰伦", "album": "魔杰座", "duration": 223},
+    "candidates": [
+      {"track": "03. 稻香", "artist": "周杰伦", "album": "魔杰座", "duration": 223, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "中文·单字标题不该匹配更长的歌（应拒绝）",
+    "query": {"title": "雨", "artist": "", "album": "", "duration": 0},
+    "candidates": [
+      {"track": "下雨天", "artist": "南拳妈妈", "album": "", "duration": 0, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "中文·短标题 vs 长标题（Alone 对 Alone Again）",
+    "query": {"title": "Alone", "artist": "", "album": "", "duration": 0},
+    "candidates": [
+      {"track": "Alone Again (Naturally)", "artist": "Gilbert O'Sullivan", "album": "", "duration": 0, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "中文·同名翻唱（应选原唱）",
+    "query": {"title": "后来", "artist": "刘若英", "album": "我很好", "duration": 349},
+    "candidates": [
+      {"track": "后来", "artist": "翻唱小哥", "album": "翻唱合集", "duration": 300, "synced": true},
+      {"track": "后来", "artist": "刘若英", "album": "我很好", "duration": 349, "synced": true}
+    ],
+    "expect": 1
+  },
+  {
+    "name": "中文·伴奏版与原版清洗后同名（应选原版）",
+    "query": {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
+    "candidates": [
+      {"track": "晴天 (伴奏)", "artist": "周杰伦", "album": "叶惠美", "duration": 269, "synced": true},
+      {"track": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269, "synced": true}
+    ],
+    "expect": 1
+  },
+  {
+    "name": "中文·纯音乐候选与有词候选共存（选有词的）",
+    "query": {"title": "River Flows in You", "artist": "Yiruma", "album": "First Love", "duration": 190},
+    "candidates": [
+      {"track": "River Flows in You", "artist": "Yiruma", "album": "First Love", "duration": 190, "synced": true, "instrumental": true},
+      {"track": "River Flows in You", "artist": "Yiruma", "album": "First Love", "duration": 190, "synced": true}
+    ],
+    "expect": 1
+  },
+  {
+    "name": "日文·候选标题带艺人后缀（打上花火 / DAOKO×米津玄師）",
+    "query": {"title": "打上花火", "artist": "DAOKO", "album": "", "duration": 250},
+    "candidates": [
+      {"track": "打上花火 / DAOKO×米津玄師", "artist": "DAOKO", "album": "", "duration": 250, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "日文·罗马字对片假名（靠时长+艺人兜住）",
+    "query": {"title": "Lemon", "artist": "米津玄師", "album": "STRAY SHEEP", "duration": 255},
+    "candidates": [
+      {"track": "レモン", "artist": "米津玄師", "album": "STRAY SHEEP", "duration": 255, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "韩文·谚文标题对英文标题且艺人时长都对不上（应拒绝）",
+    "query": {"title": "Spring Day", "artist": "BTS", "album": "", "duration": 274},
+    "candidates": [
+      {"track": "봄날", "artist": "방탄소년단", "album": "", "duration": 300, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "韩文·谚文标题完全一致",
+    "query": {"title": "봄날", "artist": "방탄소년단", "album": "You Never Walk Alone", "duration": 274},
+    "candidates": [
+      {"track": "봄날", "artist": "방탄소년단", "album": "You Never Walk Alone", "duration": 274, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "韩文·英文标题歌手用谚文且时长一致（靠时长+专辑）",
+    "query": {"title": "강남스타일", "artist": "PSY", "album": "Psy 6", "duration": 219},
+    "candidates": [
+      {"track": "강남스타일", "artist": "PSY", "album": "Psy 6", "duration": 219, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "俄文·西里尔字母正常匹配",
+    "query": {"title": "Катюша", "artist": "Русские песни", "album": "", "duration": 180},
+    "candidates": [
+      {"track": "Катюша", "artist": "Русские песни", "album": "", "duration": 180, "synced": true},
+      {"track": "Katyusha", "artist": "Various Artists", "album": "", "duration": 180, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "俄文·大小写差异（КАТЮША）",
+    "query": {"title": "Катюша", "artist": "Русские песни", "album": "", "duration": 180},
+    "candidates": [
+      {"track": "КАТЮША", "artist": "русские песни", "album": "", "duration": 180, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·变音符号（Beyoncé 对 Beyonce）",
+    "query": {"title": "Halo", "artist": "Beyoncé", "album": "I Am... Sasha Fierce", "duration": 261},
+    "candidates": [
+      {"track": "Halo", "artist": "Beyonce", "album": "I Am... Sasha Fierce", "duration": 261, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·艺人前缀（Ed Sheeran - Perfect）",
+    "query": {"title": "Perfect", "artist": "Ed Sheeran", "album": "÷", "duration": 263},
+    "candidates": [
+      {"track": "Ed Sheeran - Perfect", "artist": "Ed Sheeran", "album": "÷", "duration": 263, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·破折号噪声尾巴（Remastered 2011）",
+    "query": {"title": "Bohemian Rhapsody", "artist": "Queen", "album": "A Night at the Opera", "duration": 354},
+    "candidates": [
+      {"track": "Bohemian Rhapsody - Remastered 2011", "artist": "Queen", "album": "A Night at the Opera", "duration": 354, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "英文·全角字母（Ｖｉｖａ Ｌａ Ｖｉｄａ）",
+    "query": {"title": "Ｖｉｖａ Ｌａ Ｖｉｄａ", "artist": "Coldplay", "album": "", "duration": 242},
+    "candidates": [
+      {"track": "Viva la Vida", "artist": "Coldplay", "album": "", "duration": 242, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "跨语言·只有艺人+专辑对得上但时长差很多（应拒绝）",
+    "query": {"title": "孤勇者", "artist": "陈奕迅", "album": "孤勇者", "duration": 250},
+    "candidates": [
+      {"track": "十年", "artist": "陈奕迅", "album": "黑白灰", "duration": 210, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "跨语言·专辑桥但时长未知",
+    "query": {"title": "痴人说梦", "artist": "HOYO-MiX", "album": "崩坏星穹铁道-痴人说梦 Ravings", "duration": 0},
+    "candidates": [
+      {"track": "Ravings", "artist": "HOYO-MiX", "album": "崩坏星穹铁道-痴人说梦 Ravings", "duration": 0, "synced": true}
+    ],
+    "expect": 0
+  },
+
+  {
+    "name": "硬题·艺人前缀 + 时长漂移 12s（无专辑可依）",
+    "query": {"title": "稻香", "artist": "周杰伦", "album": "", "duration": 223},
+    "candidates": [
+      {"track": "周杰伦 - 稻香", "artist": "周杰伦", "album": "", "duration": 235, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "硬题·繁简差异 + 时长漂移 18s（艺人也是繁体）",
+    "query": {"title": "不能说的秘密", "artist": "周杰伦", "album": "", "duration": 290},
+    "candidates": [
+      {"track": "不能说的祕密", "artist": "周杰倫", "album": "", "duration": 308, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "硬题·年份括号 + 时长漂移 13s",
+    "query": {"title": "夜曲", "artist": "周杰伦", "album": "", "duration": 227},
+    "candidates": [
+      {"track": "夜曲 (2005)", "artist": "周杰伦", "album": "", "duration": 240, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "硬题·标题漏一个字（夜空中最亮的星 / 夜空中最亮星）",
+    "query": {"title": "夜空中最亮的星", "artist": "逃跑计划", "album": "", "duration": 252},
+    "candidates": [
+      {"track": "夜空中最亮星", "artist": "逃跑计划", "album": "", "duration": 272, "synced": true}
+    ],
+    "expect": 0
+  },
+  {
+    "name": "硬题·原唱 vs 时长更像的他人翻唱（应选原唱）",
+    "query": {"title": "晴天", "artist": "周杰伦", "album": "", "duration": 269},
+    "candidates": [
+      {"track": "晴天", "artist": "翻唱歌手", "album": "", "duration": 262, "synced": true},
+      {"track": "晴天", "artist": "周杰伦", "album": "", "duration": 281, "synced": true}
+    ],
+    "expect": 1
+  },
+  {
+    "name": "硬题·Alone 对 Alone Again（应拒绝）",
+    "query": {"title": "Alone", "artist": "", "album": "", "duration": 0},
+    "candidates": [
+      {"track": "Alone Again", "artist": "", "album": "", "duration": 0, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "硬题·晴天 对 晴天娃娃（应拒绝）",
+    "query": {"title": "晴天", "artist": "", "album": "", "duration": 0},
+    "candidates": [
+      {"track": "晴天娃娃", "artist": "", "album": "", "duration": 0, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "低置信·Pieces 对 Pieces of Me（标题 0.75 且艺人全不相干，应拒绝）",
+    "query": {"title": "Pieces", "artist": "Sum 41", "album": "", "duration": 0},
+    "candidates": [
+      {"track": "Pieces of Me", "artist": "Ashlee Simpson", "album": "", "duration": 0, "synced": true}
+    ],
+    "expect": "reject"
+  },
+  {
+    "name": "低置信·Rise 对 Rise Up（标题 0.73 且艺人全不相干，应拒绝）",
+    "query": {"title": "Rise", "artist": "Katy Perry", "album": "", "duration": 0},
+    "candidates": [
+      {"track": "Rise Up", "artist": "Andra Day", "album": "", "duration": 0, "synced": true}
+    ],
+    "expect": "reject"
   }
 ]

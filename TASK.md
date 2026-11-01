@@ -984,9 +984,60 @@ env -u PYTHONPATH .venv/Scripts/python.exe build.py
 - [x] **Q1** `tools/eval_match.py`（precision / recall / 误配率）
 - [x] **Q2** `tests/fixtures/lyrics_eval/cases.json`（14 条，中/英/日/韩 × 多场景）
 - [x] **Q3** 跑出基线：precision 100% / recall 92% / 误配率 0%（唯一漏配=繁简）
-- [ ] **Q4** 下一轮：繁简/NFKC 归一 → 权重重构 → 跨源投票+置信分档（每步用 eval 量化）
+- [x] **Q4** 已在 v3.0.5 完成，见 S 章
 
 ### R. 验收
 
 - [x] **R1** ruff 干净；定向测试 crashlog+multi+menu 56 例全绿
 - [x] **R2** 全量回归 35 模块全绿（10m25s）
+
+---
+
+## v3.0.5 歌词匹配算法重构
+
+### S. 归一化与分词（`app/lyrics_match.py`，新增）
+
+- [x] **S1** 模块骨架 + 标签清洗从 `lyrics_online` 迁入（`clean_title`/`clean_artist`/`to_halfwidth` 原位 re-export，外部 import 不变）
+- [x] **S2** `fold()`：NFKC → NFKD 去 Mn → **NFC** → casefold → 繁简归并（NFC 是测试抓出的韩文谚文 bug）
+- [x] **S3** 繁简表 500 组 + `_build_t2s()` 跳过长度≠2 的项 + `test_all_pairs_are_two_chars`
+- [x] **S4** `tokens()` 分语言：汉字/假名/谚文 bigram，拉丁/西里尔词级
+- [x] **S5** `similarity()` = max(SequenceMatcher.ratio, token Dice)；rapidfuzz 可选加速
+- [x] **S6** `language_of()` / `script_set()` / `scripts_disjoint()`
+- [x] **S7** `prepare_title()` / `strip_artist_prefix()`：艺人在前/在后/斜杠三种排布
+- [x] **S8** 纯数字括号视为版次（`夜曲 (2005)`）
+- [x] **S9** `version_penalty()` 只看被删片段，`Live and Let Die` 不误伤
+- [x] **S10** `lyrics_fingerprint()` / `same_lyrics()` 供跨源投票
+
+### T. 打分与置信（`app/lyrics_online.py`）
+
+- [x] **T1** 权重常量全部命名（TITLE/ARTIST/DURATION/ALBUM + 负信号），集中在 `lyrics_match`
+- [x] **T2** `score_hit_detail()` 返回 `MatchDetail`（各相似度 + 置信 + reasons）
+- [x] **T3** `score_hit()` 保持 `(score, gate)` 兼容签名
+- [x] **T4** `pick_best_detail()` / `pick_best(..., allow_low=False)`：low 默认拒收
+- [x] **T5** 查询侧与候选侧**对称清洗**；`fetch_outcome`/`fetch_best_hit` 不再预归一化（原先会吃掉 `(Live)` 信息）
+- [x] **T6** 跨书写系统豁免翻唱扣分
+
+### U. 跨源投票（`app/lyrics_multi.py`）
+
+- [x] **U1** `consensus_sources()`：按正文指纹统计一致的源（空正文不投票）
+- [x] **U2** `pick_with_consensus()`：身份分 + 共识加分（+0.6/源，上限 1.2），平票保持源顺序
+- [x] **U3** `fetch_outcome_multi(detail_sink=...)` 填诊断信息，**3 元组返回签名不变**
+- [x] **U4** 单测 9 例（含「投票不得盖过身份信号」）
+
+### V. 评测与验证
+
+- [x] **V1** 黄金集 14 → 45 例：繁简/年份括号/艺人前缀/音轨号/日文后缀/罗马字/韩文谚文/俄文/变音/纯音乐/矮长标题
+- [x] **V2** 新增「硬题·」批次：**时长漂移 8~20s + 无专辑可依**（旧集里时长几乎全精确，区分度不足）
+- [x] **V3** 新增「低置信·」批次：证明 low 闸门的价值
+- [x] **V4** `tools/eval_match.py` 加 `--detail` / `--allow-low` / `--quiet`
+- [x] **V5** 同题 A/B：旧 precision 88%/recall 86%（误配 4、漏配 5）→ 新 100%/100%（0/0）
+- [x] **V6** 单测：`tests/test_lyrics_match.py`（78 例）+ `test_lyrics_online.TestScoringV305`（10 例）+ `test_lyrics_multi.TestConsensusVoting`（9 例）
+- [x] **V7** `run_tests.py` 注册 `tests.test_lyrics_match`
+
+### W. 验收
+
+- [x] **W1** ruff 干净（含 tools/）
+- [x] **W2** 定向 213 例全绿
+- [x] **W3** 全量回归全绿
+- [x] **W4** 版本号 3.0.4 → 3.0.5
+- [ ] **W5** 遗留：真实曲库抽样 50~100 首人工标注，验证真机 precision

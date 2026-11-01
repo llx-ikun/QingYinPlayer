@@ -89,102 +89,50 @@ class Query:
     kind: str                     # get | search | keyword
 
 
-# ---------- 标签清洗 ----------
+# ---------- 标签清洗与文本归一化 ----------
 #
-# 真实曲库的脏标签是匹配失败的头号原因。清洗的原则是「只删明确的噪声」：
-# 括号里出现 live/remaster/伴奏/主题曲 这类词才删，不含噪声词的括号保留
-# （有些歌名本身带括号，如 `Bohemian Rhapsody (Live Aid)` 之外的正常用法）。
+# v3.0.5：清洗/归一化/相似度整体搬到 `app.lyrics_match`（纯文本层，无网络无 Qt），
+# 这里只做 re-export，保持既有调用方（本文件、lyrics_multi、测试）不用改 import。
+# 搬走的理由：这堆逻辑跟「怎么发 HTTP」毫无关系，混在 740 行里既难读也难测。
 
-_NOISE_WORDS = (
-    # 英文
-    "live", "remaster", "version", "ver.", "edit", "mix", "remix", "re-record",
-    "feat", "ft.", "featuring", "cover", "demo", "acoustic", "mono", "stereo",
-    "explicit", "clean", "instrumental", "karaoke", "ost", "soundtrack", "theme",
-    "deluxe", "bonus", "single", "radio", "extended", "sped up", "slowed", "reverb",
-    "live at", "mv",
-    # 中文
-    "现场", "演唱会", "伴奏", "纯音乐", "翻唱", "女声", "男声", "高音质", "无损",
-    "版", "主题曲", "片头曲", "片尾曲", "插曲", "电视剧", "电影", "动画", "游戏",
-    "重置", "重制", "混音", "配乐", "官方", "完整版", "超清", "原唱", "合唱", "组曲",
-    "国语", "粤语", "日语", "闽南语",
+from app.lyrics_match import (  # noqa: E402  放在文件中部是为了贴近使用处
+    ALBUM_EXACT,
+    ALBUM_STRONG,
+    ARTIST_EXACT,
+    ARTIST_STRONG,
+    ARTIST_WEAK,
+    CONF_LOW,
+    DURATION_EXACT_SEC,
+    DURATION_FAR_SEC,
+    DURATION_NEAR_SEC,
+    PENALTY_COVER,
+    TITLE_EXACT,
+    TITLE_STRONG,
+    TITLE_WEAK,
+    W_ALBUM_EXACT,
+    W_ALBUM_STRONG,
+    W_ARTIST_EXACT,
+    W_ARTIST_STRONG,
+    W_ARTIST_WEAK,
+    W_DURATION_EXACT,
+    W_DURATION_FAR,
+    W_DURATION_NEAR,
+    W_SYNCED,
+    W_TITLE_EXACT,
+    W_TITLE_STRONG,
+    W_TITLE_WEAK,
+    MatchDetail,
+    classify_confidence,
+    clean_artist,
+    clean_title,
+    normalize,
+    prepare_title,
+    scripts_disjoint,
+    similarity,
+    # 兼容性 re-export：v3.0.5 之前 `to_halfwidth` 住在本模块，外部还有调用方
+    to_halfwidth,  # noqa: F401
+    version_penalty,
 )
-
-_BRACKET_GROUP = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
-# 前导音轨号，两种形态分开写：
-#   ① `[07] 歌名`、`(07) 歌名`——号码带括号时本身就是音轨号的强信号，不必再要求分隔符；
-#   ② `01. 歌名`、`01 - 歌名`、`1、歌名`——裸号码必须跟分隔符，
-#      否则 Taylor Swift 的《22》这种纯数字歌名会被一起吃掉。
-_LEADING_INDEX = re.compile(r"^\s*(?:[\[\(]\d{1,3}[\]\)]\s*|\d{1,3}\s*[.\-、:：_]\s*)")
-# 标题里的 `feat. X` 尾巴整段砍掉（艺人字段另外处理，那里是切分而不是砍掉）。
-_FEAT_TAIL = re.compile(r"\s*(?:feat\.?|ft\.?|featuring)\s+.*$", re.IGNORECASE)
-# 多艺人切分：只认这些分隔符。**不含 `&` 和 `,`**——
-# `Simon & Garfunkel`、`Earth, Wind & Fire` 是单一艺人名，切了反而搜不到。
-_ARTIST_SPLIT = re.compile(
-    r"\s*(?:[;/／、|]|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b)\s*", re.IGNORECASE)
-
-
-def to_halfwidth(text: str) -> str:
-    """全角 ASCII（U+FF01..FF5E）与全角空格转半角，只做字符映射不改语义。"""
-    out = []
-    for ch in text or "":
-        code = ord(ch)
-        if code == 0x3000:
-            out.append(" ")
-        elif 0xFF01 <= code <= 0xFF5E:
-            out.append(chr(code - 0xFEE0))
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def _strip_noise_groups(text: str) -> str:
-    """删掉「含噪声词」的括号组；不含噪声词的括号原样留着。"""
-    def repl(match: re.Match) -> str:
-        inner = match.group(1).strip()
-        if not inner:
-            return ""                       # 空括号 `()` 也删
-        lowered = inner.lower()
-        return "" if any(word in lowered for word in _NOISE_WORDS) else match.group(0)
-
-    previous = None
-    while previous != text:                 # 循环处理嵌套/连续括号组
-        previous = text
-        text = _BRACKET_GROUP.sub(repl, text)
-    return text
-
-
-def clean_title(title: str) -> str:
-    """把标题洗成「适合拿去检索」的样子；洗空了就退回原文，绝不返回空串。"""
-    original = to_halfwidth(title or "").strip()
-    if not original:
-        return ""
-    text = _strip_noise_groups(original)
-    text = _FEAT_TAIL.sub("", text)
-    text = _strip_noise_tail(text)
-    text = _LEADING_INDEX.sub("", text)
-    text = re.sub(r"\s{2,}", " ", text).strip(" -_·.")
-    return text or original
-
-
-def _strip_noise_tail(text: str) -> str:
-    """砍掉 `歌名 - Remastered 2011` 这种「破折号 + 噪声后缀」的尾巴。
-
-    只处理最后一段、且该段含噪声词，避免误伤 `Jay-Z - 99 Problems` 这类
-    破折号本来就在歌名里的情况（`99 problems` 不含噪声词，原样保留）。
-    """
-    parts = text.split(" - ")
-    if len(parts) > 1 and any(word in parts[-1].lower() for word in _NOISE_WORDS):
-        return " - ".join(parts[:-1])
-    return text
-
-
-def clean_artist(artist: str) -> str:
-    """多艺人取主艺人；切不动就原样返回。"""
-    original = to_halfwidth(artist or "").strip()
-    if not original:
-        return ""
-    primary = _ARTIST_SPLIT.split(original)[0].strip(" -_·,")
-    return primary or original
 
 
 # ---------- URL 构造 ----------
@@ -307,114 +255,182 @@ def usable_text(text: str | None) -> bool:
 
 
 def _norm(text: str) -> str:
-    """归一化：小写 + 只留字母数字（含中文），用来做包含式比对。"""
-    return "".join(ch for ch in (text or "").lower() if ch.isalnum())
+    """归一化（NFKC + 拆变音 + 小写 + 繁简归并 + 去标点）。v3.0.5 起等同 `normalize`。"""
+    return normalize(text)
 
 
-def _overlap(a: str, b: str, floor: float = 0.5) -> bool:
-    """包含式匹配，但要求长度相近。
+def score_hit_detail(hit: LyricHit, title: str, artist: str,
+                     want: float, album: str = "") -> MatchDetail:
+    """打分并返回**完整过程**（各信号相似度 + 置信档位）。
 
-    没有长度校验的话，标题「雨」会匹配上「下雨天」这种只有一两个字重叠的候选，
-    是「配错词」的典型来源。
+    v3.0.5 重写。相对 v2.4 的三处变化：
+
+    1. **逐项相似度替代包含式布尔判断**。以前 `_overlap` 只有「是/否」，
+       错一个字就是 0 分；现在 `similarity()` 给出 0~1 的连续值，再按
+       精确/强/弱三档取权重——繁简差异、拼写微差、多余装饰词都能落进
+       「强」档而不是掉到 0。
+    2. **候选侧也做清洗**（`prepare_title`）。以前只洗查询侧，候选标题里的
+       `(Live)`、`周杰伦 - 稻香` 这类装饰始终是噪声；现在两边对称清洗，
+       `稻香` 对 `周杰伦 - 稻香` 从「不相似」变成「完全相同」。
+    3. **门槛从「标题对上」改成「标题相似度 ≥ 弱档」**，并新增置信分档：
+       只有弱标题一项支撑的结果会被判 `low`，默认不接受（见 `pick_best`）。
+
+    门槛仍有三条路：**标题够像**，或**时长差 ≤2 秒**，或**专辑够像且艺人相符**
+    （v2.8.2 的跨语言桥梁，一字未改）。`want` 单位是秒，0 表示本地没有时长。
     """
-    if not a or not b:
-        return False
-    if a in b or b in a:
-        return min(len(a), len(b)) / max(len(a), len(b)) >= floor
-    return False
+    reasons: list[str] = []
+
+    query_title = prepare_title(title, artist)
+    hit_title = prepare_title(hit.track_name, hit.artist_name)
+    query_artist = clean_artist(artist)
+    hit_artist = clean_artist(hit.artist_name)
+    query_album = clean_title(album)
+    hit_album = clean_title(hit.album_name)
+
+    title_sim = similarity(query_title, hit_title) if (query_title and hit_title) else 0.0
+    artist_sim = (similarity(query_artist, hit_artist)
+                  if (query_artist and hit_artist) else 0.0)
+    album_sim = (similarity(query_album, hit_album)
+                 if (query_album and hit_album) else 0.0)
+
+    score = 0.0
+
+    title_ok = False
+    if title_sim >= TITLE_EXACT:
+        score += W_TITLE_EXACT
+        title_ok = True
+        reasons.append("标题精确")
+    elif title_sim >= TITLE_STRONG:
+        score += W_TITLE_STRONG
+        title_ok = True
+        reasons.append(f"标题强匹配{title_sim:.2f}")
+    elif title_sim >= TITLE_WEAK:
+        score += W_TITLE_WEAK
+        title_ok = True
+        reasons.append(f"标题弱匹配{title_sim:.2f}")
+
+    artist_ok = False
+    if artist_sim >= ARTIST_EXACT:
+        score += W_ARTIST_EXACT
+        artist_ok = True
+        reasons.append("艺人精确")
+    elif artist_sim >= ARTIST_STRONG:
+        score += W_ARTIST_STRONG
+        artist_ok = True
+        reasons.append(f"艺人强匹配{artist_sim:.2f}")
+    elif artist_sim >= ARTIST_WEAK:
+        score += W_ARTIST_WEAK
+        reasons.append(f"艺人弱匹配{artist_sim:.2f}")
+
+    duration_ok = False
+    diff = -1.0
+    if want and hit.duration:
+        diff = abs(hit.duration - want)
+        if diff <= DURATION_EXACT_SEC:
+            score += W_DURATION_EXACT
+            duration_ok = True
+            reasons.append(f"时长差{diff:.0f}s")
+        elif diff <= DURATION_NEAR_SEC:
+            score += W_DURATION_NEAR
+            reasons.append(f"时长近{diff:.0f}s")
+        elif diff <= DURATION_FAR_SEC:
+            score += W_DURATION_FAR
+            reasons.append(f"时长偏{diff:.0f}s")
+        elif title_ok and artist and not artist_ok and not scripts_disjoint(
+                query_artist, hit_artist):
+            # 歌名对上、但艺人和时长双双不符：多半是同名翻唱，压一压。
+            # **跨书写系统时除外**（`BTS` vs `방탄소년단`）：那不是「不相似」，
+            # 是无从比较，扣分等于惩罚跨语言曲库（v3.0.5）。
+            score += PENALTY_COVER
+            reasons.append("疑似翻唱")
+
+    album_ok = False
+    if album_sim >= ALBUM_EXACT:
+        score += W_ALBUM_EXACT
+        album_ok = True
+        reasons.append("专辑精确")
+    elif album_sim >= ALBUM_STRONG:
+        score += W_ALBUM_STRONG
+        album_ok = True
+        reasons.append(f"专辑强匹配{album_sim:.2f}")
+
+    if hit.synced and usable_text(hit.synced):
+        score += W_SYNCED               # 同步稿严格优于纯文本稿
+        reasons.append("同步稿")
+
+    # 版次负信号：候选标题带「伴奏/翻唱/Live」——清洗后它和原版一模一样，
+    # 只能靠这一项把它压到原版后面（v3.0.5）。
+    penalty = version_penalty(hit.track_name)
+    if penalty:
+        score += penalty
+        reasons.append("版次减分")
+
+    gate = bool(title_ok or duration_ok or (album_ok and artist_ok))
+    confidence = classify_confidence(
+        title_sim, artist_sim, album_sim, diff, gate,
+        artist_known=bool(query_artist and hit_artist),
+        duration_known=bool(want and hit.duration),
+    )
+    return MatchDetail(
+        score=round(score, 4), gate=gate,
+        title_sim=round(title_sim, 4), artist_sim=round(artist_sim, 4),
+        album_sim=round(album_sim, 4), duration_diff=diff,
+        synced=bool(hit.synced and usable_text(hit.synced)),
+        confidence=confidence, reasons=tuple(reasons),
+    )
 
 
 def score_hit(hit: LyricHit, title: str, artist: str,
               want: float, album: str = "") -> tuple[float, bool]:
-    """返回 (得分, 是否通过身份门槛)。`title`/`artist`/`album` 需已归一化，`want` 是秒。
-
-    门槛有三条路：**标题对得上**，或**时长差 ≤2 秒**，或**专辑相等且艺人相符**。
-    曾经只有前两条，但本地中文标题与 LRCLIB 英文 trackName 语言不一致时（例如
-    「痴人说梦」对 `Ravings`），标题零交集、时长又恰好拿不到，两条都走不通——
-    而专辑名「崩坏星穹铁道-痴人说梦 Ravings」同时含两种写法，是唯一的桥梁
-    （v2.8.2）。专辑这条要求「艺人同时相符」，避免同一张多曲专辑里配错曲。
-    """
-    score = 0.0
-    hit_title, hit_artist = _norm(hit.track_name), _norm(hit.artist_name)
-    hit_album = _norm(hit.album_name)
-    album = _norm(album)
-
-    title_ok = False
-    if title and hit_title:
-        if title == hit_title:
-            score += 3.0
-            title_ok = True
-        elif _overlap(title, hit_title):
-            score += 2.0
-            title_ok = True
-
-    artist_ok = False
-    if artist and hit_artist:
-        if artist == hit_artist:
-            score += 1.5
-            artist_ok = True
-        elif _overlap(artist, hit_artist, floor=0.4):
-            score += 1.2
-            artist_ok = True
-
-    duration_ok = False
-    if want and hit.duration:
-        diff = abs(hit.duration - want)
-        if diff <= 2:
-            score += 3.0
-            duration_ok = True
-        elif diff <= 5:
-            score += 2.0
-        elif diff <= 10:
-            score += 1.0
-        elif title_ok and artist and not artist_ok:
-            # 歌名对上、但艺人和时长双双不符：多半是同名翻唱，压一压。
-            score -= 1.5
-
-    album_ok = False
-    if album and hit_album:
-        if album == hit_album:
-            score += 2.0
-            album_ok = True
-        elif _overlap(album, hit_album, floor=0.6):
-            score += 1.2
-            album_ok = True
-
-    if hit.synced and usable_text(hit.synced):
-        score += 0.5                       # 同步稿严格优于纯文本稿
-
-    return score, (title_ok or duration_ok or (album_ok and artist_ok))
+    """`score_hit_detail` 的兼容封装：只要 (得分, 是否过门槛)。"""
+    detail = score_hit_detail(hit, title, artist, want, album)
+    return detail.score, detail.gate
 
 
 def _best_of(candidates: list[LyricHit], title: str, artist: str,
-             want: float, album: str = "") -> LyricHit | None:
+             want: float, album: str = "",
+             allow_low: bool = False) -> tuple[LyricHit | None, MatchDetail | None]:
     best: LyricHit | None = None
+    best_detail: MatchDetail | None = None
     best_score = float("-inf")
     for hit in candidates:
-        score, gate = score_hit(hit, title, artist, want, album)
-        if not gate:
+        detail = score_hit_detail(hit, title, artist, want, album)
+        if not detail.gate:
             continue
-        if score > best_score:
-            best, best_score = hit, score
-    return best
+        if detail.confidence == CONF_LOW and not allow_low:
+            continue                       # 只有弱标题一项支撑：不值得冒险
+        if detail.score > best_score:
+            best, best_detail, best_score = hit, detail, detail.score
+    return best, best_detail
 
 
-def pick_best(hits: list[LyricHit], title: str, artist: str,
-              duration_ms: int = 0, album: str = "") -> LyricHit | None:
-    """在候选里选最可信的一条；没有「对得上」的信号就不猜。
+def pick_best_detail(hits: list[LyricHit], title: str, artist: str,
+                     duration_ms: int = 0, album: str = "",
+                     allow_low: bool = False) -> tuple[LyricHit | None, MatchDetail | None]:
+    """`pick_best` 的详版：额外返回命中那一条的 `MatchDetail`（供日志/评测）。
 
-    先只在**带同步时间轴**的候选里选，一条都没通过才退到纯文本稿：
+    先用**带同步时间轴**的候选选一轮，一条都没通过才退到纯文本稿：
     不能滚动的高亮歌词体验差得多，只要同一首歌有同步稿就绝不用纯文本。
-
-    `album` 参与身份判定（v2.8.2）：中文标题 ↔ 英文 trackName 语言不一致时，
-    专辑名是唯一能把两者对上号的桥梁，见 `score_hit`。
     """
-    normalized_title, normalized_artist = _norm(title), _norm(artist)
     want = duration_ms / 1000.0 if duration_ms else 0.0
     usable = [h for h in hits if not h.instrumental and usable_text(h.text)]
     synced_only = [h for h in usable if h.synced and usable_text(h.synced)]
-    return (_best_of(synced_only, normalized_title, normalized_artist, want, album)
-            or _best_of(usable, normalized_title, normalized_artist, want, album))
+    best, detail = _best_of(synced_only, title, artist, want, album, allow_low)
+    if best is not None:
+        return best, detail
+    return _best_of(usable, title, artist, want, album, allow_low)
+
+
+def pick_best(hits: list[LyricHit], title: str, artist: str,
+              duration_ms: int = 0, album: str = "",
+              allow_low: bool = False) -> LyricHit | None:
+    """在候选里选最可信的一条；没有「对得上」的信号就不猜。
+
+    `allow_low=False`（默认）会丢掉置信档位为 `low` 的候选——那一档只靠
+    「标题弱相似」撑着，正是「晴天」配到「晴天娃娃」的来源。配错词比没有词
+    更糟，所以默认不冒这个险；评测想看清「到底差在哪」时传 True。
+    """
+    return pick_best_detail(hits, title, artist, duration_ms, album, allow_low)[0]
 
 
 # ---------- 网络 ----------
@@ -506,7 +522,6 @@ def fetch_outcome(title: str, artist: str, duration_ms: int = 0,
     if not plan:
         return FetchOutcome()
 
-    normalized_title, normalized_artist = _norm(title), _norm(artist)
     want = duration_ms / 1000.0 if duration_ms else 0.0
     threshold = GOOD_ENOUGH if want else GOOD_ENOUGH_NO_DURATION
     deadline = time.monotonic() + TOTAL_BUDGET
@@ -531,12 +546,12 @@ def fetch_outcome(title: str, artist: str, duration_ms: int = 0,
             continue
         except Exception:  # noqa: BLE001  单条查询失败不该影响后续查询
             continue
-        hit = pick_best(as_hits(payload), title, artist, duration_ms, album)
-        if hit is None:
+        hit, detail = pick_best_detail(as_hits(payload), title, artist,
+                                       duration_ms, album)
+        if hit is None or detail is None:
             continue
-        score, _ = score_hit(hit, normalized_title, normalized_artist, want, album)
-        if score > best_score:
-            best, best_score = hit, score
+        if detail.score > best_score:
+            best, best_score = hit, detail.score
         if best_score >= threshold:
             break
 
@@ -566,7 +581,6 @@ def fetch_best_hit(title: str, artist: str, duration_ms: int = 0,
     if not plan:
         return None, False
 
-    normalized_title, normalized_artist = _norm(title), _norm(artist)
     want = duration_ms / 1000.0 if duration_ms else 0.0
     threshold = GOOD_ENOUGH if want else GOOD_ENOUGH_NO_DURATION
     deadline = time.monotonic() + TOTAL_BUDGET
@@ -587,12 +601,12 @@ def fetch_best_hit(title: str, artist: str, duration_ms: int = 0,
             continue
         except Exception:  # noqa: BLE001  单条查询失败不该影响后续查询
             continue
-        hit = pick_best(as_hits(payload), title, artist, duration_ms, album)
-        if hit is None:
+        hit, detail = pick_best_detail(as_hits(payload), title, artist,
+                                       duration_ms, album)
+        if hit is None or detail is None:
             continue
-        score, _ = score_hit(hit, normalized_title, normalized_artist, want, album)
-        if score > best_score:
-            best, best_score = hit, score
+        if detail.score > best_score:
+            best, best_score = hit, detail.score
         if best_score >= threshold:
             break
 

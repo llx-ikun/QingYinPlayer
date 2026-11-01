@@ -29,6 +29,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import QThread, Signal
 
+from app.lyrics_match import (
+    CONF_LOW,
+    CONSENSUS_BONUS,
+    CONSENSUS_BONUS_MAX,
+    MatchDetail,
+    same_lyrics,
+)
 from app.lyrics_online import (
     DEFAULT_TIMEOUT,
     LyricHit,
@@ -37,6 +44,7 @@ from app.lyrics_online import (
     clean_title,
     fetch_best_hit,
     pick_best,
+    score_hit_detail,
     usable_text,
 )
 
@@ -359,10 +367,72 @@ def _best_with_source(pairs: list[tuple[str, LyricHit]], title: str, artist: str
     return best, pairs[0][0]
 
 
+# ---------- 跨源投票（v3.0.5） ----------
+#
+# 单源命中有个固有风险：某个平台把「同名不同曲」排在第一，而它的身份信号
+# 又恰好勉强过关（比如只靠时长对上）。三个源同时给出**逐字相同的歌词正文**时，
+# 几乎可以断定就是这一版；只有一个源说「是它」时，就该多一分怀疑。
+#
+# 所以给「有共识的候选」加分，但**上限只有 1.2**——投票是用来打破平局的，
+# 不该盖过身份信号（一个源标题精确 vs 三个源标题全错，仍然要选前者）。
+
+
+def consensus_sources(pairs: list[tuple[str, LyricHit]], index: int,
+                      threshold: float = 0.85) -> list[str]:
+    """统计有多少个源给出的歌词正文与 `pairs[index]` 一致（含自己）。"""
+    if not pairs or not 0 <= index < len(pairs):
+        return []
+    base = pairs[index][1].text
+    if not base:
+        return []
+    agreed: list[str] = []
+    for source, hit in pairs:
+        if (hit.text and same_lyrics(base, hit.text, threshold)
+                and source not in agreed):
+            agreed.append(source)
+    return agreed
+
+
+def pick_with_consensus(pairs: list[tuple[str, LyricHit]], title: str, artist: str,
+                        duration_ms: int = 0, album: str = "",
+                        allow_low: bool = False,
+                        ) -> tuple[LyricHit | None, str, MatchDetail | None, list[str]]:
+    """跨源投票选最优，返回 `(hit, 来源, 打分详情, 一致的源名)`。
+
+    流程：每个源先按身份信号打分 → 计数「有几个源给了同一份歌词」→
+    总分 = 身份分 + 共识加分（`CONSENSUS_BONUS`/源，上限 `CONSENSUS_BONUS_MAX`）
+    → 取最高分。平票时保持 `pairs` 的原始顺序（即 `DEFAULT_SOURCES` 的优先级），
+    因为 LRCLIB 是唯一有官方文档的源，同分时它更可信。
+    """
+    if not pairs:
+        return None, "", None, []
+
+    want = duration_ms / 1000.0 if duration_ms else 0.0
+    scored: list[tuple[float, int, MatchDetail, list[str]]] = []
+    for index, (_source, hit) in enumerate(pairs):
+        detail = score_hit_detail(hit, title, artist, want, album)
+        if not detail.gate:
+            continue
+        if detail.confidence == CONF_LOW and not allow_low:
+            continue
+        agreed = consensus_sources(pairs, index)
+        bonus = min(CONSENSUS_BONUS * (len(agreed) - 1), CONSENSUS_BONUS_MAX)
+        scored.append((detail.score + max(bonus, 0.0), index, detail, agreed))
+
+    if not scored:
+        return None, "", None, []
+
+    # 分数降序、下标升序（同分时保持源顺序），两个键都要显式写
+    _ranked, index, detail, agreed = max(scored, key=lambda item: (item[0], -item[1]))
+    hit = pairs[index][1]
+    return hit, pairs[index][0], detail, agreed
+
+
 def fetch_outcome_multi(title: str, artist: str, duration_ms: int = 0,
                         timeout: float = DEFAULT_TIMEOUT, fetches=None,
                         album: str = "", progress=None, parallel: bool = True,
-                        sources=None) -> tuple[str | None, str, bool]:
+                        sources=None, detail_sink: dict | None = None,
+                        ) -> tuple[str | None, str, bool]:
     """多源并行检索歌词，返回 `(歌词原文, 来源名, 是否中止)`。
 
     `fetches` 可按来源名注入 fetch（`{"LRCLIB": fn, "网易云": fn, ...}`），
@@ -371,6 +441,10 @@ def fetch_outcome_multi(title: str, artist: str, duration_ms: int = 0,
     `parallel=False` 串行执行（测试用，结果与并行一致但无线程）。
     `aborted=True` 表示「至少一个源被限流/超时且全都没命中」，此时调用方
     绝不能写负缓存——一次网络抖动不等于这首歌没有歌词。
+    `detail_sink`（v3.0.5）可选：传入一个 dict，命中时会被填入
+    `{"score","confidence","title_sim","artist_sim","consensus"}`，
+    供界面/日志解释「为什么是这一条」。**返回值签名保持不变**，因为这些
+    细节是诊断信息，不该污染主调用路径。
     """
     sources = sources if sources is not None else DEFAULT_SOURCES
     if not sources:
@@ -410,8 +484,20 @@ def fetch_outcome_multi(title: str, artist: str, duration_ms: int = 0,
     pairs = [(name, hit) for name, hit, _ in results if hit is not None]
     any_aborted = any(aborted for _, _, aborted in results)
     if pairs:
-        best, source = _best_with_source(pairs, title, artist, duration_ms, album)
+        best, source, detail, agreed = pick_with_consensus(
+            pairs, title, artist, duration_ms, album)
         if best is not None:
+            if detail_sink is not None:
+                detail_sink.update({
+                    "score": detail.score,
+                    "confidence": detail.confidence,
+                    "title_sim": detail.title_sim,
+                    "artist_sim": detail.artist_sim,
+                    "album_sim": detail.album_sim,
+                    "duration_diff": detail.duration_diff,
+                    "reasons": detail.reasons,
+                    "consensus": agreed,
+                })
             return best.text, source, False
     return None, "", any_aborted
 

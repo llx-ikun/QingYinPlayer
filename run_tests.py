@@ -33,6 +33,8 @@ MODULES = [
     "tests.test_library",
     # v2.2 联网歌词：URL 构造 / 脏数据 / 选曲打分 / 缓存读写 / 后台线程（不联网）
     "tests.test_lyrics_online",
+    # v3.0.5 歌词匹配纯文本层：繁简归并 / 分语言分词 / 相似度 / 置信分档（无 Qt 无网络）
+    "tests.test_lyrics_match",
     # v2.6.8 多源联网歌词：网易云/QQ 解析 / 候选挑选 / 多源并行取最优（不联网）
     "tests.test_lyrics_multi",
     # v2.6.2 歌词批量导入：.lrc 文件名 → 曲目匹配（纯逻辑）

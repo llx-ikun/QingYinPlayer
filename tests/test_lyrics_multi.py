@@ -20,6 +20,7 @@ from app.lyrics_multi import (
     build_qq_lyric_url,
     build_qq_search_url,
     build_web_search_urls,
+    consensus_sources,
     fetch_netease,
     fetch_outcome_multi,
     fetch_qq,
@@ -27,8 +28,10 @@ from app.lyrics_multi import (
     parse_netease_search,
     parse_qq_lyric,
     parse_qq_search,
+    pick_with_consensus,
     web_search_url,
 )
+from app.lyrics_online import LyricHit
 
 
 def setUpModule():
@@ -419,6 +422,108 @@ class TestMultiSourceWorker(unittest.TestCase):
             self._run(worker, missed=missed, aborted=aborted, timeout_ms=600)
         self.assertEqual(missed, [])
         self.assertEqual(aborted, ["tid-3"])
+
+
+class TestConsensusVoting(unittest.TestCase):
+    """v3.0.5 跨源投票：多个源给出逐字相同的正文时，「就是这一版」更可信。
+
+    这不是拍脑袋——单源命中的固有风险是某平台把同名不同曲排在第一，而它的
+    身份信号恰好勉强过关。三个源说同一件事，和一个源说一件事，可信度不同。
+    """
+
+    LYRICS_A = "[00:01.00]故事的小黄花\n[00:05.00]从出生那年就飘着"
+    LYRICS_B = "[00:02.00]故事的小黄花\n[00:06.00]从出生那年就飘着"   # 时间轴不同、正文一致
+    LYRICS_OTHER = "[00:01.00]孤勇者\n[00:05.00]都是勇敢的"
+
+    def _hit(self, track: str, artist: str, duration: int, text: str):
+        return LyricHit(track_name=track, artist_name=artist, album_name="",
+                        duration=duration, synced=text, plain=None,
+                        instrumental=False)
+
+    def test_identical_bodies_count_as_agreement(self):
+        pairs = [
+            ("LRCLIB", self._hit("晴天", "周杰伦", 269, self.LYRICS_A)),
+            ("网易云", self._hit("晴天", "周杰伦", 270, self.LYRICS_B)),
+        ]
+        self.assertEqual(consensus_sources(pairs, 0), ["LRCLIB", "网易云"])
+
+    def test_different_bodies_do_not_agree(self):
+        pairs = [
+            ("LRCLIB", self._hit("晴天", "周杰伦", 269, self.LYRICS_A)),
+            ("网易云", self._hit("晴天", "周杰伦", 269, self.LYRICS_OTHER)),
+        ]
+        self.assertEqual(consensus_sources(pairs, 0), ["LRCLIB"])
+
+    def test_single_source_has_no_consensus(self):
+        pairs = [("LRCLIB", self._hit("晴天", "周杰伦", 269, self.LYRICS_A))]
+        self.assertEqual(consensus_sources(pairs, 0), ["LRCLIB"])
+
+    def test_out_of_range_index_is_safe(self):
+        pairs = [("LRCLIB", self._hit("晴天", "周杰伦", 269, self.LYRICS_A))]
+        self.assertEqual(consensus_sources(pairs, 5), [])
+        self.assertEqual(consensus_sources([], 0), [])
+
+    def test_empty_lyrics_never_vote(self):
+        """空正文不能互相投票——否则两个「查到了但没词」的源会伪造共识。"""
+        pairs = [
+            ("LRCLIB", self._hit("晴天", "周杰伦", 269, "")),
+            ("网易云", self._hit("晴天", "周杰伦", 269, "")),
+        ]
+        self.assertEqual(consensus_sources(pairs, 0), [])
+
+    def test_consensus_breaks_tie_between_sources(self):
+        """身份信号打平时，两个源一致的那条应当胜出。"""
+        pairs = [
+            ("LRCLIB", self._hit("晴天", "周杰伦", 269, self.LYRICS_A)),
+            ("网易云", self._hit("晴天", "周杰伦", 269, self.LYRICS_A)),
+            ("QQ音乐", self._hit("晴天", "周杰伦", 269, self.LYRICS_OTHER)),
+        ]
+        best, source, detail, agreed = pick_with_consensus(pairs, "晴天", "周杰伦", 269_000)
+        self.assertIsNotNone(best)
+        self.assertEqual(source, "LRCLIB")
+        self.assertEqual(sorted(agreed), ["LRCLIB", "网易云"])
+        # 详情里给的是**身份分**，共识加分只影响排序，不写进 detail.score
+        self.assertGreater(detail.score, 0)
+        self.assertEqual(best.synced, self.LYRICS_A)
+
+    def test_consensus_does_not_override_identity_signal(self):
+        """投票只用来打破平局：标题精确仍要压过「三个源一致的错歌」。"""
+        pairs = [
+            ("LRCLIB", self._hit("晴天", "周杰伦", 269, self.LYRICS_A)),
+            ("网易云", self._hit("孤勇者", "陈奕迅", 250, self.LYRICS_OTHER)),
+            ("QQ音乐", self._hit("孤勇者", "陈奕迅", 250, self.LYRICS_OTHER)),
+        ]
+        best, source, _detail, _agreed = pick_with_consensus(
+            pairs, "晴天", "周杰伦", 269_000)
+        self.assertIsNotNone(best)
+        self.assertEqual(source, "LRCLIB")
+
+    def test_detail_sink_is_filled_on_hit(self):
+        pairs_hit = self._hit("晴天", "周杰伦", 269, self.LYRICS_A)
+
+        def fake_source(name):
+            def run(title, artist, duration_ms, timeout, fetch, album):
+                return pairs_hit, False
+            return run
+
+        sink = {}
+        text, _source, aborted = fetch_outcome_multi(
+            "晴天", "周杰伦", 269_000, parallel=False,
+            sources=[("LRCLIB", fake_source("LRCLIB"))], detail_sink=sink)
+        self.assertIsNotNone(text)
+        self.assertFalse(aborted)
+        self.assertEqual(sink["confidence"], "high")
+        self.assertGreaterEqual(sink["title_sim"], 0.99)
+        self.assertIn("LRCLIB", sink["consensus"])
+
+    def test_detail_sink_stays_empty_on_miss(self):
+        def fake_source(title, artist, duration_ms, timeout, fetch, album):
+            return None, False
+
+        sink = {}
+        fetch_outcome_multi("晴天", "周杰伦", 269_000, parallel=False,
+                            sources=[("LRCLIB", fake_source)], detail_sink=sink)
+        self.assertEqual(sink, {})
 
 
 if __name__ == "__main__":
