@@ -6,7 +6,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-PATH = r"C:\Users\西\Music\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac"
+# 用法：python tools/check_media.py <音频文件路径>
+PATH = sys.argv[1] if len(sys.argv) > 1 else r"<音乐目录>\示例.flac"
 
 
 def main() -> int:

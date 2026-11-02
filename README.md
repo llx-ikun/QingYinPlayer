@@ -5,6 +5,23 @@ QQ 音乐桌面端风格的四套配色主题（深色/纯黑/浅色/纯白）�
 
 技术栈：Python 3.13 + PySide6 6.12（Qt Multimedia / FFmpeg 后端）+ mutagen + JSON 持久化。
 
+**平台**：Windows 10 / 11（x64）· **许可**：[MIT](LICENSE) · **版本**：v3.2.1
+
+---
+
+## 下载
+
+到 [Releases](../../releases/latest) 页面挑一个包，**解压后直接双击 exe**，无需安装、无需 Python：
+
+| 包 | 解压后 | 适合谁 | 说明 |
+|---|---|---|---|
+| `QingYinPlayer-v3.2.1-win64-onefile.zip` | 一个 123 MB 的 exe | 想省事 | 双击即用；首次启动要把运行库解压到临时目录，约 2-5 秒 |
+| `QingYinPlayer-v3.2.1-win64-onedir.zip` | 一个 316 MB 的文件夹 | 想秒开 / 放 U 盘 | 启动更快；解压出来是一整文件夹，**别只拷 exe** |
+
+> 两个包**下载体积几乎一样**（都约 122 MB，目录版压缩率高），功能**完全一样**，
+> 区别只在运行库是打包进 exe 还是散在文件夹里。
+> 本软件未做数字签名，首次运行时若被杀毒软件拦截，请选择「允许」——属误报。
+
 ---
 
 ## 功能
@@ -31,16 +48,15 @@ QQ 音乐桌面端风格的四套配色主题（深色/纯黑/浅色/纯白）�
 
 > 实际可播放性由系统 FFmpeg 后端决定。实测音频 mp3/flac/wav/ogg 全部正常；视频已实测 MJPEG AVI（自造夹具）与 Qt 后端可解码的容器。**容器可导入 ≠ 该容器内所有编码都能解码**，不支持的编码会走既有错误提示与跳过链。
 
-## 快速开始（普通用户）
+## 快速开始
 
-1. 双击 `dist/QingYinPlayer.exe`（单文件便携版，首次启动需解压，约 2-5 秒）；
-   或进入 `dist/QingYinPlayer-Portable/` 双击里面的 `QingYinPlayer-Portable.exe`（目录版，启动更快）。
+1. 解压下载的包，双击 `QingYinPlayer.exe`（单文件版）或 `QingYinPlayer-Portable.exe`（目录版）。
 2. 点击左下角「导入音乐」→ 选择文件夹或文件；也可以把音乐文件/文件夹直接拖进窗口。
 3. 双击列表中的歌曲开始播放。
 
 > - exe 文件名使用英文是为规避部分 Windows 显卡驱动（Intel 核显 + D3D9on12）对中文程序名的兼容问题——中文 exe 名会在这些机器上启动崩溃；**程序界面、窗口标题全部为中文，不受影响**；
 > - 首次启动若被杀毒软件拦截，请选择「允许」——本软件未做数字签名，属误报；
-> - **只能运行 `dist/` 里的 exe**；`build/` 目录是打包过程的中间文件，不可运行；
+> - **从源码构建时只能运行 `dist/` 里的 exe**；`build/` 目录是打包过程的中间文件，不可运行；
 > - 数据默认保存在 `%APPDATA%\轻音播放器\`（歌单、设置、封面、曲库）。可在「设置 → 存储」里改到其他盘，或在软件目录放一个 `data/` 文件夹启用便携模式（数据随文件夹走）。
 
 ## 快捷键
@@ -78,12 +94,15 @@ python -m venv .venv
 # 2. 运行（开发模式）
 .venv/Scripts/python.exe main.py
 
-# 3. 运行测试（604 项：单测 + offscreen E2E，29 个独立进程）
+# 3. 运行测试（935 项：单测 + offscreen E2E，36 个独立进程）
 .venv/Scripts/python.exe run_tests.py
 # 无显示器的 headless 环境（如 CI）自动加 QT_QPA_PLATFORM=offscreen
 
 # 4. 打包（单文件版 + 目录版 + 冒烟测试；图标缺失时才自动补一个占位）
 .venv/Scripts/python.exe build.py
+
+# 5. 打发布包（生成可上传到 GitHub Release 的两个 zip，见下）
+.venv/Scripts/python.exe tools/make_release.py
 ```
 
 > **本仓库开发环境注意事项（WorkBuddy 沙箱）**：
@@ -97,7 +116,7 @@ python -m venv .venv
 music-player/
 ├── main.py               # 入口（--check 环境自检 / --smoke 产物自检）
 ├── build.py              # 图标生成 + PyInstaller 打包
-├── run_tests.py          # 全量回归入口（29 个独立进程）
+├── run_tests.py          # 全量回归入口（36 个独立进程）
 ├── app/                  # 后端核心（无 UI 依赖，可单测）
 │   ├── models.py         #   Track / Playlist / Settings / 排序预设
 │   ├── store.py          #   JSON 持久化 + 曲库/歌单 CRUD + 收藏
@@ -132,9 +151,12 @@ music-player/
 │   ├── settings_dialog.py#   设置框（外观/背景/歌词统计/存储）
 │   └── theme.py / icons.py  # 四套主题 QSS + 手绘图标工厂
 ├── tests/                # 单测 + E2E + 夹具生成器
-├── tools/                # 视觉自审截图与探针工具（开发辅助）
-├── docs/history/         # 历史交付说明、预览与早期脚本归档
-└── assets/app.ico        # 应用图标（正式图标在真实桌面下生成，见「已知事项」）
+├── tools/                # 视觉自审截图、探针与 make_release.py（开发辅助）
+├── docs/releases/        # 每个版本的交付说明（v3.0.0 ~ v3.2.1）
+├── docs/history/         # 早期交付说明、预览与脚本归档
+├── assets/app.ico        # 应用图标
+├── CHANGELOG.md          # 版本变更记录
+└── LICENSE               # MIT
 ```
 
 ## 已知事项
@@ -148,7 +170,19 @@ music-player/
 
 ## 设计文档
 
-- `DESIGN.md`：需求确认、技术选型（含备选方案对比与否决理由）、数据模型、风险预演、验收标准（含 §12 v2.0 UI 改版）；
+- `DESIGN.md`：需求确认、技术选型（含备选方案对比与否决理由）、数据模型、风险预演、验收标准；
 - `TASK.md`：勾选式任务拆解与依赖关系；
 - `ACCEPTANCE.md`：验收标准逐条对照测试证据（含需本机验证项标注）；
-- `docs/txt-lyrics-exact-match.md`：让歌词与 `.txt` 原文完全匹配的方案设计（**待确认，未开发**），含已确诊的 4 处文本改写点与 A/B/C 三方案取舍。
+- `CHANGELOG.md`：版本变更记录；
+- `docs/releases/`：每个版本的交付说明（改了什么、为什么这么改、验证了什么）；
+- `FEATURE_AUDIT.md`：功能体检报告（信号接线审计 + 主路径串联实跑）；
+- `docs/txt-lyrics-exact-match.md`：让歌词与 `.txt` 原文完全匹配的方案设计（**待确认，未开发**）。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 LLX-ikun
+
+用到的第三方组件各有其许可：PySide6（LGPLv3）、Qt 6（LGPLv3）、FFmpeg（LGPL/GPL，随 Qt Multimedia 分发）、
+mutagen（GPLv2+）、faster-whisper / CTranslate2（MIT）、numpy（BSD-3-Clause）。目录版 `_internal/` 下保留了各依赖的许可文件。
+
+> 「逐字时间轴」功能可选下载 Whisper 模型（tiny / base / small），模型权重由 OpenAI 以 MIT 许可发布，**不会随本软件分发**，由用户在设置里按需下载到本机。

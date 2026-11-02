@@ -284,7 +284,7 @@ env -u PYTHONPATH .venv/Scripts/python.exe -m ruff check .  # 静态检查干净
 
 **用户库清理与导入（本机 `%APPDATA%\轻音播放器\data.json`，每次改动前均有 `.bak-<时间戳>` 备份）**：
 - 删除指向已清空夹具的失效条目「晴天」（`tests/fixtures/我的音乐/晴天 - 周杰伦.mp3`），同时清空指向它的 `last_track_id` / `last_position_ms`。
-- 导入用户指定的 `C:\Users\西\Music\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac`：标题 `Blazing Heart (英文版)`、艺人 `Chrissy Costanza/HOYO-MiX`、专辑 `原神-灼火之心 Blazing Heart`、时长 **177.98 s**、格式 `flac`、内嵌封面 83483 B、文件大小 **38.2 MB**（`tools/check_media.py` 实测 `LoadedMedia`、无解码错误）。
+- 导入用户指定的 `<音乐目录>\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac`：标题 `Blazing Heart (英文版)`、艺人 `Chrissy Costanza/HOYO-MiX`、专辑 `原神-灼火之心 Blazing Heart`、时长 **177.98 s**、格式 `flac`、内嵌封面 83483 B、文件大小 **38.2 MB**（`tools/check_media.py` 实测 `LoadedMedia`、无解码错误）。
 
 ### v2.1.6 播放栏视觉打磨（2026-10-27）
 

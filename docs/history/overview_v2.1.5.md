@@ -83,7 +83,7 @@ VIDEO_DIR = os.path.join(GENERATED, "我的视频")
 ## 四、本机曲库处理（`%APPDATA%\轻音播放器\data.json`，改动前均备份 `.bak-<时间戳>`）
 
 - **删除**指向已清空夹具的失效条目「晴天」（`tests/fixtures/我的音乐/晴天 - 周杰伦.mp3`），并清空指向它的 `last_track_id` / `last_position_ms`。
-- **导入** `C:\Users\西\Music\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac`：
+- **导入** `<音乐目录>\Chrissy Costanza _ HOYO-MiX - Blazing Heart (英文版).flac`：
   - 标题 `Blazing Heart (英文版)` · 艺人 `Chrissy Costanza/HOYO-MiX` · 专辑 `原神-灼火之心 Blazing Heart`
   - 时长 **177.98 s** · 格式 `flac` · 内嵌封面 83483 B · 文件大小 **38.2 MB**
   - `tools/check_media.py` 实测 `QMediaPlayer` → `LoadedMedia`、无错误

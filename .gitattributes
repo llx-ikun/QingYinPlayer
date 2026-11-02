@@ -1,0 +1,18 @@
+# 统一按文本处理，避免 Windows / Linux 之间的 CRLF 抖动
+* text=auto
+
+# 二进制资源：不做换行转换，也不显示文本 diff
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.wav  binary
+*.mp3  binary
+*.flac binary
+*.exe  binary
+*.dll  binary
+*.pyd  binary
+*.so   binary
+
+# 构建脚本用 LF，别让 shebang 被改坏
+*.sh text eol=lf
