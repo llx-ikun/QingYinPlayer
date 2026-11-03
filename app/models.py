@@ -25,7 +25,7 @@ VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m
 MEDIA_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
 
 # 自定义背景的四种形态（v2.2）
-BG_TYPES = ("none", "color", "gradient", "image")
+BG_TYPES = ("none", "color", "gradient", "image", "live")
 
 # 歌词颜色覆盖（v2.9.0）：触发节奏 / 渐变方向
 COLOR_TRIGGERS = ("progress", "time")              # 按歌词进度 / 按播放时间

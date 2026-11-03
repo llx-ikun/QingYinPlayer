@@ -67,7 +67,7 @@ from app.metadata import read_track
 from app.library import is_in_library
 from app.models import (LYRICS_AI_MODEL_SIZES, PLAYLIST_FAVORITES, PLAYLIST_LIBRARY,
                         PLAYLIST_RECENT, BackgroundConfig, Track)
-from app.paths import covers_dir, data_file, library_dir
+from app.paths import covers_dir, data_file, energy_dir, library_dir
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
 from app.sorting import (DEFAULT_PLAYLIST_SORT, apply_manual_order,
@@ -76,6 +76,7 @@ from app.store import LibraryStore
 from app.version import version_text
 from ui import theme as ui_theme
 from ui.background import BackgroundLayer
+from ui.live_bg import EnergyWorker, energy_for
 from ui.dialogs import ImportProgressDialog
 from ui.float_bar import FloatBar
 from ui.player_bar import PLAYER_BAR_HEIGHT, PlayerBar
@@ -273,6 +274,11 @@ class MainWindow(QMainWindow):
         # 自定义背景层（v2.2）：最先创建 => 天然处于最底层，被后续控件盖住。
         # 手动定位而不是进布局：它要铺满整个窗口根容器（含标题栏/播放栏下方）。
         self.background = BackgroundLayer(self._root)
+        # 动态背景（v3.3.0）需要的两样东西：当前这首的能量包络、算它的后台线程
+        self._live_envelope: list[float] | None = None
+        self._energy_worker: EnergyWorker | None = None
+        self.background.set_live_energy_provider(
+            lambda: energy_for(self._live_envelope, self.player.position_ms))
 
         outer = QVBoxLayout(self._root)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -618,6 +624,57 @@ class MainWindow(QMainWindow):
         self._load_lyrics(track)
         # 逐曲逐句颜色（v2.9.0）：换歌即换配色表
         self.now_playing.lyrics.set_line_colors(load_line_colors(track.id))
+        # 动态背景（v3.3.0）：换歌要换能量包络，否则背景还在跟着上一首的节奏跳
+        self._prepare_live_energy()
+
+    # ---------- v3.3.0 动态背景：音频能量 ----------
+
+    def _prepare_live_energy(self) -> None:
+        """给动态背景准备「当前这首歌」的音量包络。
+
+        只在真的选了动态背景时才算 —— 这个后台线程要解码整首歌（4 分钟约 0.3s），
+        用户没开动态背景时纯属白烧 CPU。反过来，用户中途才切到动态背景的情况
+        由 `_apply_background_config()` 再调一次本方法兜住。
+        """
+        self._cancel_energy_worker()
+        self._live_envelope = None
+        player = getattr(self, "player", None)
+        track = player.current_track if player is not None else None
+        if track is None or self._effective_bg_config().type != "live":
+            return
+        worker = EnergyWorker(track.id, track.path, energy_dir(), self)
+        worker.ready.connect(self._on_energy_ready)
+        worker.finished.connect(lambda w=worker: self._drop_energy_worker(w))
+        # 失败刻意静默：背景退回时间驱动即可，不该为"背景不够带感"弹窗打扰听歌
+        self._energy_worker = worker
+        worker.start()
+
+    def _on_energy_ready(self, track_id: str, envelope: list) -> None:
+        player = getattr(self, "player", None)
+        current = player.current_track if player is not None else None
+        if current is None or current.id != track_id:
+            return          # 算的过程中已经切歌，丢弃（否则会拿错节奏去驱动画面）
+        self._live_envelope = list(envelope)
+
+    def _drop_energy_worker(self, worker) -> None:
+        if self._energy_worker is worker:
+            self._energy_worker = None
+        worker.deleteLater()
+
+    def _cancel_energy_worker(self) -> None:
+        """切歌/关窗前收掉旧线程。
+
+        `requestInterruption()` 只在解码与建包络之间被检查一次（解码本身是
+        miniaudio 的一次阻塞调用，打断不了），所以这里等 3s 兜住最坏情况 ——
+        与 closeEvent 里其它后台线程的处理口径一致。
+        """
+        worker = getattr(self, "_energy_worker", None)
+        self._energy_worker = None
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(3000)
 
     def _on_position(self, position_ms: int) -> None:
         duration = self.player.duration_ms or (
@@ -631,6 +688,8 @@ class MainWindow(QMainWindow):
             self._position_timer.start()
         else:
             self._position_timer.stop()
+        # 动态背景跟着降频（30fps → 10fps）：暂停时动作还在，电费省 2/3
+        self.background.set_playing(state == "playing")
 
     def _on_duration(self, duration_ms: int) -> None:
         self.player_bar.update_duration(duration_ms)
@@ -1981,7 +2040,7 @@ class MainWindow(QMainWindow):
     def _apply_background_config(self, config) -> None:
         self.background.set_config(config)
         # 「深色」与「浅色」主题自带底层装饰（月牙星点 / 羽饰 / 四角星）；
-        # 用户一旦设了背景（纯色/渐变/图片/内置预设）就让位，免得两套背景打架。
+        # 用户一旦设了背景（纯色/渐变/图片/内置预设/动态）就让位，免得两套背景打架。
         theme = ui_theme.current_theme()
         self.background.set_decor(
             theme.name if config.type == "none" and theme.name in ("columbina", "light") else "",
@@ -1989,6 +2048,8 @@ class MainWindow(QMainWindow):
         )
         self._layout_background()
         self.background.lower()      # 任何 raise_() 之后都压回最底层
+        # v3.3.0：用户可能是在播放中途才切到动态背景，此时还没有能量包络
+        self._prepare_live_energy()
 
     def _refresh_background(self) -> None:
         """换页/换设置后更新背景。
@@ -2226,6 +2287,8 @@ class MainWindow(QMainWindow):
         if self._scanner is not None and self._scanner.isRunning():
             self._scanner.cancel()
             self._scanner.wait(3000)
+        # 动态背景的能量线程（v3.3.0）：同样先喊停再等，别带着活线程析构
+        self._cancel_energy_worker()
         # 联网抓歌词的线程必须等它自己收尾，否则析构中线程还在跑会告警/崩
         #
         # v2.7.5：先 requestInterruption 再 wait。原来只 wait(2000) 是「干等一个

@@ -192,6 +192,14 @@ def lyrics_cache_dir() -> str:
     return _subdir("lyrics_cache")
 
 
+def energy_dir() -> str:
+    """音频能量包络缓存目录（v3.3.0）：`<track_id>.json`。
+
+    一首歌几十 KB，删掉也只是下次播放重算 0.3 秒，所以不需要清理策略。
+    """
+    return _subdir("energy")
+
+
 def bgs_dir() -> str:
     """自定义背景图片目录（v2.2）。
 

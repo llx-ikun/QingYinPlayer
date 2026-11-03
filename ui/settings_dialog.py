@@ -45,6 +45,7 @@ from app.paths import bgs_dir
 from app.version import APP_NAME, version_text
 from ui import theme as ui_theme
 from ui.dialogs import StorageMoveDialog
+from ui.live_bg import LIVE_BY_KEY, LIVE_KEYS, LIVE_STYLES
 from ui.widgets import ChevronComboBox
 
 # 预设强调色：覆盖"冷暖各一支"，避免用户以为只能蓝
@@ -112,6 +113,7 @@ BG_TYPE_OPTIONS = [
     ("纯色", "color"),
     ("渐变", "gradient"),
     ("图片", "image"),
+    ("动态背景", "live"),
 ]
 
 BG_SCOPE_OPTIONS = [
@@ -383,6 +385,25 @@ class SettingsDialog(QDialog):
             self.preset_buttons[preset.id] = btn
         preset_row.addStretch(1)
         root.addLayout(preset_row)
+
+        # v3.3.0：动态背景（实时动画，亮度随歌曲能量起伏）。
+        # 与上面的静态图案**互斥**：两者写的是同一份 BackgroundConfig 的
+        # type/preset，选一个就顶掉另一个 —— 背景只能有一层，叠加会互相打架。
+        root.addSpacing(8)
+        root.addWidget(QLabel("动态背景（跟随音乐）"))
+        live_row = QHBoxLayout()
+        live_row.setSpacing(8)
+        self.live_buttons: dict[str, QPushButton] = {}
+        for style_key, style_label in LIVE_STYLES:
+            live_btn = QPushButton(style_label)
+            live_btn.setObjectName("Ghost")
+            live_btn.setToolTip(f"实时动画背景「{style_label}」，亮度随歌曲音量起伏")
+            live_btn.clicked.connect(
+                lambda _=False, k=style_key: self._apply_live(k))
+            live_row.addWidget(live_btn)
+            self.live_buttons[style_key] = live_btn
+        live_row.addStretch(1)
+        root.addLayout(live_row)
 
         top = QHBoxLayout()
         top.setSpacing(10)
@@ -978,8 +999,14 @@ class SettingsDialog(QDialog):
             return
         cfg = self._current_bg()
         cfg.type = self.bg_type_combo.itemData(index) or "none"
-        if cfg.type != "image":
-            cfg.preset = ""          # 离开图片类型就不再是内置预设
+        if cfg.type == "live":
+            # 动态背景的 preset 存的是风格 key，别被下面「离开图片就清空」的逻辑抹掉
+            if cfg.preset not in LIVE_BY_KEY:
+                cfg.preset = LIVE_KEYS[0]
+        elif cfg.type != "image" or cfg.preset in LIVE_BY_KEY:
+            # 离开图片类型就不再是内置预设；从「动态背景」切到图片时，preset 里
+            # 残留的风格 id 对图片毫无意义（会让说明显示「内置背景：dust」）
+            cfg.preset = ""
         if cfg.type == "image" and cfg.dim <= 0:
             cfg.dim = 0.35          # 默认压暗一点：直接铺亮图文字会看不清
         self._mark_page_custom()
@@ -1070,7 +1097,7 @@ class SettingsDialog(QDialog):
     def _sync_bg_widgets(self) -> None:
         """按类型显隐相关控件：选纯色时不该还摆着一行「选图片」。"""
         cfg = self._current_bg()
-        needs_color = cfg.type in ("color", "gradient")
+        needs_color = cfg.type in ("color", "gradient", "live")
         self.color_row.setVisible(needs_color)
         self.color2_label.setVisible(cfg.type == "gradient")
         self.color2_btn.setVisible(cfg.type == "gradient")
@@ -1093,6 +1120,8 @@ class SettingsDialog(QDialog):
 
         for widget in (self.opacity_slider, self.blur_slider, self.dim_slider):
             widget.setEnabled(cfg.type != "none")
+        # 动态背景没有位图可模糊（模糊滑块对它无意义），灰掉免得用户白调
+        self.blur_slider.setEnabled(cfg.type == "image")
         self.bg_inherit_box.setVisible(self._bg_scope != "all")
 
     def _apply_preset(self, preset_id: str) -> None:
@@ -1123,11 +1152,47 @@ class SettingsDialog(QDialog):
         self._mark_page_custom()
         self._emit_background()
 
+    def _apply_live(self, style_key: str) -> None:
+        """点动态背景卡片：切到实时动画背景（v3.3.0）。
+
+        默认强度给 0.8：满强度时图元 alpha 会叠到接近上限，左侧列表的图标
+        反而因为底色变亮而对比下降 —— 「更亮」不等于「更好看」。
+        """
+        cfg = self._current_bg()
+        cfg.type = "live"
+        cfg.preset = style_key if style_key in LIVE_BY_KEY else LIVE_KEYS[0]
+        cfg.image = ""
+        if cfg.opacity >= 0.99:
+            cfg.opacity = 0.8
+        self._loading = True
+        try:
+            idx = self.bg_type_combo.findData("live")
+            self.bg_type_combo.setCurrentIndex(max(0, idx))
+            self.opacity_slider.setValue(round(cfg.opacity * 100))
+            self.dim_slider.setValue(round(cfg.dim * 100))
+            self._sync_bg_value_labels()
+        finally:
+            self._loading = False
+        self._sync_bg_widgets()
+        self._sync_bg_presets()
+        self._mark_page_custom()
+        self._emit_background()
+
     def _sync_bg_presets(self) -> None:
-        """标出当前激活的内置预设卡片（用 active 属性 + repolish）。"""
+        """标出当前激活的内置预设卡片（用 active 属性 + repolish）。
+
+        v3.3.0 起同一个方法管两组卡片：静态图案（preset_buttons）与动态背景
+        （live_buttons）。两者的「激活」判据都是 `cfg.preset`，但必须带上 type ——
+        否则选了动态背景后，同名的静态卡片会一起亮起来。
+        """
         cfg = self._current_bg()
         for pid, btn in getattr(self, "preset_buttons", {}).items():
-            active = cfg.preset == pid
+            active = cfg.type == "image" and cfg.preset == pid
+            btn.setProperty("active", active)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        for key, btn in getattr(self, "live_buttons", {}).items():
+            active = cfg.type == "live" and cfg.preset == key
             btn.setProperty("active", active)
             btn.style().unpolish(btn)
             btn.style().polish(btn)

@@ -87,6 +87,8 @@ MODULES = [
     # v2.6.9 构建辅助：自检日志的编码回退（windowed 产物写 cp936，
     # 只按 utf-8 读会把失败诊断整片变成乱码）
     "tests.test_build",
+    # v3.3.0 动态背景：能量包络 / 四种风格绘制 / 计时器起停 / 设置接线
+    "tests.test_live_bg",
 ]
 
 
