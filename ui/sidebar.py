@@ -4,6 +4,7 @@
 - 用户卡片：首字母圆形头像 + 昵称 + 「本地模式」徽标，点击请求修改昵称；
 - 图标导航：♥ 我喜欢 / ⌂ 音乐库（方形图标按钮，激活态淡强调底）；
 - 歌单列表：封面缩略图（歌单内第一首歌）+ 名称 + 数量，右键重命名/删除。
+- 歌词面板切换（v3.4.1）：「最近播放」下一行，点一下在原生列表 / 视觉面板间切换。
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ class Sidebar(QWidget):
     create_playlist_requested = Signal()
     playlist_action = Signal(str, str)               # (playlist_id, "rename" | "delete")
     nickname_change_requested = Signal()
+    lyrics_panel_toggle = Signal()                   # v3.4.1：切换歌词面板样式
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -107,6 +109,19 @@ class Sidebar(QWidget):
         self.recent_btn.clicked.connect(lambda: self.view_requested.emit(PLAYLIST_RECENT))
         root.addWidget(self.recent_btn)
 
+        # ---- 歌词面板切换（v3.4.1）----
+        # 为什么做成导航项而不是开关钮：这块区域本来就是"列表"，用户的视线与
+        # 手指都在这一列里找入口；再说了只放个图标开关，没人知道它是干什么的。
+        # 文字里直接带上当前样式（· 原生 / · 视觉），点一下才切，不需要再去
+        # 设置页确认自己现在用的是哪块面板。
+        self.panel_btn = QPushButton("歌词面板 · 原生")
+        self.panel_btn.setObjectName("PanelToggle")
+        self.panel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.panel_btn.setToolTip("切换歌词面板：原生列表 / 视觉面板")
+        ic.bind_icon(self.panel_btn, "lyrics", 16, "dim")
+        self.panel_btn.clicked.connect(self.lyrics_panel_toggle.emit)
+        root.addWidget(self.panel_btn)
+
         root.addSpacing(10)
 
         # ---- 歌单区标题 ----
@@ -150,6 +165,19 @@ class Sidebar(QWidget):
 
     def set_recent_count(self, count: int) -> None:
         self.recent_btn.setText(f"最近播放 · {count}" if count else "最近播放")
+
+    def set_lyrics_panel_mode(self, mode: str) -> None:
+        """把当前歌词面板样式写进按钮文字（原生 / 视觉），视觉态同时高亮。
+
+        文字是状态的唯一出口：切换入口和状态展示放在同一个控件上，
+        否则用户点完按钮还得去别处找"现在到底是哪块面板"。
+        """
+        visual = mode == "jizura"
+        self.panel_btn.setText("歌词面板 · 视觉" if visual else "歌词面板 · 原生")
+        self.panel_btn.setProperty("active", "true" if visual else "false")
+        self.panel_btn.style().unpolish(self.panel_btn)
+        self.panel_btn.style().polish(self.panel_btn)
+        ic.bind_icon(self.panel_btn, "lyrics", 16, "accent" if visual else "dim")
 
     def set_active_view(self, view_id: str) -> None:
         for vid, btn in self._nav_buttons.items():

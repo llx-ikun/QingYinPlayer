@@ -531,6 +531,39 @@ QPushButton#NavItem[active="true"] {{
     font-weight: bold;
 }}
 
+/* 内置背景卡片（v3.4.2）：图标 + 文字整体居中。
+   沿用 Ghost 时图标被挤到最左、右边拖着一大片空 —— 那是"标签"的排法，
+   不是"二选一的卡片"。卡片之间等分由布局给 stretch，边框在这里定义。 */
+QPushButton#PresetCard {{
+    background: {t.SURFACE_HOVER};
+    border: 1px solid {t.BORDER};
+    border-radius: 10px;
+    padding: 6px 10px;
+    color: {t.TEXT};
+    font-size: 12px;
+}}
+QPushButton#PresetCard:hover {{ border-color: {t.ACCENT_DIM}; background: {t.SURFACE}; }}
+
+/* 侧边栏「歌词面板」切换行（v3.4.1）：刻意不复用 NavItem 的实底高亮。
+   它跟「最近播放」上下紧挨，两块同色实底胶囊并排会被读成"两个都是当前所在页"；
+   改成描边 + 强调色文字，语义是"这个开关开着"，不是"你在这里"。 */
+QPushButton#PanelToggle {{
+    text-align: left;
+    padding: 8px 11px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: {t.TEXT_DIM};
+    font-size: 13px;
+}}
+QPushButton#PanelToggle:hover {{
+    background: {t.SURFACE_HOVER};
+    color: {t.TEXT};
+}}
+QPushButton#PanelToggle[active="true"] {{
+    border-color: {t.ACCENT};
+    color: {t.ACCENT};
+}}
+
 /* 播放控制按钮 */
 QPushButton#PlayCircle {{
     background: {t.ACCENT};
@@ -769,6 +802,30 @@ QTabBar::tab {{
 }}
 QTabBar::tab:hover {{ color: {t.TEXT}; }}
 QTabBar::tab:selected {{ background: {t.ACCENT_SOFT}; color: {t.ACCENT}; border-color: {t.ACCENT}; }}
+
+/* ---------- 设置页内容规范（v3.4.2） ---------- */
+/* 之前每页各写各的：标题是普通 QLabel、说明是 Dim、行内标签宽 46/56/无宽度混着来，
+   结果一页里三四套栅格，"类型"和"不透明度"两个标签的左缘对不齐。
+   现在统一成：分组标题（SectionTitle）+ 表单标签（FormLabel，固定列宽）+ 说明（Hint）。 */
+QLabel#SectionTitle {{
+    color: {t.TEXT};
+    font-size: 13px;
+    font-weight: bold;
+}}
+QLabel#FormLabel {{ color: {t.TEXT_DIM}; font-size: 12px; }}
+QLabel#Hint {{ color: {t.TEXT_DIM}; font-size: 12px; }}
+QLabel#ValueLabel {{ color: {t.TEXT_DIM}; font-size: 12px; }}
+/* 分隔线：1px 实心，靠 QFrame 的固定高度撑出来，不用 border（会多算 2px 让间距发抖） */
+QFrame#Divider {{
+    background: {t.BORDER};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}}
+/* 分页内容可滚动（v3.4.2）：窗口高度不再被最长的那页（歌词与统计）撑满，
+   其余几页因此不会只剩上半屏有内容。viewport 必须透明，否则会盖一块白底。 */
+QScrollArea#SettingsScroll,
+QScrollArea#SettingsScroll > QWidget > QWidget {{ background: transparent; border: none; }}
 """
     if scrim:
         alpha = max(0.0, min(1.0, scrim))

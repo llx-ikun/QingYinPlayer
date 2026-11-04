@@ -15,13 +15,12 @@ import math
 import os
 import random
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import QWidget
 
 from app.models import BackgroundConfig
-from ui.live_bg import LIVE_BY_KEY, paint_live, paint_live_scrim
 
 # 图片背景的缓存上限：换歌/切页会反复刷新，只缓存最近一张，避免吃内存
 _PIXMAP_CACHE: dict[tuple, QPixmap] = {}
@@ -529,14 +528,9 @@ def _paint_light_decor(painter: QPainter, rect: QRectF, color: str) -> None:
 class BackgroundLayer(QWidget):
     """铺满窗口底层的背景画布。鼠标穿透，不影响任何交互。
 
-    v3.3.0 起多一种 `live` 类型（动态背景）：它需要定时重绘，所以计时器挂在
-    这个控件上 —— 只有真的选了动态背景、而且控件可见时才跑，避免白白烧 CPU。
+    支持纯色 / 线性渐变 / 图片（可模糊、暗化、降透明度），以及主题底层装饰
+    （深色 columbina / 浅色 light）。背景类型由 `BackgroundConfig` 决定。
     """
-
-    # 30fps。实测一帧 5.18ms（tools/probe_live_bg.py），占预算 15.6%，够用且省电。
-    # 暂停时降到 10fps：动画还在，CPU 直接掉到 1/3。
-    _LIVE_INTERVAL_MS = 33
-    _LIVE_IDLE_INTERVAL_MS = 100
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -547,66 +541,8 @@ class BackgroundLayer(QWidget):
         self._pixmap: QPixmap | None = None
         self._decor = ""                       # 主题装饰名（目前只有 "columbina"）
         self._decor_color = "#7ec8e8"
-        self._live_phase = 0.0                 # 动画相位（秒）
-        self._energy_provider = None           # () -> float（0~1）
-        self._playing = False
-        self._live_timer = QTimer(self)
-        self._live_timer.setInterval(self._LIVE_INTERVAL_MS)
-        self._live_timer.timeout.connect(self._tick_live)
 
     # ---------- 对外 ----------
-
-    def set_live_energy_provider(self, provider) -> None:
-        """注入当前能量来源（`() -> 0~1`）。传 None = 退回时间驱动。
-
-        用回调而不是让本类读播放器：背景层不该知道有播放器这回事，
-        否则它会和 `ui/main_window.py` 互相 import，测试也没法单独构造。
-        """
-        self._energy_provider = provider
-
-    def set_playing(self, playing: bool) -> None:
-        """播放中 30fps，暂停 10fps。"""
-        if bool(playing) == self._playing:
-            return
-        self._playing = bool(playing)
-        self._live_timer.setInterval(
-            self._LIVE_INTERVAL_MS if self._playing else self._LIVE_IDLE_INTERVAL_MS)
-        self._sync_live_timer()
-
-    def current_energy(self) -> float:
-        """本帧的能量值。没有包络时给一个缓慢起伏的基线。
-
-        基线不能是 0：包络还没算好（切歌后约 0.3s）或解码失败时，背景若完全静止，
-        用户会以为功能坏了。也不能太高，否则和"真的跟着鼓点"分不出来。
-        """
-        if self._energy_provider is not None:
-            try:
-                value = float(self._energy_provider())
-            except Exception:
-                value = 0.0
-            if value > 0.0:
-                return min(1.0, value)
-        return 0.28 + 0.16 * math.sin(self._live_phase * 0.9)
-
-    def _sync_live_timer(self) -> None:
-        """只有「选的是动态背景」+「控件可见」才跑计时器。"""
-        should_run = self._config.type == "live" and self.isVisible()
-        if should_run and not self._live_timer.isActive():
-            self._live_timer.start()
-        elif not should_run and self._live_timer.isActive():
-            self._live_timer.stop()
-
-    def _tick_live(self) -> None:
-        self._live_phase += self._live_timer.interval() / 1000.0
-        self.update()
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        self._sync_live_timer()
-
-    def hideEvent(self, event) -> None:  # noqa: N802
-        self._live_timer.stop()
-        super().hideEvent(event)
 
     def set_decor(self, name: str, color: str = "#7ec8e8") -> None:
         """主题装饰。只在**没有自定义背景**时绘制，以免和用户选的背景打架。"""
@@ -619,7 +555,6 @@ class BackgroundLayer(QWidget):
     def set_config(self, config: BackgroundConfig) -> None:
         self._config = config
         self._pixmap = None           # 尺寸/模糊变了要重算
-        self._sync_live_timer()       # 切进/切出动态背景要起停计时器
         self.update()
 
     def config(self) -> BackgroundConfig:
@@ -656,27 +591,6 @@ class BackgroundLayer(QWidget):
                 return path
         return self._config.image
 
-    def _paint_live_frame(self, painter: QPainter, rect: QRectF,
-                          cfg: BackgroundConfig) -> None:
-        """画一帧动态背景。
-
-        为什么先清成透明再画：本控件设了 `WA_NoSystemBackground`，Qt 不会替我们
-        清后缓冲。动态背景每帧只画很淡的图元，不清的话上一帧会残留在下面，
-        几十帧后就糊成一片「亮斑」（静态背景没这个问题，因为它每帧都整块铺满）。
-        """
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        painter.fillRect(rect, Qt.GlobalColor.transparent)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-
-        style = cfg.preset if cfg.preset in LIVE_BY_KEY else "glow"
-        theme_accent = QColor(cfg.color)
-        paint_live(painter, int(rect.width()), int(rect.height()), style,
-                   self._live_phase, self.current_energy(), theme_accent,
-                   intensity=max(0.2, min(1.0, cfg.opacity)))
-        paint_live_scrim(painter, int(rect.width()), int(rect.height()))
-        if cfg.dim > 0:
-            painter.fillRect(rect, QColor(0, 0, 0, int(255 * min(0.7, cfg.dim))))
-
     def paintEvent(self, event) -> None:  # noqa: N802
         cfg = self._config
         if self.width() <= 0 or self.height() <= 0:
@@ -693,12 +607,6 @@ class BackgroundLayer(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect())
-
-        if cfg.type == "live":
-            # 动态层自己控制每个图元的 alpha，不能再叠一次整层透明度（会把它压没）
-            self._paint_live_frame(painter, rect, cfg)
-            painter.end()
-            return
 
         painter.setOpacity(max(0.0, min(1.0, cfg.opacity)))
 

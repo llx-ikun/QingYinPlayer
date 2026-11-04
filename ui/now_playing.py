@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.lyrics import format_time
-from app.models import Track
+from app.models import DEFAULT_LYRICS_PANEL, LYRICS_PANELS, Track
 from ui import icons as ic
 from ui.lyrics_panel import LyricsPanel
 from ui.video_view import VideoSinkHost
@@ -57,6 +57,11 @@ def cover_side_for(view_w: int, view_h: int) -> int:
 
 class _AudioView(QWidget):
     """音频模式：大封面 + 曲目信息 + 歌词面板。"""
+
+    seek_requested = Signal(int)
+    native_panel_requested = Signal()
+    # v3.4.3：视觉面板全屏（浮层由 main_window 持有的 LyricsFullscreenWindow 负责）
+    lyrics_fullscreen_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,12 +108,37 @@ class _AudioView(QWidget):
         self.video_btn.hide()
         left.addWidget(self.video_btn)
 
+        # 全屏歌词（v3.4.3）：只在视觉面板下出现 —— 原生面板是列表，全屏只是放大字号，
+        # 没有意义；视觉面板全屏才是「只剩歌词与画面」的那种体验。
+        self.fullscreen_btn = QPushButton("  全屏歌词")
+        self.fullscreen_btn.setObjectName("Ghost")
+        self.fullscreen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fullscreen_btn.setToolTip("视觉歌词铺满整屏（F11 切换，Esc 退出，音乐不中断）")
+        ic.bind_icon(self.fullscreen_btn, "fullscreen", 14, "text")
+        self.fullscreen_btn.clicked.connect(self.lyrics_fullscreen_requested.emit)
+        self.fullscreen_btn.hide()
+        left.addWidget(self.fullscreen_btn)
+
         left.addStretch(1)
         root.addWidget(self.left_box)
 
-        # 右：歌词。stretch=1 吃掉左列之外的全部宽度
+        # 右：歌词。stretch=1 吃掉左列之外的全部宽度。
+        # v3.4.0：两块面板叠在一个 QStackedWidget 里 —— 原生 LyricsPanel（默认）与
+        # JIZURA 视觉面板。后者**懒创建**：QtWebEngine 起来要 2s 上下且带一堆 DLL，
+        # 不选就不建，绝不能让「默认用原生面板」的人也等这一下。
+        self.lyrics_stack = QStackedWidget()
         self.lyrics = LyricsPanel()
-        root.addWidget(self.lyrics, 1)
+        self.jizura = None                       # 首次切到 jizura 时才实例化
+        self.lyrics_stack.addWidget(self.lyrics)  # index 0
+        root.addWidget(self.lyrics_stack, 1)
+
+        # 当前内容缓存：切面板时要把「已经播放到哪、歌词是什么」原样补进去，
+        # 否则切过去是一块空白面板，得等下一次换歌才有内容。
+        self._panel_mode = "native"
+        self._st_meta: tuple[str, str, str] = ("", "", "")
+        self._st_cover = None
+        self._st_lyrics: tuple[str, object] = ("empty", None)
+        self._st_position = 0
 
         self._cover_side = 0
         self._fit_cover()
@@ -129,6 +159,113 @@ class _AudioView(QWidget):
         self._cover_side = side
         self.cover.setFixedSize(side, side)
         self.left_box.setFixedWidth(side)
+
+    # ---------- 歌词面板切换（v3.4.0） ----------
+
+    def panel_mode(self) -> str:
+        return self._panel_mode
+
+    def set_panel_mode(self, mode: str) -> None:
+        """切换歌词面板：native（原生列表式）/ jizura（引擎渲染的视觉面板）。
+
+        切到 jizura 时才创建它，并把已缓存的歌词/封面/元信息/进度补进去。
+        """
+        if mode not in LYRICS_PANELS:
+            mode = DEFAULT_LYRICS_PANEL
+        if mode == "jizura" and self.jizura is None:
+            self._create_jizura()
+        self._panel_mode = mode
+        widget = self.jizura if mode == "jizura" else self.lyrics
+        self.lyrics_stack.setCurrentWidget(widget)
+        # 只有视觉面板值得全屏（原生面板是列表，放大反而更难读）
+        self.fullscreen_btn.setVisible(mode == "jizura")
+
+    def _create_jizura(self) -> None:
+        # 函数内 import：`ui.jizura_panel` 会拉进 QtWebEngine，模块级 import 会让
+        # 每个用原生面板的人也背上它的导入成本。
+        from ui import jizura_panel
+
+        self.jizura = jizura_panel.JizuraLyricsPanel()
+        self.jizura.seek_requested.connect(self.seek_requested.emit)
+        self.jizura.native_panel_requested.connect(self.native_panel_requested.emit)
+        self.jizura.set_meta(*self._st_meta)
+        self.jizura.set_cover(self._st_cover)
+        kind, payload = self._st_lyrics
+        if kind == "synced":
+            self.jizura.set_synced(payload or [])
+        elif kind == "plain":
+            self.jizura.set_plain(payload or [])
+        else:
+            self.jizura.set_empty(payload if isinstance(payload, str) else None)
+        self.jizura.update_position(self._st_position)
+        self.lyrics_stack.addWidget(self.jizura)  # 加进栈才算「当前页」的候选
+
+    # ---------- 全屏搬运（v3.4.3） ----------
+
+    def detach_jizura(self) -> bool:
+        """把视觉面板从歌词栈里摘出来，交给全屏浮层接管。
+
+        必须 `removeWidget` + `setParent(None)`：只 `setParent` 的话栈里还留着
+        这个页，`setCurrentWidget` 会指到一个没有父级窗口的控件上。
+        """
+        if self.jizura is None:
+            return False
+        self.lyrics_stack.removeWidget(self.jizura)
+        self.jizura.setParent(None)
+        return True
+
+    def attach_jizura(self) -> None:
+        """全屏结束后放回歌词栈，并恢复成当前页。
+
+        栈里此时只剩原生面板（下标 0），`addWidget` 回去正好又是下标 1 ——
+        与 `_create_jizura` 的加法一致，不用记下标。
+        """
+        if self.jizura is None:
+            return
+        self.lyrics_stack.addWidget(self.jizura)
+        self.lyrics_stack.setCurrentWidget(self.jizura)
+
+    def set_playing(self, playing: bool) -> None:
+        """播放态透传给视觉面板：它靠这个启停 JS 侧 rAF 循环。"""
+        if self.jizura is not None:
+            self.jizura.set_playing(playing)
+
+    # ---------- 内容转发：两套面板都喂，隐藏的那套也保持最新 ----------
+
+    def set_track_info(self, title: str, artist: str, album: str, cover) -> None:
+        self._st_meta = (title, artist, album)
+        self._st_cover = cover
+        if self.jizura is not None:
+            self.jizura.set_meta(title, artist, album)
+            self.jizura.set_cover(cover)
+
+    def set_synced(self, lines) -> None:
+        self._st_lyrics = ("synced", lines)
+        self.lyrics.set_synced(lines)
+        if self.jizura is not None:
+            self.jizura.set_synced(lines)
+
+    def set_plain(self, lines) -> None:
+        self._st_lyrics = ("plain", lines)
+        self.lyrics.set_plain(lines)
+        if self.jizura is not None:
+            self.jizura.set_plain(lines)
+
+    def set_empty(self, hint: str | None = None) -> None:
+        self._st_lyrics = ("empty", hint)
+        self.lyrics.set_empty(hint)
+        if self.jizura is not None:
+            self.jizura.set_empty(hint)
+
+    def set_source(self, text: str | None) -> None:
+        self.lyrics.set_source(text)   # 原生面板的「来源」角标，视觉面板没有对应物
+
+    def update_position(self, position_ms: int) -> None:
+        self._st_position = position_ms
+        self.lyrics.update_position(position_ms)
+        # 不可见就不画：WebEngine 每帧都是真金白银，切到列表页后没必要继续渲染
+        if self.jizura is not None and self.jizura.isVisible():
+            self.jizura.update_position(position_ms)
 
 
 
@@ -190,6 +327,8 @@ class NowPlayingPage(QWidget):
     media_mode_changed = Signal(str)      # "audio" / "video"
     back_to_list_requested = Signal()
     fullscreen_requested = Signal(bool)
+    native_panel_requested = Signal()     # v3.4.0：视觉面板右键「切回原生」
+    lyrics_fullscreen_requested = Signal()  # v3.4.3：视觉面板全屏
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -209,6 +348,10 @@ class NowPlayingPage(QWidget):
         # 兼容旧接口：歌词面板直接暴露在页面上
         self.lyrics = self.audio_view.lyrics
         self.audio_view.lyrics.seek_requested.connect(self.seek_requested.emit)
+        self.audio_view.seek_requested.connect(self.seek_requested.emit)
+        self.audio_view.native_panel_requested.connect(self.native_panel_requested.emit)
+        self.audio_view.lyrics_fullscreen_requested.connect(
+            self.lyrics_fullscreen_requested.emit)
 
         self._mode = MODE_AUDIO
         self._is_video_track = False
@@ -249,6 +392,9 @@ class NowPlayingPage(QWidget):
         duration = format_time(track.duration_ms) if track.duration_ms else "--:--"
         fmt = (track.fmt or "").upper()
         self.audio_view.meta.setText(f"{track.display_album} · {duration} · {fmt}")
+        # v3.4.0：视觉面板要自己画歌名/歌手/圆形封面，单独喂一份
+        self.audio_view.set_track_info(track.display_title, track.display_artist,
+                                       track.display_album or "", cover_pixmap)
 
         # 视频模式信息行
         import os
@@ -263,16 +409,46 @@ class NowPlayingPage(QWidget):
         self._sync_mode_widgets()
 
     def set_synced(self, lines) -> None:
-        self.lyrics.set_synced(lines)
+        self.audio_view.set_synced(lines)
 
     def set_plain(self, lines) -> None:
-        self.lyrics.set_plain(lines)
+        self.audio_view.set_plain(lines)
 
     def set_empty(self, hint: str | None = None) -> None:
-        self.lyrics.set_empty(hint)
+        self.audio_view.set_empty(hint)
 
     def set_source(self, text: str | None) -> None:
-        self.lyrics.set_source(text)
+        self.audio_view.set_source(text)
 
     def update_position(self, position_ms: int) -> None:
-        self.lyrics.update_position(position_ms)
+        self.audio_view.update_position(position_ms)
+
+    def set_playing(self, playing: bool) -> None:
+        """播放态转发给视觉面板（驱动它 JS 侧的 rAF 循环）。"""
+        self.audio_view.set_playing(playing)
+
+    # ---------- 歌词面板样式（v3.4.0） ----------
+
+    def panel_mode(self) -> str:
+        return self.audio_view.panel_mode()
+
+    def set_lyrics_panel(self, mode: str) -> None:
+        """native（原生列表式）/ jizura（视觉面板）。切换不动播放。"""
+        self.audio_view.set_panel_mode(mode)
+
+    def set_palette(self, key: str) -> None:
+        """视觉面板的前景配色（原生面板无效果）。"""
+        if self.audio_view.jizura is not None:
+            self.audio_view.jizura.set_palette(key)
+
+    def set_background(self, key: str) -> None:
+        """视觉面板的背景底色（与前景配色独立）。"""
+        if self.audio_view.jizura is not None:
+            self.audio_view.jizura.set_background(key)
+
+    def apply_panel_look(self, mode: str, palette: str, background: str) -> None:
+        """一次性应用「面板样式 + 配色 + 背景」，用于启动恢复与设置变更。"""
+        self.set_lyrics_panel(mode)
+        if self.audio_view.jizura is not None:
+            self.audio_view.jizura.set_palette(palette)
+            self.audio_view.jizura.set_background(background)

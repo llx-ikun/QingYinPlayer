@@ -3123,3 +3123,65 @@ Qt 6 没有 PCM/频谱回调（QAudioProbe 已废弃），所以不是"实时取
 - 能量线程是 `QThread`，**只在真的选了动态背景时**才启动（否则白解码整首歌）。
 - 关窗/切歌都 `requestInterruption()` + `wait(3000)`；算完时若已切歌则**丢弃结果**
   （否则会拿上一首的节奏驱动下一首的画面）。
+
+---
+
+### 45. v3.4.3 全屏歌词 + 视觉面板帧率（2026-11-04）
+
+用户诉求（附截图）：「全屏且流畅」。截图里视觉歌词面板只占窗口中间一块 16:9，
+四周是 `#080F1B` 的留边 —— 确认两点后动手：**独立全屏浮层** + **画面帧率**。
+
+#### 全屏 = 搬运，不是新建
+
+`ui/lyrics_fullscreen.py` 复用视频全屏（`ui/video_view.py`）的 `enter` / `leave` 套路：
+`setParent(None)` → 加进浮层布局 → `showFullScreen()`，退出时反过来并调用调用方给的
+`restore(panel)`。好处是页面不重新加载（接着画），也不用再起一个 Chromium 渲染进程。
+
+面板原本住在 `QStackedWidget` 里，所以 `restore` 不能只知道「原父控件」——
+`_AudioView.detach_jizura()` / `attach_jizura()` 负责 `removeWidget` + `addWidget`，
+栈里只剩原生面板（下标 0）时加回去正好又是下标 1，不用额外记位置。
+
+#### 「铺满」为什么不能靠改祖先尺寸
+
+第一版把画布的所有祖先设成 `width/height:100% !important`，再把画布设成
+`position:absolute; 100%×100%`。**实测无效**（`jizura_poc/probe_fit_cover.py`）：
+画布只比原来大了几个像素，仍然留边 —— 引擎那几层容器还有别的尺寸来源。
+
+最终做法：**把画布从祖先链里搬出来**，直接挂到 `body`：
+
+```
+position:fixed; inset:0; width:100vw; height:100vh;
+max-width:none; max-height:none; aspect-ratio:auto; object-fit:cover;
+```
+
+`object-fit:cover` 让 1280×720 的位图等比放大铺满视口、裁掉溢出部分 —— 不留边、
+不拉伸。退出时 `insertBefore(v, 原nextSibling)` 搬回原处并还原内联样式。
+（`view.width/height` 是位图尺寸，由 `render()` 每帧按 `plan.W/H` 写，与 CSS 尺寸无关，
+所以搬动 DOM 不影响绘制。）
+
+#### 帧率：把逐帧渲染从 Python 搬到 JS
+
+原来每帧都是一次 `runJavaScript("__panel.render(t)")`，由 Qt 的 33ms 定时器驱动。
+问题不在 30fps 不够，而在**抖动**：Qt 定时器不保证间隔均匀，IPC 还会排队，
+于是帧间隔忽长忽短 —— 全屏放大后抖动被同步放大，看起来就是「卡」。
+
+改成页面里 `requestAnimationFrame` 自驱（`__panel.play / pause / sync`）：
+- `play(ms)`：记下时间基准，rAF 每帧算 `t = baseT + (now - baseWall)/1000` 再渲染；
+- `sync(ms)`：Python 每 100ms 校一次表，**漂移超过 150ms 才重定基准**
+  （每次都拉会让画面在边界上来回跳）；
+- `pause(ms)`：停 rAF 并补画最后一帧 —— 暂停时真的不烧 CPU。
+控件隐藏（`hideEvent`）同样停。
+
+`F11` 改为分流：`正在播放页 + 音频 + 视觉面板` → 全屏歌词，否则走视频全屏，
+视频页行为不变。
+
+#### 只有真实平台才暴露的两个坑
+
+1. **搬进全屏窗口后画布停在旧视口**：Qt 侧控件尺寸已经是对的（1536×864），
+   但 Chromium 合成器慢一拍，抓图看到的是「画面缩在左上角 + 一块黑」。
+   修法：`JizuraLyricsPanel.resizeEvent` 里重算 cover，浮层 `enter` 后再
+   延时 60 / 200 / 500ms 连补三次（全屏动画 + 合成器两种延迟都覆盖）。
+2. **单元测试测不到上面这条**：`tests/test_lyrics_fullscreen.py` 用普通 QWidget，
+   只能守住「搬运/交还/幂等/Esc」；渲染是否真的出画必须靠
+   `jizura_poc/probe_fullscreen_overlay.py` 在真实平台抓图（offscreen 下
+   WebEngine 的 `grab()` 常常是空白）。

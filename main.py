@@ -211,7 +211,30 @@ def main() -> int:
         window = MainWindow()
         window.show()
 
+        # v3.4.0 视觉歌词面板自检（build.py 传 --smoke-panel 才会跑）。
+        #
+        # WebEngine 在打包态最容易出的事故是**白屏且零报错**：QtWebEngineProcess.exe
+        # 或 resources/ 没被收进去时，Chromium 子进程起不来，QWebEngineView 就是一块
+        # 空白，Python 侧一句异常都没有。真起一块面板、等 JS 桥注入完成
+        # （`_ready` 就是引擎 JS 跑完的标志），才能证明这些东西确实在包里、路径也对。
         audio_file = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+        panel_ok = True
+        if "--smoke-panel" in sys.argv:
+            window.now_playing.apply_panel_look("jizura", "rose", "night")
+            panel = None
+            panel_deadline = time.time() + 25
+            while time.time() < panel_deadline:
+                QCoreApplication.processEvents()
+                panel = window.now_playing.audio_view.jizura
+                if panel is not None and panel._ready:
+                    break
+                time.sleep(0.05)
+            if panel is None or not panel._ready:
+                print("smoke fail: 视觉歌词面板未能启动（WebEngine 白屏 / 缺资源）")
+                panel_ok = False
+            else:
+                print("smoke panel: 视觉歌词面板 OK")
+
         if audio_file:
             meta = read_track(audio_file)
             if meta is None:
@@ -240,11 +263,14 @@ def main() -> int:
                 return 1
             QTimer.singleShot(300, app.quit)
             app.exec()
-            print("smoke ok (含音频解码)")
-            return 0
+            print("smoke ok (含音频解码)" if panel_ok else "smoke fail: 面板自检未通过")
+            return 0 if panel_ok else 1
 
         QTimer.singleShot(600, app.quit)
         code = app.exec()
+        if not panel_ok:
+            print("smoke fail: 面板自检未通过")
+            return 1
         print("smoke ok")
         return code
 

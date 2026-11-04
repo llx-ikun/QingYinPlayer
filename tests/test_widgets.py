@@ -1711,5 +1711,35 @@ class TestDropIndicatorPreview(unittest.TestCase):
             widget.deleteLater()
 
 
+class TestSidebarLyricsPanelToggle(unittest.TestCase):
+    """侧边栏「歌词面板」切换行（v3.4.1）。
+
+    这个按钮的文字就是状态出口：设置页里改、侧栏里点，都必须落到同一句话上，
+    否则会出现「设置里写着视觉面板、侧栏还写着原生」的自相矛盾。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(sys.argv[:1])
+
+    def test_click_emits_toggle(self):
+        from ui.sidebar import Sidebar
+        sb = Sidebar()
+        hits = []
+        sb.lyrics_panel_toggle.connect(lambda: hits.append(1))
+        sb.panel_btn.click()
+        self.assertEqual(len(hits), 1, "点一次只该切一次，不能重复发信号")
+
+    def test_mode_written_into_text_and_active(self):
+        from ui.sidebar import Sidebar
+        sb = Sidebar()
+        sb.set_lyrics_panel_mode("jizura")
+        self.assertIn("视觉", sb.panel_btn.text())
+        self.assertEqual(sb.panel_btn.property("active"), "true")
+        sb.set_lyrics_panel_mode("native")
+        self.assertIn("原生", sb.panel_btn.text())
+        self.assertEqual(sb.panel_btn.property("active"), "false")
+
+
 if __name__ == "__main__":
     unittest.main()

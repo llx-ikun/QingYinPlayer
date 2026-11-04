@@ -120,10 +120,17 @@ class TestBundledAssets(unittest.TestCase):
         joined = " ".join(args)
         for rel in ("theme_dark.jpg", "theme_light.jpg"):
             self.assertIn(rel, joined, f"构建参数里缺 {rel}，打包后内置背景会是一块空底")
-        # 每个 --add-data 都得配一个值，且目标目录是包内 assets/
+        # 每个 --add-data 都得配一个值，且目标目录是包内 assets/ 或它的子目录。
+        # v3.4.0 起 `assets/jizura`（视觉面板引擎页）整目录映射到 `assets/jizura`，
+        # 原先"必须正好以 ;assets 收尾"的写法就把它判成错的了 —— 判据应该是
+        # "落在 assets 下"，而不是"等于 assets"。
         self.assertEqual(args.count("--add-data") * 2, len(args))
-        self.assertTrue(all(args[i + 1].endswith(f"{os.pathsep}assets")
-                            for i, a in enumerate(args) if a == "--add-data"))
+        for i, a in enumerate(args):
+            if a != "--add-data":
+                continue
+            dest = args[i + 1].split(os.pathsep)[-1].replace("\\", "/").rstrip("/")
+            self.assertTrue(dest == "assets" or dest.startswith("assets/"),
+                            f"资源必须落到包内 assets/ 下，实际是 {dest!r}")
 
     def test_bundled_paths_match_preset_definition(self) -> None:
         """build.py 的资源清单与 ui.theme 里的内置背景预设相对路径逐字对应。"""

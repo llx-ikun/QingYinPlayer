@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -21,13 +21,16 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QDialog,
     QFileDialog,
-    QFormLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
+    QSizePolicy,
     QSlider,
     QTabWidget,
     QVBoxLayout,
@@ -37,6 +40,8 @@ from PySide6.QtWidgets import (
 from app import paths as app_paths
 from app.library import import_background
 from app.models import (DEFAULT_AI_LANGUAGE, DEFAULT_AI_MODEL, DEFAULT_AI_QUALITY,
+                        DEFAULT_LYRICS_PANEL, JIZURA_BG_LABELS, JIZURA_BACKGROUNDS,
+                        JIZURA_PALETTE_LABELS, JIZURA_PALETTES, LYRICS_PANELS,
                         LYRICS_AI_LANGUAGE_LABELS, LYRICS_AI_LANGUAGES,
                         LYRICS_AI_MODEL_LABELS, LYRICS_AI_MODELS,
                         LYRICS_AI_QUALITY_LABELS, LYRICS_AI_QUALITIES,
@@ -45,8 +50,7 @@ from app.paths import bgs_dir
 from app.version import APP_NAME, version_text
 from ui import theme as ui_theme
 from ui.dialogs import StorageMoveDialog
-from ui.live_bg import LIVE_BY_KEY, LIVE_KEYS, LIVE_STYLES
-from ui.widgets import ChevronComboBox
+from ui.widgets import ChevronComboBox, ElidedLabel
 
 # 预设强调色：覆盖"冷暖各一支"，避免用户以为只能蓝
 ACCENT_PRESETS = [
@@ -65,6 +69,7 @@ FONT_SCALE_OPTIONS = [
     ("特大", 1.28),
 ]
 
+
 # 歌词播放动效（v2.6.4，单选）：与 app/models.py 的 LYRICS_EFFECTS 一一对应。
 #
 # v3.0.9 命名体系重排。旧命名有四个问题：
@@ -82,6 +87,14 @@ LYRICS_EFFECT_OPTIONS = [
     ("无动效（仅高亮）", "none"),
     ("逐字显示（未唱不显示）", "typewriter"),
     ("逐字上色（未唱淡显）", "karaoke"),
+]
+
+# 歌词面板样式（v3.4.0）：与 app/models.py 的 LYRICS_PANELS 对应。
+# 文案里直接写上代价：视觉面板是另一套渲染引擎，首次切换要起一会儿（约 2 秒），
+# 而且它会让安装包大一截。不写清楚，用户会以为跟换主题一样是零成本的事。
+LYRICS_PANEL_OPTIONS = [
+    ("原生列表（轻量，功能全）", "native"),
+    ("视觉面板（封面模糊 + 逐字，首次切换稍慢）", "jizura"),
 ]
 
 
@@ -113,7 +126,6 @@ BG_TYPE_OPTIONS = [
     ("纯色", "color"),
     ("渐变", "gradient"),
     ("图片", "image"),
-    ("动态背景", "live"),
 ]
 
 BG_SCOPE_OPTIONS = [
@@ -121,6 +133,12 @@ BG_SCOPE_OPTIONS = [
     ("列表页", "library"),
     ("正在播放页", "now_playing"),
 ]
+
+# v3.4.2 布局规范：所有「标签 + 控件」行共用同一列宽，控件左缘才能对齐成一条线。
+# 之前一页里 46 / 56 / 无固定宽三种混着用，「类型」和「不透明度」右移了好几像素，
+# 单看每一行都正常，整页扫下来就是"没对齐"。
+FORM_LABEL_W = 76
+PAGE_MARGINS = (18, 14, 18, 14)
 
 
 class _Swatch(QWidget):
@@ -171,6 +189,9 @@ class SettingsDialog(QDialog):
     accent_changed = Signal(str)         # "#rrggbb"，"" = 跟随主题默认
     font_scale_changed = Signal(float)
     lyrics_effect_changed = Signal(str)  # none / typewriter / karaoke
+    lyrics_panel_changed = Signal(str)   # v3.4.0：native / jizura
+    jizura_palette_changed = Signal(str)  # v3.4.0：视觉面板前景配色 key
+    jizura_bg_changed = Signal(str)      # v3.4.0：视觉面板背景底色 key
     lyrics_color_changed = Signal(object)  # v2.9.0：LyricsColorConfig
     ai_model_changed = Signal(str)       # v3.0.0：AI 逐字对齐的模型档位
     ai_language_changed = Signal(str)    # v3.0.3：AI 识别语言（auto/zh/en）
@@ -187,15 +208,28 @@ class SettingsDialog(QDialog):
                  lyrics_color: LyricsColorConfig | None = None,
                  ai_model: str = DEFAULT_AI_MODEL,
                  ai_language: str = DEFAULT_AI_LANGUAGE,
-                 ai_quality: str = DEFAULT_AI_QUALITY):
+                 ai_quality: str = DEFAULT_AI_QUALITY,
+                 lyrics_panel: str = DEFAULT_LYRICS_PANEL,
+                 jizura_palette: str = "random",
+                 jizura_bg: str = "auto"):
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
-        self.setMinimumWidth(430)
+        # v3.4.2：最小宽度从 430 提到 520 —— 表单栅格把标签列固定成 76 之后，
+        # 430 宽下「强调色」那一行（6 个色块 + 两个按钮）会顶到 481，超出视口就
+        # 被裁掉右边几个色块。要么允许横向滚动（设置页里横滚很难用），要么把窗口
+        # 的底线抬到装得下最宽的那一行。
+        self.setMinimumWidth(520)
         self._theme_name = theme_name if theme_name in ui_theme.THEMES else ui_theme.DEFAULT_THEME
         self._accent = (accent_color or "").lower()
         self._font_scale = font_scale
         self._lyrics_effect = lyrics_effect if lyrics_effect in LYRICS_EFFECTS else "none"
+        # v3.4.0：面板样式与两套外观。不认识的值统一回默认，避免下拉选中项为空。
+        self._lyrics_panel = (lyrics_panel if lyrics_panel in LYRICS_PANELS
+                              else DEFAULT_LYRICS_PANEL)
+        self._jizura_palette = (jizura_palette if jizura_palette in JIZURA_PALETTES
+                                else "random")
+        self._jizura_bg = jizura_bg if jizura_bg in JIZURA_BACKGROUNDS else "auto"
         self._lyrics_color = LyricsColorConfig.from_dict(
             lyrics_color.to_dict() if isinstance(lyrics_color, LyricsColorConfig) else {})
         self._ai_model = ai_model if ai_model in LYRICS_AI_MODELS else DEFAULT_AI_MODEL
@@ -235,17 +269,25 @@ class SettingsDialog(QDialog):
         self.light_radio = self.theme_radios["light"]   # 兼容旧引用
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 10)
         root.setSpacing(10)
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("SettingsTabs")
+        # v3.4.2：每页套一层滚动区。
+        # 起因是窗口高度被最长的那页（歌词与统计，内容约 850px）撑满，其余三页
+        # 只剩上半屏有东西、下半屏一片空。改成固定窗口高度 + 内容超出才滚动后，
+        # 四页的视觉密度一致，窗口也不再顶到屏幕上下沿。
         self.appearance_page = self._build_appearance_tab(nickname)
-        self.tabs.addTab(self.appearance_page, "外观")
+        self.tabs.addTab(self._scrollable(self.appearance_page), "外观")
         self.background_page = self._build_background_tab()
-        self.tabs.addTab(self.background_page, "背景")
-        self.tabs.addTab(self._build_misc_tab(stats, online_lyrics), "歌词与统计")
-        self.tabs.addTab(self._build_storage_tab(), "存储")
+        self.tabs.addTab(self._scrollable(self.background_page), "背景")
+        self.misc_page = self._build_misc_tab(stats, online_lyrics)
+        self.tabs.addTab(self._scrollable(self.misc_page), "歌词与统计")
+        self.storage_page = self._build_storage_tab()
+        self.tabs.addTab(self._scrollable(self.storage_page), "存储")
         root.addWidget(self.tabs, 1)
+        self.resize(560, 620)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -257,31 +299,128 @@ class SettingsDialog(QDialog):
 
         self._load_background_scope(self._bg_scope)
 
+    # ---------- 布局积木（v3.4.2） ----------
+
+    @staticmethod
+    def _scrollable(page: QWidget) -> QScrollArea:
+        """给一页套上"内容超出才滚动"的壳。
+
+        `setWidgetResizable(True)` 是必须的：否则页面保持自己的 sizeHint 宽度，
+        窗口一拉宽就只剩左侧一条内容。关掉横向滚动条，避免出现 1px 的抖动条。
+        """
+        scroll = QScrollArea()
+        scroll.setObjectName("SettingsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        scroll.viewport().setAutoFillBackground(False)
+        # 局部样式表压过全局：QScrollArea 默认把 viewport 画成 palette 的 Base 色
+        # （浅色主题下是纯白），会在灰色的对话框里留下一条突兀的白板。
+        # 三条规则各管一层：滚动区自身 / viewport / 页面，缺一层就会有一块白。
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget { background: transparent; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
+        return scroll
+
+
+    @staticmethod
+    def _form_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("FormLabel")
+        label.setFixedWidth(FORM_LABEL_W)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        return label
+
+    def _section(self, root: QVBoxLayout, title: str, first: bool = False) -> None:
+        """分组标题。非首段先画一条 1px 分隔线 —— 整页平铺时靠它分出层次。"""
+        if not first:
+            root.addSpacing(6)
+            line = QFrame()
+            line.setObjectName("Divider")
+            line.setFrameShape(QFrame.Shape.NoFrame)
+            line.setFixedHeight(1)
+            root.addWidget(line)
+            root.addSpacing(4)
+        label = QLabel(title)
+        label.setObjectName("SectionTitle")
+        root.addWidget(label)
+
+    def _hint(self, root: QVBoxLayout, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("Hint")
+        label.setWordWrap(True)
+        root.addWidget(label)
+        return label
+
+    def _form_grid(self, root: QVBoxLayout) -> QGridLayout:
+        """统一表单栅格：第 0 列标签定宽、第 1 列吃满剩余宽度。
+
+        整页共用一张 grid（而不是每行一个 QHBoxLayout），列宽由 Qt 统一分配，
+        控件左缘自然对齐 —— 各写各的 HBox 时，标签宽 46/56/自适应三种混排，
+        扫下来就是一条锯齿线。
+        """
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, FORM_LABEL_W)
+        grid.setColumnStretch(1, 1)
+        root.addLayout(grid)
+        return grid
+
+    def _form_row(self, grid: QGridLayout, row: int, label: str, widget):
+        """往栅格里塞一行，返回标签控件（调用方要单独隐藏标签时用得上）。"""
+        lbl = None
+        if label:
+            lbl = self._form_label(label)
+            grid.addWidget(lbl, row, 0)
+        grid.addWidget(widget, row, 1)
+        return lbl
+
+    @staticmethod
+    def _left(widget) -> QWidget:
+        """把控件包成"靠左、不拉伸"的一格。
+
+        表单栅格第 1 列是拉伸列，下拉框直接放进去会被拉成整行宽 —— 一个 3 个字的
+        档位选择框占满 400px，比不对齐还难看。包一层带 stretch 的盒子才能保持原宽。
+        """
+        box = QWidget()
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(widget)
+        lay.addStretch(1)
+        return box
+
     # ---------- 页 1：外观 ----------
 
     def _build_appearance_tab(self, nickname: str) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setSpacing(12)
+        root.setContentsMargins(*PAGE_MARGINS)
+        root.setSpacing(8)
 
-        form = QFormLayout()
-        form.setSpacing(8)
+        self._section(root, "个人信息", first=True)
         self.nickname_edit = QLineEdit(nickname)
+        self.nickname_edit.setPlaceholderText("音乐爱好者")
         self.nickname_edit.textChanged.connect(self.nickname_changed.emit)
-        form.addRow("昵称", self.nickname_edit)
-        root.addLayout(form)
+        self._form_row(self._form_grid(root), 0, "昵称", self.nickname_edit)
 
         # v3.1.1：纯色主题（曜石 / 珍珠）放「外观」页 —— 它们只是把整套配色换成
         # 一条纯黑/纯白，不涉及任何底纹，和强调色、字号属于同一类"看起来怎样"的设置。
         # 带装饰底纹的星夜/月白仍在「背景」页，跟背景图案放一起调。
         # 注意：换个摆放位置**不等于**主题与背景合并，两者仍然正交（任何主题配任何背景）。
-        root.addWidget(QLabel("纯色主题"))
+        self._section(root, "纯色主题")
         self._add_theme_rows(root, ui_theme.THEME_SOLID)
-        root.addSpacing(4)
 
-        accent_row = QHBoxLayout()
+        self._section(root, "强调色与字号")
+        grid = self._form_grid(root)
+        accent_box = QWidget()
+        accent_row = QHBoxLayout(accent_box)
+        accent_row.setContentsMargins(0, 0, 0, 0)
         accent_row.setSpacing(6)
-        accent_row.addWidget(QLabel("强调色"))
         self.swatches: list[_Swatch] = []
         for name, color in ACCENT_PRESETS:
             swatch = _Swatch(color, self)
@@ -289,7 +428,7 @@ class SettingsDialog(QDialog):
             swatch.clicked.connect(self._set_accent)
             self.swatches.append(swatch)
             accent_row.addWidget(swatch)
-        accent_row.addSpacing(6)
+        accent_row.addSpacing(4)
         self.custom_btn = QPushButton("自定义…")
         self.custom_btn.setObjectName("Ghost")
         self.custom_btn.clicked.connect(self._pick_custom_accent)
@@ -300,26 +439,19 @@ class SettingsDialog(QDialog):
         self.reset_accent_btn.clicked.connect(lambda: self._set_accent(""))
         accent_row.addWidget(self.reset_accent_btn)
         accent_row.addStretch(1)
-        root.addLayout(accent_row)
+        self._form_row(grid, 0, "强调色", accent_box)
 
-        font_row = QHBoxLayout()
-        font_row.setSpacing(10)
-        font_row.addWidget(QLabel("字号"))
         self.font_combo = ChevronComboBox()
         self.font_combo.setObjectName("FontScaleCombo")
         for label, value in FONT_SCALE_OPTIONS:
             self.font_combo.addItem(label, value)
         self._select_font_scale(self._font_scale)
         self.font_combo.currentIndexChanged.connect(self._on_font_combo)
-        font_row.addWidget(self.font_combo)
-        font_row.addStretch(1)
-        root.addLayout(font_row)
+        self.font_combo.setMinimumWidth(140)
+        self._form_row(grid, 1, "字号", self._left(self.font_combo))
 
-        hint = QLabel("外观改动立即生效，可以一边看一边调。"
-                      "纯色主题不含底纹，想要星空 / 云海底纹请到「背景」页。")
-        hint.setObjectName("Dim")
-        hint.setWordWrap(True)
-        root.addWidget(hint)
+        self._hint(root, "外观改动立即生效，可以一边看一边调。"
+                         "纯色主题不含底纹，想要星空 / 云海底纹请到「背景」页。")
         root.addStretch(1)
 
         self._sync_swatches()
@@ -339,8 +471,8 @@ class SettingsDialog(QDialog):
             group_row = QHBoxLayout()
             group_row.setSpacing(14)
             group_label = QLabel(group_name)
-            group_label.setObjectName("Dim")
-            group_label.setFixedWidth(46)   # 两组对齐，别让「深色系/浅色系」抖
+            group_label.setObjectName("FormLabel")
+            group_label.setFixedWidth(FORM_LABEL_W)   # 与表单标签列同宽，别让「深色系/浅色系」抖
             group_row.addWidget(group_label)
             for tid in picked:
                 group_row.addWidget(self.theme_radios[tid])
@@ -352,102 +484,92 @@ class SettingsDialog(QDialog):
     def _build_background_tab(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setSpacing(10)
+        root.setContentsMargins(*PAGE_MARGINS)
+        root.setSpacing(8)
 
         # v3.1.1：这一页只剩带装饰底纹的两套（星夜 / 月白）；纯色的曜石 / 珍珠
         # 已移到「外观」页。两块**互不联动**：主题换的是配色，图案换的是底图，
         # 可以任意搭配。
-        root.addWidget(QLabel("配色主题"))
+        self._section(root, "配色主题", first=True)
         self._add_theme_rows(root, ui_theme.THEME_PATTERNED)
-
-        root.addSpacing(8)
 
         # v2.8.3：内置背景图案（星空 / 云海）—— 主题与背景已拆开，这两张图不是
         # 「主题2」，而是这里可选的两张卡片，任何主题都能配（v3.1.0 改名「背景图案」，
         # 与上面的「配色主题」明确区分）。
-        root.addWidget(QLabel("背景图案"))
+        self._section(root, "背景图案")
         preset_row = QHBoxLayout()
         preset_row.setSpacing(8)
         self.preset_buttons: dict[str, QPushButton] = {}
         for preset in ui_theme.BACKGROUND_PRESETS:
             btn = QPushButton(preset.label)
-            btn.setObjectName("Ghost")
+            btn.setObjectName("PresetCard")
             btn.setToolTip(f"应用内置背景「{preset.label}」")
+            btn.setMinimumHeight(58)
             thumb = QPixmap(ui_theme.preset_image_path(preset.id) or "")
             if not thumb.isNull():
-                thumb = thumb.scaled(96, 54,
+                # 按设备像素缩放再标 DPR：直接缩到逻辑尺寸会在这块 125% 屏上被拉糊，
+                # 卡片里那点细节（月亮、云纹）正好是最容易糊没的地方。
+                dpr = max(1.0, float(self.devicePixelRatioF()))
+                thumb = thumb.scaled(round(72 * dpr), round(40 * dpr),
                                      Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                      Qt.TransformationMode.SmoothTransformation)
+                thumb.setDevicePixelRatio(dpr)
                 btn.setIcon(QIcon(thumb))
-                btn.setIconSize(thumb.size())
+                btn.setIconSize(QSize(72, 40))
             btn.clicked.connect(lambda _=False, pid=preset.id: self._apply_preset(pid))
-            preset_row.addWidget(btn)
+            # 等分：两张卡片宽度必须一致，否则并排的两块"同类选项"看着像主次之分
+            preset_row.addWidget(btn, 1)
             self.preset_buttons[preset.id] = btn
-        preset_row.addStretch(1)
         root.addLayout(preset_row)
 
-        # v3.3.0：动态背景（实时动画，亮度随歌曲能量起伏）。
-        # 与上面的静态图案**互斥**：两者写的是同一份 BackgroundConfig 的
-        # type/preset，选一个就顶掉另一个 —— 背景只能有一层，叠加会互相打架。
-        root.addSpacing(8)
-        root.addWidget(QLabel("动态背景（跟随音乐）"))
-        live_row = QHBoxLayout()
-        live_row.setSpacing(8)
-        self.live_buttons: dict[str, QPushButton] = {}
-        for style_key, style_label in LIVE_STYLES:
-            live_btn = QPushButton(style_label)
-            live_btn.setObjectName("Ghost")
-            live_btn.setToolTip(f"实时动画背景「{style_label}」，亮度随歌曲音量起伏")
-            live_btn.clicked.connect(
-                lambda _=False, k=style_key: self._apply_live(k))
-            live_row.addWidget(live_btn)
-            self.live_buttons[style_key] = live_btn
-        live_row.addStretch(1)
-        root.addLayout(live_row)
+        # 作用域放在参数之前：先决定"改哪个页面"，再决定改成什么样。
+        # 原先"作用页面"和"类型"挤在同一行，两个下拉宽度还不一样，
+        # 是这一页最明显的参差来源。
+        self._section(root, "作用页面与类型")
+        grid = self._form_grid(root)
 
-        top = QHBoxLayout()
-        top.setSpacing(10)
-        top.addWidget(QLabel("类型"))
-        self.bg_type_combo = ChevronComboBox()
-        self.bg_type_combo.setObjectName("FontScaleCombo")
-        for label, value in BG_TYPE_OPTIONS:
-            self.bg_type_combo.addItem(label, value)
-        self.bg_type_combo.currentIndexChanged.connect(self._on_bg_type_changed)
-        top.addWidget(self.bg_type_combo)
-        top.addSpacing(8)
-        top.addWidget(QLabel("作用页面"))
         self.bg_scope_combo = ChevronComboBox()
         self.bg_scope_combo.setObjectName("FontScaleCombo")
         for label, value in BG_SCOPE_OPTIONS:
             self.bg_scope_combo.addItem(label, value)
         self.bg_scope_combo.currentIndexChanged.connect(self._on_bg_scope_changed)
-        top.addWidget(self.bg_scope_combo)
-        top.addStretch(1)
-        root.addLayout(top)
+        self.bg_scope_combo.setMinimumWidth(150)
+        self._form_row(grid, 0, "作用页面", self._left(self.bg_scope_combo))
 
         self.bg_inherit_box = QCheckBox("本页单独设置（不勾则跟随「全部页面」）")
         self.bg_inherit_box.toggled.connect(self._on_bg_inherit_toggled)
-        root.addWidget(self.bg_inherit_box)
+        # 空标签 = 复选框与上面那个下拉左缘对齐，看起来是它的子选项
+        self._form_row(grid, 1, "", self.bg_inherit_box)
+
+        self.bg_type_combo = ChevronComboBox()
+        self.bg_type_combo.setObjectName("FontScaleCombo")
+        for label, value in BG_TYPE_OPTIONS:
+            self.bg_type_combo.addItem(label, value)
+        self.bg_type_combo.currentIndexChanged.connect(self._on_bg_type_changed)
+        self.bg_type_combo.setMinimumWidth(180)
+        self._form_row(grid, 2, "类型", self._left(self.bg_type_combo))
 
         # ---- 颜色 ----
         self.color_row = QWidget()
         color_lay = QHBoxLayout(self.color_row)
         color_lay.setContentsMargins(0, 0, 0, 0)
         color_lay.setSpacing(10)
-        self.color_label = QLabel("颜色")
+        self.color_label = QLabel("主色")
+        self.color_label.setObjectName("FormLabel")
         color_lay.addWidget(self.color_label)
         self.color_btn = QPushButton()
         self.color_btn.setFixedWidth(96)
         self.color_btn.clicked.connect(lambda: self._pick_bg_color("color"))
         color_lay.addWidget(self.color_btn)
         self.color2_label = QLabel("渐至")
+        self.color2_label.setObjectName("FormLabel")
         color_lay.addWidget(self.color2_label)
         self.color2_btn = QPushButton()
         self.color2_btn.setFixedWidth(96)
         self.color2_btn.clicked.connect(lambda: self._pick_bg_color("color2"))
         color_lay.addWidget(self.color2_btn)
         color_lay.addStretch(1)
-        root.addWidget(self.color_row)
+        self.color_row_label = self._form_row(grid, 3, "颜色", self.color_row)
 
         # ---- 图片 ----
         self.image_row = QWidget()
@@ -458,51 +580,63 @@ class SettingsDialog(QDialog):
         self.pick_image_btn.setObjectName("Ghost")
         self.pick_image_btn.clicked.connect(self._pick_bg_image)
         image_lay.addWidget(self.pick_image_btn)
-        self.image_label = QLabel("未选择")
-        self.image_label.setObjectName("Dim")
-        image_lay.addWidget(self.image_label, 1)
+        # 不拉伸：让「清除」紧跟文件名的右端。之前让这个标签吃满剩余宽度，
+        # 「清除」被甩到整行最右侧，和它要清的那张图隔着一大片空白。
+        self.image_label = ElidedLabel("未选择")
+        self.image_label.setObjectName("Hint")
+        self.image_label.setMaximumWidth(260)
+        image_lay.addWidget(self.image_label)
         self.clear_image_btn = QPushButton("清除")
         self.clear_image_btn.setObjectName("Ghost")
         self.clear_image_btn.clicked.connect(self._clear_bg_image)
         image_lay.addWidget(self.clear_image_btn)
-        root.addWidget(self.image_row)
+        image_lay.addStretch(1)
+        self.image_row_label = self._form_row(grid, 4, "图片", self.image_row)
 
         # ---- 三个调节 ----
-        self.opacity_slider, self.opacity_value = self._add_slider_row(
-            root, "不透明度", 20, 100, 100, "%")
-        self.blur_slider, self.blur_value = self._add_slider_row(
-            root, "模糊", 0, 40, 0, "")
-        self.dim_slider, self.dim_value = self._add_slider_row(
-            root, "暗化", 0, 70, 0, "%")
+        self.opacity_slider, self.opacity_value = self._slider_cell(
+            grid, 5, "不透明度", 20, 100, 100, "%")
+        self.blur_slider, self.blur_value = self._slider_cell(
+            grid, 6, "模糊", 0, 40, 0, "")
+        self.dim_slider, self.dim_value = self._slider_cell(
+            grid, 7, "暗化", 0, 70, 0, "%")
         for slider in (self.opacity_slider, self.blur_slider, self.dim_slider):
             slider.valueChanged.connect(self._on_bg_slider_changed)
 
-        self.bg_hint = QLabel("背景越亮，越建议加一点「暗化」，否则文字会看不清。")
-        self.bg_hint.setObjectName("Dim")
-        self.bg_hint.setWordWrap(True)
-        root.addWidget(self.bg_hint)
+        self.bg_hint = self._hint(
+            root, "背景越亮，越建议加一点「暗化」，否则文字会看不清。")
         root.addStretch(1)
         return page
 
-    def _add_slider_row(self, layout, label, minimum, maximum, value, suffix):
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        name = QLabel(label)
-        name.setFixedWidth(56)
-        row.addWidget(name)
+    def _slider_box(self, minimum, maximum, value, suffix):
+        """滑块 + 数值，作为一格控件（不含标签）。
+
+        滑块改成**吃满剩余宽度**：原先写死 160px，右边永远拖着一截空白，
+        在不同窗口宽度下滑块长度不变、留白越拉越大。
+        """
+        box = QWidget()
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setObjectName("SettingSlider")
         slider.setRange(minimum, maximum)
         slider.setValue(value)
-        slider.setFixedWidth(160)
+        slider.setMinimumWidth(120)
+        slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         slider.setCursor(Qt.CursorShape.PointingHandCursor)
-        row.addWidget(slider)
+        lay.addWidget(slider, 1)
         value_label = QLabel(f"{value}{suffix}")
-        value_label.setObjectName("Dim")
+        value_label.setObjectName("ValueLabel")
         value_label.setFixedWidth(44)
-        row.addWidget(value_label)
-        row.addStretch(1)
-        layout.addLayout(row)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(value_label)
+        return box, slider, value_label
+
+    def _slider_cell(self, grid, row, label, minimum, maximum, value, suffix):
+        """栅格版本：整行进 grid，标签列与其它行对齐。"""
+        box, slider, value_label = self._slider_box(minimum, maximum, value, suffix)
+        self._form_row(grid, row, label, box)
         return slider, value_label
 
     # ---------- 页 3：歌词与统计 ----------
@@ -510,20 +644,68 @@ class SettingsDialog(QDialog):
     def _build_misc_tab(self, stats: dict, online_lyrics: bool) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setSpacing(10)
+        root.setContentsMargins(*PAGE_MARGINS)
+        root.setSpacing(8)
 
+        # ---- 歌词来源 ----
+        self._section(root, "歌词来源", first=True)
+        grid = self._form_grid(root)
         self.online_lyrics_box = QCheckBox("本地没有歌词时联网匹配（LRCLIB）")
         self.online_lyrics_box.setChecked(bool(online_lyrics))
         self.online_lyrics_box.toggled.connect(self.online_lyrics_changed.emit)
-        root.addWidget(self.online_lyrics_box)
-        hint = QLabel("匹配结果会缓存到本地，之后不联网也能看。")
-        hint.setObjectName("Dim")
-        hint.setWordWrap(True)
-        root.addWidget(hint)
+        self._form_row(grid, 0, "", self.online_lyrics_box)
+        self._hint(root, "匹配结果会缓存到本地，之后不联网也能看。")
 
-        effect_row = QHBoxLayout()
-        effect_row.setSpacing(10)
-        effect_row.addWidget(QLabel("歌词动效"))
+        # ---- 歌词面板样式（v3.4.0）----
+        #
+        # 放在「歌词动效」之前：它决定的是**用哪块面板**，动效只是面板里的细节，
+        # 顺序反了会让人以为动效对两套面板都生效（实际上视觉面板走自己的逐字逻辑）。
+        self._section(root, "歌词面板")
+        grid = self._form_grid(root)
+        self.panel_combo = ChevronComboBox()
+        self.panel_combo.setObjectName("FontScaleCombo")
+        for label, value in LYRICS_PANEL_OPTIONS:
+            self.panel_combo.addItem(label, value)
+        self.panel_combo.setMinimumWidth(230)
+        self._form_row(grid, 0, "样式", self._left(self.panel_combo))
+
+        # 配色 / 背景色两行只在视觉面板下有意义 —— 原生面板没有「高亮色」这个概念。
+        self.look_label = self._form_label("高亮配色")
+        grid.addWidget(self.look_label, 1, 0)
+        self.palette_combo = ChevronComboBox()
+        self.palette_combo.setObjectName("FontScaleCombo")
+        for key in JIZURA_PALETTES:
+            self.palette_combo.addItem(JIZURA_PALETTE_LABELS.get(key, key), key)
+        self.palette_combo.setMinimumWidth(230)
+        grid.addWidget(self._left(self.palette_combo), 1, 1)
+
+        self.bg_label = self._form_label("背景底色")
+        grid.addWidget(self.bg_label, 2, 0)
+        self.bg_combo = ChevronComboBox()
+        self.bg_combo.setObjectName("FontScaleCombo")
+        for key in JIZURA_BACKGROUNDS:
+            self.bg_combo.addItem(JIZURA_BG_LABELS.get(key, key), key)
+        self.bg_combo.setMinimumWidth(230)
+        grid.addWidget(self._left(self.bg_combo), 2, 1)
+
+        self._hint(
+            root,
+            "视觉面板用另一套渲染引擎绘制：封面模糊铺底、居中歌词、逐字上色，"
+            "带几何线稿和颗粒。高亮配色与背景底色互相独立，可以自由组合；"
+            "「随机」是每首歌换一套。首次切过去要起一会儿，属正常。")
+
+        # 先把选中项摆好，再连信号：否则 setCurrentIndex 会边设边发信号。
+        self.panel_combo.setCurrentIndex(max(0, self.panel_combo.findData(self._lyrics_panel)))
+        self.palette_combo.setCurrentIndex(
+            max(0, self.palette_combo.findData(self._jizura_palette)))
+        self.bg_combo.setCurrentIndex(max(0, self.bg_combo.findData(self._jizura_bg)))
+        self.panel_combo.currentIndexChanged.connect(self._on_panel_combo)
+        self.palette_combo.currentIndexChanged.connect(self._on_palette_combo)
+        self.bg_combo.currentIndexChanged.connect(self._on_bg_combo)
+        self._sync_look_enabled()
+
+        self._section(root, "歌词动效")
+        grid = self._form_grid(root)
         self.effect_combo = ChevronComboBox()
         self.effect_combo.setObjectName("FontScaleCombo")
         for label, value in LYRICS_EFFECT_OPTIONS:
@@ -531,28 +713,22 @@ class SettingsDialog(QDialog):
         effect_index = self.effect_combo.findData(self._lyrics_effect)
         self.effect_combo.setCurrentIndex(max(0, effect_index))
         self.effect_combo.currentIndexChanged.connect(self._on_effect_combo)
-        effect_row.addWidget(self.effect_combo)
-        effect_row.addStretch(1)
-        root.addLayout(effect_row)
+        self.effect_combo.setMinimumWidth(230)
+        self._form_row(grid, 0, "效果", self._left(self.effect_combo))
         # 名字已经自带说明了效果，这里不再重复罗列；改为说清三件名字答不了的事：
         # 作用范围（只当前句）、**当前行始终放大**（v3.2.1 起不是选项），
         # 以及它和下方「歌词颜色覆盖」的关系（正交，可同时开）。
-        effect_hint = QLabel(
+        self._hint(
+            root,
             "只作用于正在播放页的当前这一句；当前播放的这句始终会自动放大，"
             "无需额外设置。与下方「歌词颜色覆盖」的配色互不影响，可以同时开启。")
-        effect_hint.setObjectName("Dim")
-        effect_hint.setWordWrap(True)
-        root.addWidget(effect_hint)
 
         # ---- AI 逐字对齐（v3.0.0）----
         #
         # 放在这里而不是单独开一页：它和「歌词动效」「颜色覆盖」是同一件事的三个侧面
         # （字怎么动 / 字什么颜色 / 字在什么时候亮），分散到两页反而找不到。
-        root.addSpacing(8)
-        root.addWidget(QLabel("AI 逐字对齐"))
-        ai_row = QHBoxLayout()
-        ai_row.setSpacing(10)
-        ai_row.addWidget(QLabel("模型档位"))
+        self._section(root, "AI 逐字对齐")
+        grid = self._form_grid(root)
         self.ai_model_combo = ChevronComboBox()
         self.ai_model_combo.setObjectName("FontScaleCombo")
         for name in LYRICS_AI_MODELS:
@@ -560,14 +736,10 @@ class SettingsDialog(QDialog):
         self.ai_model_combo.setCurrentIndex(
             max(0, self.ai_model_combo.findData(self._ai_model)))
         self.ai_model_combo.currentIndexChanged.connect(self._on_ai_model_combo)
-        ai_row.addWidget(self.ai_model_combo)
-        ai_row.addStretch(1)
-        root.addLayout(ai_row)
+        self.ai_model_combo.setMinimumWidth(180)
+        self._form_row(grid, 0, "模型档位", self._left(self.ai_model_combo))
 
         # v3.0.3：识别语言（英文歌之前会被识别成中文乱码）与识别质量（beam 大小）。
-        lang_row = QHBoxLayout()
-        lang_row.setSpacing(10)
-        lang_row.addWidget(QLabel("识别语言"))
         self.ai_language_combo = ChevronComboBox()
         self.ai_language_combo.setObjectName("FontScaleCombo")
         for name in LYRICS_AI_LANGUAGES:
@@ -575,9 +747,9 @@ class SettingsDialog(QDialog):
         self.ai_language_combo.setCurrentIndex(
             max(0, self.ai_language_combo.findData(self._ai_language)))
         self.ai_language_combo.currentIndexChanged.connect(self._on_ai_language_combo)
-        lang_row.addWidget(self.ai_language_combo)
+        self.ai_language_combo.setMinimumWidth(180)
+        self._form_row(grid, 1, "识别语言", self._left(self.ai_language_combo))
 
-        lang_row.addWidget(QLabel("识别质量"))
         self.ai_quality_combo = ChevronComboBox()
         self.ai_quality_combo.setObjectName("FontScaleCombo")
         for name in LYRICS_AI_QUALITIES:
@@ -585,16 +757,12 @@ class SettingsDialog(QDialog):
         self.ai_quality_combo.setCurrentIndex(
             max(0, self.ai_quality_combo.findData(self._ai_quality)))
         self.ai_quality_combo.currentIndexChanged.connect(self._on_ai_quality_combo)
-        lang_row.addWidget(self.ai_quality_combo)
-        lang_row.addStretch(1)
-        root.addLayout(lang_row)
+        self.ai_quality_combo.setMinimumWidth(180)
+        self._form_row(grid, 2, "识别质量", self._left(self.ai_quality_combo))
 
-        ai_hint = QLabel("本地识别演唱、把每个字钉到真实时刻（误差约 ±80ms）。"
+        self._hint(root, "本地识别演唱、把每个字钉到真实时刻（误差约 ±80ms）。"
                          "首次使用需下载模型，之后完全离线；换档位需重新下载。"
                          "质量越高越准但越慢。")
-        ai_hint.setObjectName("Dim")
-        ai_hint.setWordWrap(True)
-        root.addWidget(ai_hint)
 
         ai_buttons = QHBoxLayout()
         ai_buttons.setSpacing(8)
@@ -610,16 +778,13 @@ class SettingsDialog(QDialog):
         root.addLayout(ai_buttons)
 
         # ---- 歌词颜色覆盖（v2.9.0）：只作用于正在播放页的当前这一句 ----
-        root.addSpacing(8)
-        root.addWidget(QLabel("歌词颜色覆盖"))
+        self._section(root, "歌词颜色覆盖")
+        grid = self._form_grid(root)
         self.color_enabled_box = QCheckBox("启用（只作用于正在播放页当前这句）")
         self.color_enabled_box.setChecked(self._lyrics_color.enabled)
         self.color_enabled_box.toggled.connect(self._on_color_enabled)
-        root.addWidget(self.color_enabled_box)
+        self._form_row(grid, 0, "", self.color_enabled_box)
 
-        color_top = QHBoxLayout()
-        color_top.setSpacing(8)
-        color_top.addWidget(QLabel("触发"))
         self.color_trigger_combo = ChevronComboBox()
         self.color_trigger_combo.setObjectName("FontScaleCombo")
         for label, value in COLOR_TRIGGER_OPTIONS:
@@ -627,9 +792,8 @@ class SettingsDialog(QDialog):
         self.color_trigger_combo.setCurrentIndex(
             max(0, self.color_trigger_combo.findData(self._lyrics_color.trigger)))
         self.color_trigger_combo.currentIndexChanged.connect(self._on_color_trigger)
-        color_top.addWidget(self.color_trigger_combo)
-        color_top.addSpacing(8)
-        color_top.addWidget(QLabel("方向"))
+        self._form_row(grid, 1, "触发", self._left(self.color_trigger_combo))
+
         self.color_direction_combo = ChevronComboBox()
         self.color_direction_combo.setObjectName("FontScaleCombo")
         for label, value in COLOR_DIRECTION_OPTIONS:
@@ -637,57 +801,59 @@ class SettingsDialog(QDialog):
         self.color_direction_combo.setCurrentIndex(
             max(0, self.color_direction_combo.findData(self._lyrics_color.direction)))
         self.color_direction_combo.currentIndexChanged.connect(self._on_color_direction)
-        color_top.addWidget(self.color_direction_combo)
-        color_top.addStretch(1)
-        root.addLayout(color_top)
+        self._form_row(grid, 2, "方向", self._left(self.color_direction_combo))
 
-        color_pick = QHBoxLayout()
-        color_pick.setSpacing(8)
-        color_pick.addWidget(QLabel("起色"))
+        color_pick = QWidget()
+        color_pick_lay = QHBoxLayout(color_pick)
+        color_pick_lay.setContentsMargins(0, 0, 0, 0)
+        color_pick_lay.setSpacing(8)
+        start_label = QLabel("起色")
+        start_label.setObjectName("FormLabel")
+        color_pick_lay.addWidget(start_label)
         self.color_a_btn = QPushButton()
         self.color_a_btn.setFixedWidth(96)
         self.color_a_btn.clicked.connect(lambda: self._pick_lyric_color("color_a"))
-        color_pick.addWidget(self.color_a_btn)
-        color_pick.addWidget(QLabel("止色"))
+        color_pick_lay.addWidget(self.color_a_btn)
+        end_label = QLabel("止色")
+        end_label.setObjectName("FormLabel")
+        color_pick_lay.addWidget(end_label)
         self.color_b_btn = QPushButton()
         self.color_b_btn.setFixedWidth(96)
         self.color_b_btn.clicked.connect(lambda: self._pick_lyric_color("color_b"))
-        color_pick.addWidget(self.color_b_btn)
+        color_pick_lay.addWidget(self.color_b_btn)
         self.color_reset_btn = QPushButton("随主题")
         self.color_reset_btn.setObjectName("Ghost")
         self.color_reset_btn.setToolTip("清除起色/止色，跟随当前主题强调色")
         self.color_reset_btn.clicked.connect(self._reset_lyric_colors)
-        color_pick.addWidget(self.color_reset_btn)
-        color_pick.addStretch(1)
-        root.addLayout(color_pick)
+        color_pick_lay.addWidget(self.color_reset_btn)
+        color_pick_lay.addStretch(1)
+        self._form_row(grid, 3, "颜色", color_pick)
 
-        self.color_speed_slider, self.color_speed_value = self._add_slider_row(
-            root, "速度", 5, 200, round(self._lyrics_color.speed * 100), "%")
+        self.color_speed_slider, self.color_speed_value = self._slider_cell(
+            grid, 4, "速度", 5, 200, round(self._lyrics_color.speed * 100), "%")
         self.color_speed_slider.valueChanged.connect(self._on_color_speed)
-        self.color_transition_slider, self.color_transition_value = self._add_slider_row(
-            root, "过渡", 0, 30, round(self._lyrics_color.transition * 100), "%")
+        self.color_transition_slider, self.color_transition_value = self._slider_cell(
+            grid, 5, "过渡", 0, 30, round(self._lyrics_color.transition * 100), "%")
         self.color_transition_slider.valueChanged.connect(self._on_color_transition)
 
-        color_hint = QLabel("留空起色/止色即跟随主题；「按播放时间」时用速度控制流动快慢。")
-        color_hint.setObjectName("Dim")
-        color_hint.setWordWrap(True)
-        root.addWidget(color_hint)
+        self._hint(root, "留空起色/止色即跟随主题；「按播放时间」时用速度控制流动快慢。")
         self._sync_color_widgets()
 
-        root.addSpacing(6)
+        # ---- 统计与版本 ----
+        self._section(root, "统计与版本")
         stats_text = (
             f"曲目 {stats.get('tracks', 0)} 首 · 歌单 {stats.get('playlists', 0)} 个 · "
-            f"喜欢 {stats.get('favorites', 0)} 首\n"
+            f"喜欢 {stats.get('favorites', 0)} 首　|　"
             f"总时长 {stats.get('total_duration', '0 分钟')}"
         )
         stats_label = QLabel(stats_text)
-        stats_label.setObjectName("Dim")
+        stats_label.setObjectName("Hint")
         stats_label.setWordWrap(True)
         root.addWidget(stats_label)
 
         # v2.7.6：原来写死 "轻音播放器 v2.2 · ..."，早就对不上了
         about = QLabel(f"{APP_NAME} {version_text()}，歌词可联网补全")
-        about.setObjectName("Dim")
+        about.setObjectName("Hint")
         root.addWidget(about)
         root.addStretch(1)
         return page
@@ -697,9 +863,10 @@ class SettingsDialog(QDialog):
     def _build_storage_tab(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setSpacing(10)
+        root.setContentsMargins(*PAGE_MARGINS)
+        root.setSpacing(8)
 
-        root.addWidget(QLabel("数据存放位置"))
+        self._section(root, "数据存放位置", first=True)
 
         self.storage_path_edit = QLineEdit(app_paths.current_root())
         self.storage_path_edit.setReadOnly(True)
@@ -742,14 +909,11 @@ class SettingsDialog(QDialog):
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
-        hint = QLabel(
+        self._hint(
+            root,
             "移动时会把曲库、封面、歌词缓存、背景和设置一起搬过去：先复制并逐个核对文件，"
             "确认无误后才删除原数据；中途失败或取消都不会改动原数据。\n"
-            "改完需要关闭并重新打开播放器才生效。"
-        )
-        hint.setObjectName("Dim")
-        hint.setWordWrap(True)
-        root.addWidget(hint)
+            "改完需要关闭并重新打开播放器才生效。")
         root.addStretch(1)
         return page
 
@@ -873,6 +1037,34 @@ class SettingsDialog(QDialog):
         value = self.effect_combo.itemData(index)
         if value is not None and not self._loading:
             self.lyrics_effect_changed.emit(value)
+
+    # ---------- 歌词面板样式（v3.4.0） ----------
+
+    def _on_panel_combo(self, index: int) -> None:
+        value = self.panel_combo.itemData(index)
+        if value is None:
+            return
+        self._lyrics_panel = value
+        self._sync_look_enabled()
+        if not self._loading:
+            self.lyrics_panel_changed.emit(value)
+
+    def _on_palette_combo(self, index: int) -> None:
+        value = self.palette_combo.itemData(index)
+        if value is not None and not self._loading:
+            self.jizura_palette_changed.emit(value)
+
+    def _on_bg_combo(self, index: int) -> None:
+        value = self.bg_combo.itemData(index)
+        if value is not None and not self._loading:
+            self.jizura_bg_changed.emit(value)
+
+    def _sync_look_enabled(self) -> None:
+        """原生面板下把配色/背景两项置灰 —— 看得见但用不了，比藏起来更容易理解。"""
+        on = self._lyrics_panel == "jizura"
+        for w in (self.look_label, self.palette_combo,
+                  self.bg_label, self.bg_combo):
+            w.setEnabled(on)
 
     # ---------- AI 逐字对齐（v3.0.0） ----------
 
@@ -999,13 +1191,8 @@ class SettingsDialog(QDialog):
             return
         cfg = self._current_bg()
         cfg.type = self.bg_type_combo.itemData(index) or "none"
-        if cfg.type == "live":
-            # 动态背景的 preset 存的是风格 key，别被下面「离开图片就清空」的逻辑抹掉
-            if cfg.preset not in LIVE_BY_KEY:
-                cfg.preset = LIVE_KEYS[0]
-        elif cfg.type != "image" or cfg.preset in LIVE_BY_KEY:
-            # 离开图片类型就不再是内置预设；从「动态背景」切到图片时，preset 里
-            # 残留的风格 id 对图片毫无意义（会让说明显示「内置背景：dust」）
+        if cfg.type != "image":
+            # 离开图片类型就不再是内置预设（残留的预设 id 对其它类型无意义）
             cfg.preset = ""
         if cfg.type == "image" and cfg.dim <= 0:
             cfg.dim = 0.35          # 默认压暗一点：直接铺亮图文字会看不清
@@ -1097,11 +1284,16 @@ class SettingsDialog(QDialog):
     def _sync_bg_widgets(self) -> None:
         """按类型显隐相关控件：选纯色时不该还摆着一行「选图片」。"""
         cfg = self._current_bg()
-        needs_color = cfg.type in ("color", "gradient", "live")
+        needs_color = cfg.type in ("color", "gradient")
         self.color_row.setVisible(needs_color)
+        # 标签是栅格第 0 列的独立控件，不会跟着 color_row 一起隐藏 ——
+        # 只藏控件的话，页面上会留一行孤零零的「颜色」两个字。
+        self.color_row_label.setVisible(needs_color)
         self.color2_label.setVisible(cfg.type == "gradient")
         self.color2_btn.setVisible(cfg.type == "gradient")
-        self.image_row.setVisible(cfg.type == "image")
+        needs_image = cfg.type == "image"
+        self.image_row.setVisible(needs_image)
+        self.image_row_label.setVisible(needs_image)
 
         self.color_btn.setText(cfg.color.upper())
         self.color_btn.setStyleSheet(_color_button_style(cfg.color))
@@ -1122,6 +1314,10 @@ class SettingsDialog(QDialog):
             widget.setEnabled(cfg.type != "none")
         # 动态背景没有位图可模糊（模糊滑块对它无意义），灰掉免得用户白调
         self.blur_slider.setEnabled(cfg.type == "image")
+        # v3.3.2：暗化只对静态背景生效（动态背景的底色由主题决定、亮度由音乐决定，
+        # 画的时候也不吃 dim），灰掉，免得调了没反应还以为坏了
+        self.dim_slider.setEnabled(cfg.type in ("color", "gradient", "image"))
+        # 暗化/模糊滑块的可用性在上面已按类型设置
         self.bg_inherit_box.setVisible(self._bg_scope != "all")
 
     def _apply_preset(self, preset_id: str) -> None:
@@ -1152,47 +1348,11 @@ class SettingsDialog(QDialog):
         self._mark_page_custom()
         self._emit_background()
 
-    def _apply_live(self, style_key: str) -> None:
-        """点动态背景卡片：切到实时动画背景（v3.3.0）。
-
-        默认强度给 0.8：满强度时图元 alpha 会叠到接近上限，左侧列表的图标
-        反而因为底色变亮而对比下降 —— 「更亮」不等于「更好看」。
-        """
-        cfg = self._current_bg()
-        cfg.type = "live"
-        cfg.preset = style_key if style_key in LIVE_BY_KEY else LIVE_KEYS[0]
-        cfg.image = ""
-        if cfg.opacity >= 0.99:
-            cfg.opacity = 0.8
-        self._loading = True
-        try:
-            idx = self.bg_type_combo.findData("live")
-            self.bg_type_combo.setCurrentIndex(max(0, idx))
-            self.opacity_slider.setValue(round(cfg.opacity * 100))
-            self.dim_slider.setValue(round(cfg.dim * 100))
-            self._sync_bg_value_labels()
-        finally:
-            self._loading = False
-        self._sync_bg_widgets()
-        self._sync_bg_presets()
-        self._mark_page_custom()
-        self._emit_background()
-
     def _sync_bg_presets(self) -> None:
-        """标出当前激活的内置预设卡片（用 active 属性 + repolish）。
-
-        v3.3.0 起同一个方法管两组卡片：静态图案（preset_buttons）与动态背景
-        （live_buttons）。两者的「激活」判据都是 `cfg.preset`，但必须带上 type ——
-        否则选了动态背景后，同名的静态卡片会一起亮起来。
-        """
+        """标出当前激活的内置预设卡片（用 active 属性 + repolish）。"""
         cfg = self._current_bg()
         for pid, btn in getattr(self, "preset_buttons", {}).items():
             active = cfg.type == "image" and cfg.preset == pid
-            btn.setProperty("active", active)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-        for key, btn in getattr(self, "live_buttons", {}).items():
-            active = cfg.type == "live" and cfg.preset == key
             btn.setProperty("active", active)
             btn.style().unpolish(btn)
             btn.style().polish(btn)

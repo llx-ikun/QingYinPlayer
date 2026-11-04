@@ -67,7 +67,7 @@ from app.metadata import read_track
 from app.library import is_in_library
 from app.models import (LYRICS_AI_MODEL_SIZES, PLAYLIST_FAVORITES, PLAYLIST_LIBRARY,
                         PLAYLIST_RECENT, BackgroundConfig, Track)
-from app.paths import covers_dir, data_file, energy_dir, library_dir
+from app.paths import covers_dir, data_file, library_dir
 from app.player import PlaybackController
 from app.scanner import ScannerWorker
 from app.sorting import (DEFAULT_PLAYLIST_SORT, apply_manual_order,
@@ -76,7 +76,6 @@ from app.store import LibraryStore
 from app.version import version_text
 from ui import theme as ui_theme
 from ui.background import BackgroundLayer
-from ui.live_bg import EnergyWorker, energy_for
 from ui.dialogs import ImportProgressDialog
 from ui.float_bar import FloatBar
 from ui.player_bar import PLAYER_BAR_HEIGHT, PlayerBar
@@ -85,6 +84,7 @@ from ui.sidebar import SIDEBAR_WIDTH, Sidebar
 from ui.title_bar import TitleBar
 from ui.track_list import TrackList
 from ui.now_playing import NowPlayingPage
+from ui.lyrics_fullscreen import LyricsFullscreenWindow
 from ui.video_view import VideoFullscreenOverlay
 
 # 联网检索中给用户的提示：既解释「为什么现在没歌词」，也暗示等一下会出现
@@ -274,11 +274,6 @@ class MainWindow(QMainWindow):
         # 自定义背景层（v2.2）：最先创建 => 天然处于最底层，被后续控件盖住。
         # 手动定位而不是进布局：它要铺满整个窗口根容器（含标题栏/播放栏下方）。
         self.background = BackgroundLayer(self._root)
-        # 动态背景（v3.3.0）需要的两样东西：当前这首的能量包络、算它的后台线程
-        self._live_envelope: list[float] | None = None
-        self._energy_worker: EnergyWorker | None = None
-        self.background.set_live_energy_provider(
-            lambda: energy_for(self._live_envelope, self.player.position_ms))
 
         outer = QVBoxLayout(self._root)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -327,6 +322,10 @@ class MainWindow(QMainWindow):
         self._fullscreen = VideoFullscreenOverlay()
         self._fullscreen.exited.connect(self._exit_video_fullscreen)
 
+        # 全屏歌词浮层（v3.4.3）：视觉歌词面板临时搬进去铺满整屏，音乐不中断
+        self._lyrics_fullscreen = LyricsFullscreenWindow()
+        self._lyrics_fullscreen.exited.connect(self._exit_lyrics_fullscreen)
+
         # toast（瞬时提示，替代状态栏）
         self._toast_label = QLabel(self._root)
         self._toast_label.setObjectName("Toast")
@@ -349,6 +348,8 @@ class MainWindow(QMainWindow):
         self.sidebar.create_playlist_requested.connect(self._create_playlist)
         self.sidebar.playlist_action.connect(self._playlist_action)
         self.sidebar.nickname_change_requested.connect(self._change_nickname)
+        # v3.4.1：侧边栏列表里的「歌词面板」行，点一下在原生的列表式与视觉面板间切换
+        self.sidebar.lyrics_panel_toggle.connect(self._toggle_lyrics_panel)
 
         # 曲目列表
         self.track_list.track_activated.connect(self._on_track_activated)
@@ -431,6 +432,10 @@ class MainWindow(QMainWindow):
         # 视频页交互（v2.1）
         self.now_playing.back_to_list_requested.connect(lambda: self._show_page(0))
         self.now_playing.fullscreen_requested.connect(self._set_video_fullscreen)
+        # v3.4.0：视觉面板右键「切回原生歌词面板」—— 原生面板才有的编辑能力，
+        # 必须留一条回去的路，否则用户进了视觉面板就找不到重新匹配/打轴了。
+        self.now_playing.native_panel_requested.connect(
+            lambda: self._on_settings_lyrics_panel("native"))
         self.now_playing.audio_view.video_btn.clicked.connect(
             lambda: self.now_playing.set_media_mode(True))
         self.now_playing.video_view.music_btn.clicked.connect(
@@ -438,6 +443,9 @@ class MainWindow(QMainWindow):
         self.now_playing.video_view.back_btn.clicked.connect(lambda: self._show_page(0))
         self.now_playing.video_view.full_btn.clicked.connect(
             lambda: self._set_video_fullscreen(True))
+        # v3.4.3：视觉面板「全屏歌词」按钮
+        self.now_playing.lyrics_fullscreen_requested.connect(
+            self._toggle_lyrics_fullscreen)
 
         # 视频画面输出：sink 与播放器长期绑定（切模式不重连，播放不中断）
         self.player.set_video_output(self.now_playing.video_host.sink)
@@ -458,7 +466,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self._on_escape)
         QShortcut(QKeySequence("Ctrl+F"), self, self.title_bar.focus_search)
         # 视频全屏：F11 切换，Esc 优先退出全屏
-        QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_video_fullscreen)
+        # F11：优先给「视觉歌词全屏」，否则才落到视频全屏（v3.4.3 起分流）
+        QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_fullscreen)
         # 打轴专用（平时禁用）
         self._tap_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._tap_mark)
         self._tap_undo_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self,
@@ -473,6 +482,11 @@ class MainWindow(QMainWindow):
         self.now_playing.lyrics.set_effect(self.store.settings.lyrics_effect)
         # 歌词颜色覆盖（v2.9.0）：启动即按持久化配置渲染
         self.now_playing.lyrics.set_color_config(self.store.settings.lyrics_color)
+        # 歌词面板样式（v3.4.0）：启动即按持久化设置决定用哪块面板
+        s = self.store.settings
+        self.now_playing.apply_panel_look(s.lyrics_panel, s.jizura_palette, s.jizura_bg)
+        # v3.4.1：侧边栏那行按钮的文字要跟设置页对齐（两处都是"当前样式"的出口）
+        self.sidebar.set_lyrics_panel_mode(s.lyrics_panel)
         self.set_view(self._view_id)
         self.player_bar.set_mode(self.player.mode)
         self.player_bar.update_volume(self.player.volume, self.player.muted)
@@ -564,6 +578,9 @@ class MainWindow(QMainWindow):
         return self.covers.get_pixmap(tracks[0], 40, 6)
 
     def _show_page(self, index: int) -> None:
+        # 翻到别的页时先退出全屏歌词：面板本体要回栈里，否则会跟着浮层一起消失
+        if index != 1 and self._lyrics_fullscreen.active:
+            self._exit_lyrics_fullscreen()
         self.stack.setCurrentIndex(index)
         self.track_list.set_now_playing_active(index == 1)
         self._refresh_background()          # 两页可以各自一套背景（v2.2）
@@ -589,6 +606,56 @@ class MainWindow(QMainWindow):
         self._fullscreen.leave()
         if self.stack.currentIndex() != 1:
             self._show_page(1)
+
+    # ---------- 全屏分流（v3.4.3） ----------
+
+    def _can_fullscreen_lyrics(self) -> bool:
+        """当前该不该走「视觉歌词全屏」：正在播放页 + 音频模式 + 视觉面板。"""
+        if self.stack.currentIndex() != 1:
+            return False
+        if self.now_playing.media_mode != "audio":
+            return False
+        audio = self.now_playing.audio_view
+        return audio.panel_mode() == "jizura" and audio.jizura is not None
+
+    def _toggle_fullscreen(self) -> None:
+        """F11：先判视觉歌词，再落到视频全屏 —— 视频页的行为与以前完全一致。"""
+        if self._lyrics_fullscreen.active:
+            self._exit_lyrics_fullscreen()
+        elif self._can_fullscreen_lyrics():
+            self._enter_lyrics_fullscreen()
+        else:
+            self._toggle_video_fullscreen()
+
+    def _toggle_lyrics_fullscreen(self) -> None:
+        if self._lyrics_fullscreen.active:
+            self._exit_lyrics_fullscreen()
+        else:
+            self._enter_lyrics_fullscreen()
+
+    def _enter_lyrics_fullscreen(self) -> None:
+        """把视觉面板搬进全屏浮层，并切成 cover（铺满裁边，不留黑边）。"""
+        if self._lyrics_fullscreen.active:
+            return
+        audio = self.now_playing.audio_view
+        panel = audio.jizura
+        if panel is None or not audio.detach_jizura():
+            return
+        # cover 必须在搬进浮层**之前**设：搬完再设会先闪一帧带黑边的画面
+        panel.set_fit("cover")
+        # rAF 只在播放时跑；进全屏前把当前态同步过去，免得暂停进全屏后画面不动
+        panel.set_playing(self._position_timer.isActive())
+        track = self.player.current_track
+        title = f"{track.display_title} - {track.display_artist}" if track else ""
+        self._lyrics_fullscreen.enter(panel, self._restore_jizura, title)
+
+    def _restore_jizura(self, panel) -> None:
+        """浮层交还面板：恢复等比完整显示，并放回歌词栈。"""
+        panel.set_fit("contain")
+        self.now_playing.audio_view.attach_jizura()
+
+    def _exit_lyrics_fullscreen(self) -> None:
+        self._lyrics_fullscreen.leave()
 
     def _toggle_video_fullscreen(self) -> None:
         self._set_video_fullscreen(not self._fullscreen.active)
@@ -624,57 +691,6 @@ class MainWindow(QMainWindow):
         self._load_lyrics(track)
         # 逐曲逐句颜色（v2.9.0）：换歌即换配色表
         self.now_playing.lyrics.set_line_colors(load_line_colors(track.id))
-        # 动态背景（v3.3.0）：换歌要换能量包络，否则背景还在跟着上一首的节奏跳
-        self._prepare_live_energy()
-
-    # ---------- v3.3.0 动态背景：音频能量 ----------
-
-    def _prepare_live_energy(self) -> None:
-        """给动态背景准备「当前这首歌」的音量包络。
-
-        只在真的选了动态背景时才算 —— 这个后台线程要解码整首歌（4 分钟约 0.3s），
-        用户没开动态背景时纯属白烧 CPU。反过来，用户中途才切到动态背景的情况
-        由 `_apply_background_config()` 再调一次本方法兜住。
-        """
-        self._cancel_energy_worker()
-        self._live_envelope = None
-        player = getattr(self, "player", None)
-        track = player.current_track if player is not None else None
-        if track is None or self._effective_bg_config().type != "live":
-            return
-        worker = EnergyWorker(track.id, track.path, energy_dir(), self)
-        worker.ready.connect(self._on_energy_ready)
-        worker.finished.connect(lambda w=worker: self._drop_energy_worker(w))
-        # 失败刻意静默：背景退回时间驱动即可，不该为"背景不够带感"弹窗打扰听歌
-        self._energy_worker = worker
-        worker.start()
-
-    def _on_energy_ready(self, track_id: str, envelope: list) -> None:
-        player = getattr(self, "player", None)
-        current = player.current_track if player is not None else None
-        if current is None or current.id != track_id:
-            return          # 算的过程中已经切歌，丢弃（否则会拿错节奏去驱动画面）
-        self._live_envelope = list(envelope)
-
-    def _drop_energy_worker(self, worker) -> None:
-        if self._energy_worker is worker:
-            self._energy_worker = None
-        worker.deleteLater()
-
-    def _cancel_energy_worker(self) -> None:
-        """切歌/关窗前收掉旧线程。
-
-        `requestInterruption()` 只在解码与建包络之间被检查一次（解码本身是
-        miniaudio 的一次阻塞调用，打断不了），所以这里等 3s 兜住最坏情况 ——
-        与 closeEvent 里其它后台线程的处理口径一致。
-        """
-        worker = getattr(self, "_energy_worker", None)
-        self._energy_worker = None
-        if worker is None:
-            return
-        if worker.isRunning():
-            worker.requestInterruption()
-            worker.wait(3000)
 
     def _on_position(self, position_ms: int) -> None:
         duration = self.player.duration_ms or (
@@ -688,8 +704,8 @@ class MainWindow(QMainWindow):
             self._position_timer.start()
         else:
             self._position_timer.stop()
-        # 动态背景跟着降频（30fps → 10fps）：暂停时动作还在，电费省 2/3
-        self.background.set_playing(state == "playing")
+        # v3.4.3：视觉面板的逐帧渲染在 JS 侧 rAF 里跑，暂停要真的停下来（不空转）
+        self.now_playing.set_playing(state == "playing")
 
     def _on_duration(self, duration_ms: int) -> None:
         self.player_bar.update_duration(duration_ms)
@@ -1676,8 +1692,9 @@ class MainWindow(QMainWindow):
         """
         s = self.store.settings
         config = self._effective_bg_config()
-        # 背景开着时面板必须半透明，否则自定义背景被完全盖住（"设了没反应"）
-        self._bg_scrim = ui_theme.BG_SCRIM if config.type != "none" else None
+        # 背景开着时面板必须半透明，否则自定义背景被完全盖住（"设了没反应"）。
+        self._bg_scrim = (ui_theme.BG_SCRIM
+                          if config.type != "none" else None)
         ui_theme.set_appearance(QApplication.instance() or self, s.theme,
                                 accent=s.accent_color, font_scale=s.font_scale,
                                 scrim=self._bg_scrim)
@@ -1718,6 +1735,45 @@ class MainWindow(QMainWindow):
         # v3.0.9：文案取自 settings_dialog.effect_label() 这一处定义，
         # 不在两边各写一份（此前两处容易改一处漏一处，设置页与提示各说各话）。
         self._toast(f"歌词动效：{effect_label(effect)}", 2000)
+
+    # ---------- 歌词面板样式（v3.4.0） ----------
+
+    def _on_settings_lyrics_panel(self, mode: str) -> None:
+        """切换歌词面板：原生列表 / 视觉面板。切换不动播放（声音与进度照旧）。"""
+        if self.store.settings.lyrics_panel == mode:
+            return
+        self.store.settings.lyrics_panel = mode
+        self.store.save()
+        # 切回原生面板时必须先退出全屏：面板马上要被换掉，浮层里会剩下一块空黑
+        if mode != "jizura" and self._lyrics_fullscreen.active:
+            self._exit_lyrics_fullscreen()
+        self.now_playing.set_lyrics_panel(mode)
+        # 设置页与侧边栏都可以改这一项，两边必须同步同一个状态出口
+        self.sidebar.set_lyrics_panel_mode(mode)
+        self._toast("歌词面板：视觉面板" if mode == "jizura" else "歌词面板：原生列表", 2500)
+
+    def _toggle_lyrics_panel(self) -> None:
+        """侧边栏那行按钮：在两种面板之间来回切（v3.4.1）。
+
+        只做"取反"这一件事，真正的落盘与状态同步仍走
+        `_on_settings_lyrics_panel`，避免同一份逻辑写两遍后各改各的。
+        """
+        self._on_settings_lyrics_panel(
+            "native" if self.store.settings.lyrics_panel == "jizura" else "jizura")
+
+    def _on_settings_jizura_palette(self, key: str) -> None:
+        if self.store.settings.jizura_palette == key:
+            return
+        self.store.settings.jizura_palette = key
+        self.store.save()
+        self.now_playing.set_palette(key)
+
+    def _on_settings_jizura_bg(self, key: str) -> None:
+        if self.store.settings.jizura_bg == key:
+            return
+        self.store.settings.jizura_bg = key
+        self.store.save()
+        self.now_playing.set_background(key)
 
     # ---------- 歌词颜色覆盖（v2.9.0） ----------
 
@@ -1787,13 +1843,19 @@ class MainWindow(QMainWindow):
                                 lyrics_color=s.lyrics_color,
                                 ai_model=s.lyrics_ai_model,
                                 ai_language=s.lyrics_ai_language,
-                                ai_quality=s.lyrics_ai_quality)
+                                ai_quality=s.lyrics_ai_quality,
+                                lyrics_panel=s.lyrics_panel,
+                                jizura_palette=s.jizura_palette,
+                                jizura_bg=s.jizura_bg)
         dialog.theme_changed.connect(self._apply_theme)
         dialog.nickname_changed.connect(self._on_settings_nickname)
         dialog.online_lyrics_changed.connect(self._on_settings_online_lyrics)
         dialog.accent_changed.connect(self._on_settings_accent)
         dialog.font_scale_changed.connect(self._on_settings_font_scale)
         dialog.lyrics_effect_changed.connect(self._on_settings_lyrics_effect)
+        dialog.lyrics_panel_changed.connect(self._on_settings_lyrics_panel)
+        dialog.jizura_palette_changed.connect(self._on_settings_jizura_palette)
+        dialog.jizura_bg_changed.connect(self._on_settings_jizura_bg)
         dialog.lyrics_color_changed.connect(self._on_settings_lyrics_color)
         dialog.ai_model_changed.connect(self._on_settings_ai_model)
         dialog.ai_language_changed.connect(self._on_settings_ai_language)
@@ -2040,7 +2102,7 @@ class MainWindow(QMainWindow):
     def _apply_background_config(self, config) -> None:
         self.background.set_config(config)
         # 「深色」与「浅色」主题自带底层装饰（月牙星点 / 羽饰 / 四角星）；
-        # 用户一旦设了背景（纯色/渐变/图片/内置预设/动态）就让位，免得两套背景打架。
+        # 用户一旦设了背景（纯色/渐变/图片/内置预设）就让位，免得两套背景打架。
         theme = ui_theme.current_theme()
         self.background.set_decor(
             theme.name if config.type == "none" and theme.name in ("columbina", "light") else "",
@@ -2048,8 +2110,6 @@ class MainWindow(QMainWindow):
         )
         self._layout_background()
         self.background.lower()      # 任何 raise_() 之后都压回最底层
-        # v3.3.0：用户可能是在播放中途才切到动态背景，此时还没有能量包络
-        self._prepare_live_energy()
 
     def _refresh_background(self) -> None:
         """换页/换设置后更新背景。
@@ -2058,7 +2118,8 @@ class MainWindow(QMainWindow):
         只在开关状态真的翻转时才重建样式表，避免每次切页都重刷全身。
         """
         config = self._effective_bg_config()
-        want_scrim = ui_theme.BG_SCRIM if config.type != "none" else None
+        want_scrim = (ui_theme.BG_SCRIM
+                      if config.type != "none" else None)
         if want_scrim != self._bg_scrim:
             self._apply_appearance()      # 会顺带把 config 应用上
         else:
@@ -2287,8 +2348,6 @@ class MainWindow(QMainWindow):
         if self._scanner is not None and self._scanner.isRunning():
             self._scanner.cancel()
             self._scanner.wait(3000)
-        # 动态背景的能量线程（v3.3.0）：同样先喊停再等，别带着活线程析构
-        self._cancel_energy_worker()
         # 联网抓歌词的线程必须等它自己收尾，否则析构中线程还在跑会告警/崩
         #
         # v2.7.5：先 requestInterruption 再 wait。原来只 wait(2000) 是「干等一个

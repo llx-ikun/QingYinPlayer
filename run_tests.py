@@ -54,6 +54,11 @@ MODULES = [
     # v2.1.5 主题调色板：浅色必须为浅蓝 + 对比度下限（纯逻辑）
     "tests.test_theme",
     "tests.test_widgets",
+    # v3.4.0 视觉歌词面板：JS 选项表与 Python 白名单一致 / Settings 收敛 /
+    # 桥方法名未被改坏（不起 WebEngine，纯字符串与数据层）
+    "tests.test_jizura_panel",
+    # v3.4.3 全屏歌词浮层：面板搬运/交还 / Esc 退出 / 幂等（不启动 WebEngine）
+    "tests.test_lyrics_fullscreen",
     # test_e2e 两个类必须拆开跑：同一进程内 QMediaPlayer 实例累积到 ~15-20 个
     # 后，Qt 多媒体后端在 offscreen 下会在 C++ 层死锁（stop/setStyleSheet 等
     # 调用随机 hang）。逐类独立进程即可规避。
@@ -87,8 +92,6 @@ MODULES = [
     # v2.6.9 构建辅助：自检日志的编码回退（windowed 产物写 cp936，
     # 只按 utf-8 读会把失败诊断整片变成乱码）
     "tests.test_build",
-    # v3.3.0 动态背景：能量包络 / 四种风格绘制 / 计时器起停 / 设置接线
-    "tests.test_live_bg",
 ]
 
 

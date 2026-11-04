@@ -24,8 +24,8 @@ VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m
 # 导入扫描用的全部媒体扩展名
 MEDIA_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
 
-# 自定义背景的四种形态（v2.2）
-BG_TYPES = ("none", "color", "gradient", "image", "live")
+# 自定义背景的形态（v2.2）
+BG_TYPES = ("none", "color", "gradient", "image")
 
 # 歌词颜色覆盖（v2.9.0）：触发节奏 / 渐变方向
 COLOR_TRIGGERS = ("progress", "time")              # 按歌词进度 / 按播放时间
@@ -49,6 +49,31 @@ PLAY_MODES = (MODE_SEQUENTIAL, MODE_LOOP, MODE_SINGLE, MODE_SHUFFLE)
 # 旧配置里的 "zoom" 读出来落到 "none"（`Settings.from_dict` 按 LYRICS_EFFECTS 收敛），
 # 表现正好等于「只是放大」这一默认行为，不报错也不丢别的设置。
 LYRICS_EFFECTS = ("none", "typewriter", "karaoke")
+
+# 歌词面板样式（v3.4.0）：native 原生列表式面板（默认）/ jizura 引擎渲染的视觉面板。
+# jizura 用 QtWebEngine 画布绘制（封面模糊铺底 + 居中歌词 + 逐字高亮 + 涂鸦），
+# 视觉更强，但打包会带上 Qt6WebEngineCore（体积大头）。因此做成可选项，
+# 默认仍走 native —— 换面板是「换看法」，不该在升级时强塞。
+LYRICS_PANELS = ("native", "jizura")
+DEFAULT_LYRICS_PANEL = "native"
+
+# jizura 面板的两组可选外观（v3.4.0）。真相源是 `ui/jizura_panel.py` 注入 JS 里的
+# PALETTES / BGS 两张表 —— 绘制在 JS 侧，颜色必须写在那里。这里只放 key 白名单供
+# 数据收敛；`tests/test_jizura_panel.py` 会断言两边一致，改一边忘了另一边会红。
+JIZURA_PALETTES = ("random", "rose", "cyan", "amber", "violet",
+                   "mint", "ice", "vermilion", "forest")
+JIZURA_PALETTE_LABELS = {
+    "random": "随机（每首歌一套）", "rose": "桃红", "cyan": "青蓝", "amber": "琥珀",
+    "violet": "紫罗兰", "mint": "薄荷", "ice": "冰蓝", "vermilion": "朱红",
+    "forest": "森绿",
+}
+JIZURA_BACKGROUNDS = ("auto", "random", "night", "teal", "cocoa", "plum",
+                      "pine", "glacier", "ember", "moss", "ink", "slate")
+JIZURA_BG_LABELS = {
+    "auto": "跟随配色", "random": "随机（每首歌一套）", "night": "夜蓝", "teal": "墨青",
+    "cocoa": "深褐", "plum": "深紫", "pine": "墨绿", "glacier": "冰蓝",
+    "ember": "炭红", "moss": "苔绿", "ink": "纯黑", "slate": "石墨",
+}
 
 # AI 逐字对齐的模型档位（v3.0.0）。体积 / 精度 / 速度三档权衡，默认 base：
 #   tiny  ~75MB   最快，中文识别勉强，字边界容易飘
@@ -398,6 +423,11 @@ class Settings:
     accent_color: str = ""              # v2.2：自定义强调色（""=跟随主题默认）
     font_scale: float = 1.0             # v2.2：字号缩放（0.85~1.30）
     lyrics_effect: str = "none"         # v2.6.4：歌词播放动效（none/typewriter/karaoke，v3.2.1 去掉 zoom）
+    # v3.4.0 歌词面板样式：native（原生列表式）/ jizura（引擎渲染的视觉面板）。
+    # 两套配色项只对 jizura 有意义，但都持久化 —— 切回原生再切回来，观感得还在。
+    lyrics_panel: str = DEFAULT_LYRICS_PANEL
+    jizura_palette: str = "random"      # 前景配色（高亮行 / 未唱字 / 进度条）
+    jizura_bg: str = "auto"             # 背景底色（auto = 跟随所选配色）
     lyrics_ai_model: str = DEFAULT_AI_MODEL   # v3.0.0：AI 逐字对齐的模型档位
     lyrics_ai_language: str = DEFAULT_AI_LANGUAGE   # v3.0.3：识别语言（auto/zh/en）
     lyrics_ai_quality: str = DEFAULT_AI_QUALITY     # v3.0.3：识别质量（fast/balanced/quality）
@@ -441,6 +471,9 @@ class Settings:
             "accent_color": self.accent_color,
             "font_scale": self.font_scale,
             "lyrics_effect": self.lyrics_effect,
+            "lyrics_panel": self.lyrics_panel,
+            "jizura_palette": self.jizura_palette,
+            "jizura_bg": self.jizura_bg,
             "lyrics_ai_model": self.lyrics_ai_model,
             "lyrics_ai_language": self.lyrics_ai_language,
             "lyrics_ai_quality": self.lyrics_ai_quality,
@@ -480,6 +513,14 @@ class Settings:
         s.font_scale = _as_float(d.get("font_scale"), 1.0, 0.5, 3.0)
         effect = d.get("lyrics_effect")
         s.lyrics_effect = effect if effect in LYRICS_EFFECTS else "none"
+        # v3.4.0：老数据没有这三个字段 → 默认原生面板；写了不认识的 key 也回默认，
+        # 免得界面上出现一个不存在的外观（下拉框选中项为空，用户以为坏了）。
+        panel = d.get("lyrics_panel")
+        s.lyrics_panel = panel if panel in LYRICS_PANELS else DEFAULT_LYRICS_PANEL
+        pal = d.get("jizura_palette")
+        s.jizura_palette = pal if pal in JIZURA_PALETTES else "random"
+        jbg = d.get("jizura_bg")
+        s.jizura_bg = jbg if jbg in JIZURA_BACKGROUNDS else "auto"
         ai_model = d.get("lyrics_ai_model")
         # 老数据没有这个字段 → 默认档；写了不认识的档位也回默认（别让界面拿到空值）
         s.lyrics_ai_model = ai_model if ai_model in LYRICS_AI_MODELS else DEFAULT_AI_MODEL

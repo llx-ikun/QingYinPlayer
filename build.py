@@ -44,6 +44,12 @@ def data_args() -> list[str]:
     args: list[str] = []
     for rel in files:
         args += ["--add-data", f"{os.path.join(HERE, *rel.split('/'))}{os.pathsep}assets"]
+    # v3.4.0 视觉歌词面板的引擎页（2.4MB 单文件 HTML）。
+    # 漏了它的表现极其难查：面板照常创建、不报任何错，只是一直白屏 —— 因为
+    # `file://` 加载失败只回调 `loadFinished(False)`，我们静默返回了。
+    # build.py 的 smoke 现在会真起一块面板，缺这个文件构建直接失败。
+    args += ["--add-data",
+             f"{os.path.join(HERE, 'assets', 'jizura')}{os.pathsep}{os.path.join('assets', 'jizura')}"]
     return args
 
 
@@ -141,6 +147,9 @@ def _pyinstaller(onefile: bool) -> str:
         "--specpath", os.path.join(HERE, "build"),
         # 图标 + 主题背景图（v2.7.8：背景图不打进去，主题2 打包后就是一块空底）
         *data_args(),
+        # v3.4.0：覆盖 PySide6 的 QtWebEngine hook，裁掉 devtools 资源 / 调试 pak /
+        # 多余语言包（实测 onefile 288MB → 约 160MB）。详见该 hook 里的说明。
+        "--additional-hooks-dir", os.path.join(HERE, "build_hooks"),
         # miniaudio 的 _miniaudio.pyd 在 C 层 `import _cffi_backend`，PE 依赖扫描
         # 抓不到这种运行时导入，PyInstaller 会漏收 —— 打包后一启动就
         # ModuleNotFoundError: No module named '_cffi_backend'（v2.6.9 实测，
@@ -206,7 +215,10 @@ def smoke_test(exe: str, audio_file: str | None = None, timeout_s: int = 180) ->
     """
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     env.pop("PYTHONPATH", None)
-    cmd = [exe, "--smoke"] + ([audio_file] if audio_file else [])
+    # v3.4.0：--smoke-panel 会真起一块视觉歌词面板并等 JS 桥注入完成。
+    # 不查这一步的话，「WebEngine 资源没进包」这种事只有用户切到视觉面板才会发现
+    # （而且表现是白屏、没有任何报错）。offscreen 下实测也能就绪，不会误报。
+    cmd = [exe, "--smoke", "--smoke-panel"] + ([audio_file] if audio_file else [])
     print(f"smoke test: {' '.join(cmd)}")
     td = tempfile.mkdtemp(prefix="qy_smoke_log_")
     try:

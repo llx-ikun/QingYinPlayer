@@ -12,6 +12,9 @@ tests/fixtures/
 # 视觉自审截图（tools/shot.py 产物）
 shots/
 
+# 全屏歌词探针的验证截图（jizura_poc/*.py 产物，本地留档）
+jizura_poc/*.png
+
 # 打包元数据
 *.spec.bak
 
